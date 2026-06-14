@@ -14,7 +14,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 const config = loadConfig();
-const siteDir = path.resolve(projectRoot, process.env.SITE_DIR || '03-Website');
+const siteDir = path.resolve(projectRoot, process.env.SITE_DIR || '.');
 const dataFile = path.resolve(projectRoot, config.dataFile);
 const store = new LiveActivityStore(dataFile);
 const rateLimiter = new TokenRateLimiter({
@@ -39,6 +39,16 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === 'GET' && url.pathname === '/healthz') {
       sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/privacy.html') {
+      sendRedirect(response, '/privacy');
+      return;
+    }
+
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/support.html') {
+      sendRedirect(response, '/support');
       return;
     }
 
@@ -136,7 +146,7 @@ async function readJsonBody(request) {
 
 async function serveStaticFile(urlPathname, response) {
   const cleanPath = decodeURIComponent(urlPathname.split('?')[0]);
-  const relativePath = cleanPath === '/' ? 'index.html' : cleanPath.replace(/^\/+/, '');
+  const relativePath = getStaticRelativePath(cleanPath);
   const filePath = path.resolve(siteDir, relativePath);
   const relativeToSite = path.relative(siteDir, filePath);
 
@@ -159,6 +169,22 @@ async function serveStaticFile(urlPathname, response) {
   }
 }
 
+function getStaticRelativePath(cleanPath) {
+  if (cleanPath === '/') {
+    return 'index.html';
+  }
+
+  if (cleanPath === '/privacy') {
+    return 'privacy/index.html';
+  }
+
+  if (cleanPath === '/support') {
+    return 'support/index.html';
+  }
+
+  return cleanPath.replace(/^\/+/, '');
+}
+
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
@@ -173,6 +199,14 @@ function sendText(response, statusCode, text) {
     'cache-control': 'no-store'
   });
   response.end(text);
+}
+
+function sendRedirect(response, location) {
+  response.writeHead(301, {
+    location,
+    'cache-control': 'public, max-age=300'
+  });
+  response.end();
 }
 
 function getClientIp(request) {
@@ -196,6 +230,8 @@ function getContentType(filePath) {
     '.jpeg': 'image/jpeg',
     '.svg': 'image/svg+xml; charset=utf-8',
     '.ico': 'image/x-icon',
+    '.txt': 'text/plain; charset=utf-8',
+    '.xml': 'application/xml; charset=utf-8',
     '.ttf': 'font/ttf',
     '.woff': 'font/woff',
     '.woff2': 'font/woff2'

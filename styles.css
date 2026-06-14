@@ -107,12 +107,7 @@ a {
   width: 38px;
   height: 38px;
   border-radius: 12px;
-  background:
-    linear-gradient(var(--amber), var(--amber)) 10px 10px / 20px 5px no-repeat,
-    linear-gradient(var(--yellow), var(--yellow)) 10px 18px / 16px 5px no-repeat,
-    linear-gradient(var(--amber), var(--amber)) 10px 26px / 22px 5px no-repeat,
-    linear-gradient(145deg, rgba(216, 243, 255, 0.18), rgba(255, 255, 255, 0.02)),
-    #080b0f;
+  background: #080b0f url("assets/tubeboard-icon-180.png") center / cover no-repeat;
   border: 1px solid var(--stroke);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 12px 32px rgba(0, 0, 0, 0.35);
 }
@@ -297,8 +292,6 @@ h3 {
 
 .board-demo,
 .features,
-.split,
-.roadmap,
 .faq {
   padding: clamp(56px, 8vw, 108px) clamp(20px, 5vw, 72px);
   border-top: 1px solid rgba(216, 243, 255, 0.1);
@@ -318,6 +311,14 @@ h3 {
   align-items: start;
 }
 
+figcaption {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: center;
+}
+
 .phone-small {
   width: 100%;
   max-width: 300px;
@@ -332,7 +333,7 @@ h3 {
 
 .features {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -345,8 +346,6 @@ article {
 }
 
 article p,
-.split p,
-.roadmap p,
 details p {
   color: #c8d0d7;
 }
@@ -356,48 +355,6 @@ details p {
   font-family: var(--font-display);
   font-weight: 900;
   font-variant-numeric: tabular-nums;
-}
-
-.split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.62fr);
-  gap: clamp(28px, 5vw, 72px);
-  align-items: center;
-}
-
-.trust-panel {
-  padding: 28px;
-  border-radius: 24px;
-  background: rgba(216, 243, 255, 0.07);
-  backdrop-filter: blur(20px);
-}
-
-.trust-panel {
-  border: 1px solid rgba(216, 243, 255, 0.13);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.trust-line {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.status-dot {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #00b050;
-  box-shadow: 0 0 22px rgba(0, 176, 80, 0.46);
-}
-
-.roadmap {
-  max-width: 100%;
-}
-
-.roadmap h2,
-.roadmap p {
-  max-width: 880px;
 }
 
 .faq h2 {
@@ -460,7 +417,7 @@ footer a {
 
 @media (max-width: 1080px) {
   .features {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -470,9 +427,12 @@ footer a {
   }
 
   .hero,
-  .board-demo,
-  .split {
+  .board-demo {
     grid-template-columns: 1fr;
+  }
+
+  .features {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .hero-visual {
