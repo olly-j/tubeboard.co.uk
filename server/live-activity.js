@@ -19,6 +19,7 @@ export const TUBE_LINES = new Map([
 
 const APPLE_REFERENCE_UNIX_SECONDS = 978307200;
 const TOKEN_REDACTION = '[redacted]';
+const LIVE_ACTIVITY_STALE_BUFFER_MS = 300_000;
 
 export function loadConfig(env = process.env) {
   return {
@@ -451,7 +452,7 @@ export function buildContentState(record, arrivals, statuses, now = new Date()) 
       || record.stationID
   );
   const updatedAt = now;
-  const staleAt = new Date(now.getTime() + 90_000);
+  const staleAt = new Date(now.getTime() + LIVE_ACTIVITY_STALE_BUFFER_MS);
   const platform = filteredArrivals[0]?.platform || getSelectedPlatformLabel(record);
 
   return {
@@ -473,7 +474,7 @@ export function buildContentState(record, arrivals, statuses, now = new Date()) 
 }
 
 export function buildApnsPayload(contentState, now = new Date()) {
-  const staleAt = new Date(now.getTime() + 150_000);
+  const staleAt = new Date(now.getTime() + LIVE_ACTIVITY_STALE_BUFFER_MS);
   return {
     aps: {
       timestamp: toUnixSeconds(now),
@@ -573,14 +574,16 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       const contentState = buildContentState(record, arrivalsByStation.get(record.stationID), statuses);
       const emptyArrivals = contentState.arrivals.length === 0;
 
-      if (emptyArrivals && !contentState.isDisrupted && (record.consecutiveEmptyCycles || 0) >= 5) {
+      if (shouldBackoffEmptyArrivals(record, contentState)) {
         await store.markBackoff(record.activityID, record.environment, 5 * 60 * 1000, 'emptyArrivals', now);
+        logger.info(`Live Activity ${record.activityID} skipped after repeated empty all-platform arrivals`);
         continue;
       }
 
       const payload = buildApnsPayload(contentState, now);
-      await pushImpl(record, payload, config);
+      const pushResult = await pushImpl(record, payload, config);
       await store.markPushed(record.activityID, record.environment, { emptyArrivals }, now);
+      logger.info(`Live Activity ${record.activityID} pushed: APNs ${pushResult?.status || 200}, environment ${record.environment}, selectionMode ${getRecordSelectionMode(record)}, arrivals ${contentState.arrivals.length}`);
     } catch (error) {
       if (error.permanent) {
         await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
@@ -597,6 +600,13 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       logger.error(`Live Activity ${record.activityID} update failed: ${error.message}`);
     }
   }
+}
+
+function shouldBackoffEmptyArrivals(record, contentState) {
+  return getRecordSelectionMode(record) === 'allPlatforms'
+    && contentState.arrivals.length === 0
+    && !contentState.isDisrupted
+    && (record.consecutiveEmptyCycles || 0) >= 5;
 }
 
 export function redactRecord(record) {

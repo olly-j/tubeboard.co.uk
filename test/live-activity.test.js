@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import {
   buildApnsPayload,
   buildContentState,
+  LiveActivityStore,
+  loadConfig,
   normalizePlatformID,
+  runLiveActivityWorkerCycle,
   validateEndPayload,
   validateTokenPayload
 } from '../server/live-activity.js';
@@ -163,6 +169,7 @@ test('does not fall back to all platforms when the selected platform is empty', 
 
   assert.equal(contentState.platform, 'Eastbound - Platform 2');
   assert.deepEqual(contentState.arrivals, []);
+  assert.equal(contentState.staleAt, contentState.updatedAt + 300);
 });
 
 test('allPlatforms mode keeps next station departures by time', () => {
@@ -208,5 +215,100 @@ test('builds APNs envelope with Unix timestamps', () => {
   assert.equal(payload.aps.timestamp, Math.floor(now.getTime() / 1000));
   assert.equal(payload.aps.event, 'update');
   assert.equal(payload.aps['content-state'].updatedAt, 803832000);
-  assert.equal(typeof payload.aps['stale-date'], 'number');
+  assert.equal(payload.aps['stale-date'], Math.floor(now.getTime() / 1000) + 300);
 });
+
+test('platform empty arrivals still produce heartbeat pushes', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const now = new Date();
+  await store.upsertToken(platformTokenPayload, now);
+  store.state.records[0].consecutiveEmptyCycles = 12;
+  await store.save();
+
+  const pushed = [];
+  const fetchImpl = async (url) => {
+    const urlString = String(url);
+    if (urlString.includes('/Status')) {
+      return jsonResponse([{ id: 'central', lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: 'Good Service' }] }]);
+    }
+
+    return jsonResponse([
+      {
+        id: 'wrong-platform',
+        lineId: 'central',
+        stationName: 'Leyton Underground Station',
+        platformName: 'Westbound - Platform 1',
+        destinationName: 'White City Underground Station',
+        expectedArrival: '2026-06-14T15:21:00Z'
+      }
+    ]);
+  };
+
+  await runLiveActivityWorkerCycle({
+    store,
+    config: loadConfig({ LIVE_ACTIVITY_DATA_FILE: path.join(tempDir, 'records.json') }),
+    fetchImpl,
+    pushImpl: async (record, payload) => {
+      pushed.push({ record, payload });
+      return { status: 200 };
+    },
+    logger: silentLogger()
+  });
+
+  assert.equal(pushed.length, 1);
+  assert.equal(pushed[0].payload.aps['content-state'].platform, 'Eastbound - Platform 2');
+  assert.deepEqual(pushed[0].payload.aps['content-state'].arrivals, []);
+  assert.equal(pushed[0].payload.aps['content-state'].staleAt, pushed[0].payload.aps['content-state'].updatedAt + 300);
+  assert.equal(pushed[0].payload.aps['stale-date'], pushed[0].payload.aps.timestamp + 300);
+});
+
+test('allPlatforms repeated empty arrivals can still back off', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  await store.upsertToken({ ...validTokenPayload, selectionMode: 'allPlatforms' }, new Date());
+  store.state.records[0].consecutiveEmptyCycles = 12;
+  await store.save();
+
+  const pushed = [];
+  const fetchImpl = async (url) => {
+    const urlString = String(url);
+    if (urlString.includes('/Status')) {
+      return jsonResponse([{ id: 'central', lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: 'Good Service' }] }]);
+    }
+
+    return jsonResponse([]);
+  };
+
+  await runLiveActivityWorkerCycle({
+    store,
+    config: loadConfig({ LIVE_ACTIVITY_DATA_FILE: path.join(tempDir, 'records.json') }),
+    fetchImpl,
+    pushImpl: async (record, payload) => {
+      pushed.push({ record, payload });
+      return { status: 200 };
+    },
+    logger: silentLogger()
+  });
+
+  assert.equal(pushed.length, 0);
+  assert.equal(store.state.records[0].backoffReason, 'emptyArrivals');
+});
+
+function jsonResponse(value) {
+  return {
+    ok: true,
+    status: 200,
+    async json() {
+      return value;
+    }
+  };
+}
+
+function silentLogger() {
+  return {
+    info() {},
+    warn() {},
+    error() {}
+  };
+}
