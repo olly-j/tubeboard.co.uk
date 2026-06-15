@@ -14,7 +14,7 @@ For local endpoint testing without the one-minute worker:
 npm run dev
 ```
 
-The service listens on `http://localhost:4173` by default.
+The service listens on `http://localhost:4173` locally by default. On Fly.io, `fly.toml` sets `PORT=8080`.
 
 ## Endpoints
 
@@ -22,7 +22,7 @@ The service listens on `http://localhost:4173` by default.
 - `POST /api/live-activities/end`
 - `GET /healthz`
 
-The token endpoint stores records in `data/live-activities.json` by default. Push tokens are never returned by the API, and the `data/` directory is ignored by git.
+The token endpoint stores records in `data/live-activities.json` locally and `/data/live-activities.json` on Fly.io. Push tokens are never returned by the API, and the data directory is ignored by git.
 
 ## Required Production Configuration
 
@@ -38,7 +38,15 @@ The service selects the APNs production or sandbox host from the `environment` v
 
 ## Deployment Note
 
-GitHub Pages cannot run API endpoints or scheduled workers. Deploy this service on a Node-capable host, then point `https://tubeboard.co.uk` at that runtime or route `/api/live-activities/*` to it through a reverse proxy.
+GitHub Pages cannot run API endpoints or scheduled workers. Deploy this service on a Node-capable host such as Fly.io, then point `https://tubeboard.co.uk` at that runtime or route `/api/live-activities/*` to it through a reverse proxy.
+
+For Fly.io, create the persistent volume before deploying:
+
+```sh
+fly volumes create tubeboard_data -a tubeboard-co-uk -r lhr --size 1
+```
+
+Run one machine only for launch. Multiple machines would duplicate the minute worker and send duplicate APNs updates.
 
 ## iOS Endpoint
 

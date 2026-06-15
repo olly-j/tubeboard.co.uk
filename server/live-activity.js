@@ -24,7 +24,7 @@ export function loadConfig(env = process.env) {
   return {
     dataFile: env.LIVE_ACTIVITY_DATA_FILE || path.join('data', 'live-activities.json'),
     workerEnabled: env.LIVE_ACTIVITY_WORKER_ENABLED !== 'false',
-    workerIntervalMs: parsePositiveInteger(env.LIVE_ACTIVITY_WORKER_INTERVAL_MS, 60_000),
+    workerIntervalMs: parsePositiveInteger(env.LIVE_ACTIVITY_WORKER_INTERVAL_MS, 90_000),
     maxActiveMs: parsePositiveInteger(env.LIVE_ACTIVITY_MAX_ACTIVE_HOURS, 8) * 60 * 60 * 1000,
     retentionMs: parsePositiveInteger(env.LIVE_ACTIVITY_RETENTION_HOURS, 24) * 60 * 60 * 1000,
     tokenRateLimit: parsePositiveInteger(env.LIVE_ACTIVITY_TOKEN_RATE_LIMIT, 6),
@@ -348,39 +348,66 @@ export function validateEndPayload(input) {
 }
 
 export async function fetchTfLState(record, config, fetchImpl = fetch) {
-  const arrivalsUrl = new URL(`https://api.tfl.gov.uk/StopPoint/${encodeURIComponent(record.stationID)}/Arrivals`);
-  const statusesUrl = new URL('https://api.tfl.gov.uk/Line/Mode/tube/Status');
+  const [arrivals, statuses] = await Promise.all([
+    fetchTfLArrivals(record.stationID, config, fetchImpl),
+    fetchTfLStatuses(config, fetchImpl)
+  ]);
+
+  return buildContentState(record, arrivals, statuses);
+}
+
+export async function fetchTfLArrivals(stationID, config, fetchImpl = fetch) {
+  const arrivalsUrl = new URL(`https://api.tfl.gov.uk/StopPoint/${encodeURIComponent(stationID)}/Arrivals`);
 
   if (config.tflAppKey) {
     arrivalsUrl.searchParams.set('app_key', config.tflAppKey);
-    statusesUrl.searchParams.set('app_key', config.tflAppKey);
   }
 
-  const [arrivalsResponse, statusesResponse] = await Promise.all([
-    fetchImpl(arrivalsUrl),
-    fetchImpl(statusesUrl)
-  ]);
+  const response = await fetchImpl(arrivalsUrl);
 
-  if ([arrivalsResponse.status, statusesResponse.status].includes(429)) {
+  if (response.status === 429) {
     const error = new Error('TfL rate limited the request');
     error.retryable = true;
     error.backoffMs = 5 * 60 * 1000;
     throw error;
   }
 
-  if (!arrivalsResponse.ok || !statusesResponse.ok) {
-    const error = new Error(`TfL request failed: arrivals ${arrivalsResponse.status}, status ${statusesResponse.status}`);
+  if (!response.ok) {
+    const error = new Error(`TfL arrivals request failed: ${response.status}`);
     error.retryable = true;
     error.backoffMs = 2 * 60 * 1000;
     throw error;
   }
 
-  const [arrivals, statuses] = await Promise.all([
-    arrivalsResponse.json(),
-    statusesResponse.json()
-  ]);
+  const arrivals = await response.json();
+  return Array.isArray(arrivals) ? arrivals : [];
+}
 
-  return buildContentState(record, Array.isArray(arrivals) ? arrivals : [], Array.isArray(statuses) ? statuses : []);
+export async function fetchTfLStatuses(config, fetchImpl = fetch) {
+  const statusesUrl = new URL('https://api.tfl.gov.uk/Line/Mode/tube/Status');
+
+  if (config.tflAppKey) {
+    statusesUrl.searchParams.set('app_key', config.tflAppKey);
+  }
+
+  const response = await fetchImpl(statusesUrl);
+
+  if (response.status === 429) {
+    const error = new Error('TfL rate limited the request');
+    error.retryable = true;
+    error.backoffMs = 5 * 60 * 1000;
+    throw error;
+  }
+
+  if (!response.ok) {
+    const error = new Error(`TfL status request failed: ${response.status}`);
+    error.retryable = true;
+    error.backoffMs = 2 * 60 * 1000;
+    throw error;
+  }
+
+  const statuses = await response.json();
+  return Array.isArray(statuses) ? statuses : [];
 }
 
 export function buildContentState(record, arrivals, statuses, now = new Date()) {
@@ -498,10 +525,30 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
   const now = new Date();
   await store.expireOld(now, config);
   const records = await store.listActive(now, config);
+  if (records.length === 0) {
+    return;
+  }
+
+  let statuses = [];
+  try {
+    statuses = await fetchTfLStatuses(config, fetchImpl);
+  } catch (error) {
+    for (const record of records) {
+      await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
+    }
+    logger.warn(`Live Activity worker backed off all records: ${error.message}`);
+    return;
+  }
+
+  const arrivalsByStation = new Map();
 
   for (const record of records) {
     try {
-      const contentState = await fetchTfLState(record, config, fetchImpl);
+      if (!arrivalsByStation.has(record.stationID)) {
+        arrivalsByStation.set(record.stationID, await fetchTfLArrivals(record.stationID, config, fetchImpl));
+      }
+
+      const contentState = buildContentState(record, arrivalsByStation.get(record.stationID), statuses);
       const emptyArrivals = contentState.arrivals.length === 0;
 
       if (emptyArrivals && !contentState.isDisrupted && (record.consecutiveEmptyCycles || 0) >= 5) {
