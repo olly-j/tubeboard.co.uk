@@ -175,11 +175,11 @@ function getStaticRelativePath(cleanPath) {
   }
 
   if (cleanPath === '/privacy') {
-    return 'privacy/index.html';
+    return 'privacy.html';
   }
 
   if (cleanPath === '/support') {
-    return 'support/index.html';
+    return 'support.html';
   }
 
   return cleanPath.replace(/^\/+/, '');
