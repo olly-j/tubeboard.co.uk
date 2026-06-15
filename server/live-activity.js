@@ -101,6 +101,11 @@ export class LiveActivityStore {
       activityID: payload.activityID,
       stationID: payload.stationID,
       lineID: payload.lineID,
+      selectionMode: payload.selectionMode,
+      platformID: payload.platformID,
+      platformHeading: payload.platformHeading,
+      platformLabel: payload.platformLabel,
+      platformDirection: payload.platformDirection,
       pushTokenHex: payload.pushTokenHex,
       tokenUpdatedAt: payload.tokenUpdatedAt,
       appBundleID: payload.appBundleID,
@@ -287,6 +292,16 @@ export function validateTokenPayload(input) {
     errors.push('lineID is not a supported Tube line');
   }
 
+  const explicitSelectionMode = optionalString(payload.selectionMode);
+  const selectionMode = inferSelectionMode(payload);
+  if (explicitSelectionMode && !['platform', 'allPlatforms'].includes(explicitSelectionMode)) {
+    errors.push('selectionMode must be platform or allPlatforms');
+  }
+
+  if (selectionMode === 'platform' && !optionalString(payload.platformID)) {
+    errors.push('platformID is required when selectionMode is platform');
+  }
+
   if (typeof payload.pushTokenHex === 'string' && !/^[a-fA-F0-9]{32,512}$/.test(payload.pushTokenHex)) {
     errors.push('pushTokenHex is invalid');
   }
@@ -311,6 +326,11 @@ export function validateTokenPayload(input) {
       activityID: String(payload.activityID || '').trim(),
       stationID: String(payload.stationID || '').trim(),
       lineID: String(payload.lineID || '').trim(),
+      selectionMode,
+      platformID: optionalString(payload.platformID),
+      platformHeading: optionalString(payload.platformHeading),
+      platformLabel: optionalString(payload.platformLabel),
+      platformDirection: optionalString(payload.platformDirection),
       pushTokenHex: String(payload.pushTokenHex || '').trim().toLowerCase(),
       tokenUpdatedAt: String(payload.tokenUpdatedAt || '').trim(),
       appBundleID: String(payload.appBundleID || '').trim(),
@@ -412,8 +432,9 @@ export async function fetchTfLStatuses(config, fetchImpl = fetch) {
 
 export function buildContentState(record, arrivals, statuses, now = new Date()) {
   const lineName = TUBE_LINES.get(record.lineID) || titleCase(record.lineID);
-  const filteredArrivals = arrivals
-    .filter((arrival) => matchesLine(arrival, record.lineID, lineName))
+  const lineArrivals = arrivals.filter((arrival) => matchesLine(arrival, record.lineID, lineName));
+  const selectedArrivals = applySelectionMode(record, lineArrivals);
+  const filteredArrivals = selectedArrivals
     .map((arrival) => normalizeArrival(arrival, now))
     .filter(Boolean)
     .sort((a, b) => {
@@ -426,16 +447,17 @@ export function buildContentState(record, arrivals, statuses, now = new Date()) 
   const status = normalizeStatus(statuses, record.lineID);
   const stationName = cleanStationName(
     filteredArrivals[0]?.stationName
-      || arrivals.find((arrival) => matchesLine(arrival, record.lineID, lineName))?.stationName
+      || lineArrivals[0]?.stationName
       || record.stationID
   );
   const updatedAt = now;
   const staleAt = new Date(now.getTime() + 90_000);
+  const platform = filteredArrivals[0]?.platform || getSelectedPlatformLabel(record);
 
   return {
     stationName,
     lineName,
-    platform: filteredArrivals[0]?.platform || null,
+    platform,
     arrivals: filteredArrivals.map((arrival, index) => ({
       id: arrival.id || `arrival-${index + 1}`,
       destination: arrival.destination,
@@ -595,6 +617,90 @@ function matchesLine(arrival, lineID, lineName) {
   }
 
   return String(arrival?.lineName || '').toLowerCase() === lineName.toLowerCase();
+}
+
+function applySelectionMode(record, arrivals) {
+  if (getRecordSelectionMode(record) !== 'platform') {
+    return arrivals;
+  }
+
+  return arrivals.filter((arrival) => matchesSelectedPlatform(arrival, record));
+}
+
+function getRecordSelectionMode(record) {
+  if (record.selectionMode === 'platform' || record.selectionMode === 'allPlatforms') {
+    return record.selectionMode;
+  }
+
+  return record.platformID ? 'platform' : 'allPlatforms';
+}
+
+function matchesSelectedPlatform(arrival, record) {
+  const arrivalPlatform = firstPresent([
+    arrival.platformName,
+    arrival.platformDirection,
+    arrival.direction,
+    arrival.towards
+  ]);
+
+  if (record.platformID && normalizePlatformID(arrivalPlatform) === normalizePlatformID(record.platformID)) {
+    return true;
+  }
+
+  if (record.platformHeading && normalizePlatformID(arrivalPlatform) === normalizePlatformID(record.platformHeading)) {
+    return true;
+  }
+
+  const platformLabel = optionalString(record.platformLabel);
+  const platformDirection = optionalString(record.platformDirection);
+  if (!platformLabel || !platformDirection) {
+    return false;
+  }
+
+  const platformText = String(arrivalPlatform || '').toLowerCase();
+  const directionText = firstPresent([
+    arrival.platformDirection,
+    arrival.direction,
+    arrival.towards
+  ]);
+  const directionMatches = String(directionText || '').toLowerCase().includes(platformDirection.toLowerCase())
+    || platformText.includes(platformDirection.toLowerCase());
+
+  return platformText.includes(platformLabel.toLowerCase()) && directionMatches;
+}
+
+function getSelectedPlatformLabel(record) {
+  if (getRecordSelectionMode(record) !== 'platform') {
+    return null;
+  }
+
+  return optionalString(record.platformHeading)
+    || [optionalString(record.platformDirection), optionalString(record.platformLabel)].filter(Boolean).join(' - ')
+    || optionalString(record.platformLabel)
+    || optionalString(record.platformDirection)
+    || null;
+}
+
+function inferSelectionMode(payload) {
+  if (payload.selectionMode === 'platform' || payload.selectionMode === 'allPlatforms') {
+    return payload.selectionMode;
+  }
+
+  return typeof payload.platformID === 'string' && payload.platformID.trim() ? 'platform' : 'allPlatforms';
+}
+
+export function normalizePlatformID(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/&/g, '')
+    .replace(/\s+and\s+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function optionalString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function normalizeArrival(arrival, now) {
