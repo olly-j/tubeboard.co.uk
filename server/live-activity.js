@@ -20,6 +20,7 @@ export const TUBE_LINES = new Map([
 const APPLE_REFERENCE_UNIX_SECONDS = 978307200;
 const TOKEN_REDACTION = '[redacted]';
 const LIVE_ACTIVITY_STALE_BUFFER_MS = 300_000;
+const ARRIVAL_EXPIRY_GRACE_MS = 10_000;
 
 export function loadConfig(env = process.env) {
   return {
@@ -438,6 +439,7 @@ export function buildContentState(record, arrivals, statuses, now = new Date()) 
   const filteredArrivals = selectedArrivals
     .map((arrival) => normalizeArrival(arrival, now))
     .filter(Boolean)
+    .filter((arrival) => isFutureArrival(arrival, now))
     .sort((a, b) => {
       const aTime = a.expectedArrivalDate ? a.expectedArrivalDate.getTime() : Number.MAX_SAFE_INTEGER;
       const bTime = b.expectedArrivalDate ? b.expectedArrivalDate.getTime() : Number.MAX_SAFE_INTEGER;
@@ -544,7 +546,7 @@ export async function pushLiveActivityUpdate(record, payload, config) {
   });
 }
 
-export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console }) {
+export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null }) {
   const now = new Date();
   await store.expireOld(now, config);
   const records = await store.listActive(now, config);
@@ -584,6 +586,9 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       const pushResult = await pushImpl(record, payload, config);
       await store.markPushed(record.activityID, record.environment, { emptyArrivals }, now);
       logger.info(`Live Activity ${record.activityID} pushed: APNs ${pushResult?.status || 200}, environment ${record.environment}, selectionMode ${getRecordSelectionMode(record)}, arrivals ${contentState.arrivals.length}`);
+      if (typeof scheduleRolloverPush === 'function') {
+        scheduleRolloverPush(record, contentState, now, config.workerIntervalMs);
+      }
     } catch (error) {
       if (error.permanent) {
         await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
@@ -609,6 +614,21 @@ function shouldBackoffEmptyArrivals(record, contentState) {
     && (record.consecutiveEmptyCycles || 0) >= 5;
 }
 
+export function getRolloverDelayMs(contentState, now = new Date(), workerIntervalMs = 90_000) {
+  const firstExpectedArrival = contentState.arrivals?.[0]?.expectedArrival;
+  if (typeof firstExpectedArrival !== 'number') {
+    return null;
+  }
+
+  const rolloverAt = new Date((firstExpectedArrival + APPLE_REFERENCE_UNIX_SECONDS) * 1000 + ARRIVAL_EXPIRY_GRACE_MS);
+  const delayMs = rolloverAt.getTime() - now.getTime();
+  if (delayMs <= 0 || delayMs >= workerIntervalMs) {
+    return null;
+  }
+
+  return delayMs;
+}
+
 export function redactRecord(record) {
   return {
     ...record,
@@ -627,6 +647,14 @@ function matchesLine(arrival, lineID, lineName) {
   }
 
   return String(arrival?.lineName || '').toLowerCase() === lineName.toLowerCase();
+}
+
+function isFutureArrival(arrival, now) {
+  if (!arrival.expectedArrivalDate) {
+    return true;
+  }
+
+  return arrival.expectedArrivalDate.getTime() > now.getTime() + ARRIVAL_EXPIRY_GRACE_MS;
 }
 
 function applySelectionMode(record, arrivals) {

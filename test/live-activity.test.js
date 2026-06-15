@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   buildApnsPayload,
   buildContentState,
+  getRolloverDelayMs,
   LiveActivityStore,
   loadConfig,
   normalizePlatformID,
@@ -201,6 +202,106 @@ test('allPlatforms mode keeps next station departures by time', () => {
   assert.equal(contentState.arrivals.length, 2);
   assert.equal(contentState.arrivals[0].id, 'central-soon');
   assert.equal(contentState.arrivals[1].id, 'central-late');
+});
+
+test('removes arrivals that are due within the expiry grace window', () => {
+  const now = new Date('2026-06-14T15:20:00Z');
+  const contentState = buildContentState(
+    { ...validTokenPayload, selectionMode: 'allPlatforms' },
+    [
+      {
+        id: 'already-due',
+        lineId: 'central',
+        stationName: 'Leyton Underground Station',
+        platformName: 'Westbound - Platform 1',
+        destinationName: 'White City Underground Station',
+        expectedArrival: '2026-06-14T15:20:05Z'
+      },
+      {
+        id: 'next-future',
+        lineId: 'central',
+        stationName: 'Leyton Underground Station',
+        platformName: 'Eastbound - Platform 2',
+        destinationName: 'Epping Underground Station',
+        expectedArrival: '2026-06-14T15:20:20Z'
+      },
+      {
+        id: 'later-future',
+        lineId: 'central',
+        stationName: 'Leyton Underground Station',
+        platformName: 'Eastbound - Platform 2',
+        destinationName: 'Hainault Underground Station',
+        expectedArrival: '2026-06-14T15:21:00Z'
+      }
+    ],
+    [{ id: 'central', lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: 'Good Service' }] }],
+    now
+  );
+
+  assert.equal(contentState.arrivals.length, 2);
+  assert.equal(contentState.arrivals[0].id, 'next-future');
+  assert.equal(contentState.arrivals[1].id, 'later-future');
+});
+
+test('platform mode sends empty arrivals when selected platform has no future arrivals', () => {
+  const now = new Date('2026-06-14T15:20:00Z');
+  const contentState = buildContentState(
+    platformTokenPayload,
+    [
+      {
+        id: 'selected-due',
+        lineId: 'central',
+        stationName: 'Leyton Underground Station',
+        platformName: 'Eastbound - Platform 2',
+        destinationName: 'Epping Underground Station',
+        expectedArrival: '2026-06-14T15:20:05Z'
+      },
+      {
+        id: 'other-platform-future',
+        lineId: 'central',
+        stationName: 'Leyton Underground Station',
+        platformName: 'Westbound - Platform 1',
+        destinationName: 'White City Underground Station',
+        expectedArrival: '2026-06-14T15:22:00Z'
+      }
+    ],
+    [{ id: 'central', lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: 'Good Service' }] }],
+    now
+  );
+
+  assert.equal(contentState.platform, 'Eastbound - Platform 2');
+  assert.deepEqual(contentState.arrivals, []);
+  assert.equal(contentState.staleAt, contentState.updatedAt + 300);
+});
+
+test('computes rollover delay when first arrival is due before next worker cycle', () => {
+  const now = new Date('2026-06-14T15:20:00Z');
+  const contentState = buildContentState(
+    { ...validTokenPayload, selectionMode: 'allPlatforms' },
+    [
+      {
+        id: 'soon',
+        lineId: 'central',
+        stationName: 'Leyton Underground Station',
+        platformName: 'Eastbound - Platform 2',
+        destinationName: 'Epping Underground Station',
+        expectedArrival: '2026-06-14T15:20:20Z'
+      },
+      {
+        id: 'later',
+        lineId: 'central',
+        stationName: 'Leyton Underground Station',
+        platformName: 'Eastbound - Platform 2',
+        destinationName: 'Hainault Underground Station',
+        expectedArrival: '2026-06-14T15:22:00Z'
+      }
+    ],
+    [{ id: 'central', lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: 'Good Service' }] }],
+    now
+  );
+
+  assert.equal(getRolloverDelayMs(contentState, now, 90_000), 30_000);
+  assert.equal(getRolloverDelayMs(contentState, now, 25_000), null);
 });
 
 test('normalizes platform headings like the app', () => {

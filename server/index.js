@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   LiveActivityStore,
   TokenRateLimiter,
+  getRolloverDelayMs,
   loadConfig,
   runLiveActivityWorkerCycle,
   validateEndPayload,
@@ -71,8 +72,38 @@ server.listen(port, () => {
 });
 
 if (config.workerEnabled) {
+  const rolloverTimers = new Map();
+
   const runCycle = () => {
-    runLiveActivityWorkerCycle({ store, config }).catch((error) => {
+    runLiveActivityWorkerCycle({
+      store,
+      config,
+      scheduleRolloverPush: (record, contentState, now, workerIntervalMs) => {
+        const delayMs = getRolloverDelayMs(contentState, now, workerIntervalMs);
+        const timerKey = `${record.environment}:${record.activityID}`;
+        const existingTimer = rolloverTimers.get(timerKey);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          rolloverTimers.delete(timerKey);
+        }
+
+        if (delayMs === null) {
+          return;
+        }
+
+        const timer = setTimeout(() => {
+          rolloverTimers.delete(timerKey);
+          runCycle();
+        }, delayMs);
+
+        if (typeof timer.unref === 'function') {
+          timer.unref();
+        }
+
+        rolloverTimers.set(timerKey, timer);
+        console.log(`Live Activity ${record.activityID} rollover refresh scheduled in ${Math.round(delayMs / 1000)}s`);
+      }
+    }).catch((error) => {
       console.error(`Live Activity worker cycle failed: ${error.message}`);
     });
   };
