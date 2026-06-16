@@ -78,6 +78,76 @@ test('validates activity end payloads', () => {
   assert.equal(validateEndPayload({ installID: '', activityID: '' }).ok, false);
 });
 
+test('token refresh for same activity preserves lifecycle fields', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const createdAt = new Date('2026-06-14T15:20:00Z');
+  const refreshedAt = new Date('2026-06-14T15:25:00Z');
+
+  await store.upsertToken(validTokenPayload, createdAt);
+  store.state.records[0].lastPushAt = '2026-06-14T15:22:00.000Z';
+  store.state.records[0].lastSuccessAt = '2026-06-14T15:22:00.000Z';
+  store.state.records[0].consecutiveEmptyCycles = 2;
+  store.state.records[0].backoffUntil = '2026-06-14T15:30:00.000Z';
+  store.state.records[0].backoffReason = 'emptyArrivals';
+  await store.save();
+
+  await store.upsertToken({
+    ...validTokenPayload,
+    pushTokenHex: '9a3b'.repeat(16),
+    tokenUpdatedAt: '2026-06-14T15:25:00Z'
+  }, refreshedAt);
+
+  assert.equal(store.state.records.length, 1);
+  assert.equal(store.state.records[0].createdAt, createdAt.toISOString());
+  assert.equal(store.state.records[0].lastPushAt, '2026-06-14T15:22:00.000Z');
+  assert.equal(store.state.records[0].lastSuccessAt, '2026-06-14T15:22:00.000Z');
+  assert.equal(store.state.records[0].consecutiveEmptyCycles, 2);
+  assert.equal(store.state.records[0].backoffUntil, null);
+  assert.equal(store.state.records[0].backoffReason, null);
+});
+
+test('new activity ID starts a fresh record instead of reusing same board lifecycle', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const oldCreatedAt = new Date('2026-06-15T18:25:20.143Z');
+  const newCreatedAt = new Date('2026-06-16T06:46:48.000Z');
+  const newActivityID = 'F74A888B-0149-4E26-917D-5C4F0E3F94A0';
+
+  await store.upsertToken(validTokenPayload, oldCreatedAt);
+  store.state.records[0].lastPushAt = '2026-06-15T18:27:00.000Z';
+  store.state.records[0].lastSuccessAt = '2026-06-15T18:27:00.000Z';
+  store.state.records[0].consecutiveEmptyCycles = 4;
+  store.state.records[0].backoffUntil = '2026-06-15T18:40:00.000Z';
+  store.state.records[0].backoffReason = 'emptyArrivals';
+  await store.save();
+
+  await store.upsertToken({
+    ...validTokenPayload,
+    activityID: newActivityID,
+    pushTokenHex: '9a3b'.repeat(16),
+    tokenUpdatedAt: '2026-06-16T06:46:48Z'
+  }, newCreatedAt);
+
+  assert.equal(store.state.records.length, 2);
+
+  const oldRecord = store.state.records.find((record) => record.activityID === validTokenPayload.activityID);
+  const newRecord = store.state.records.find((record) => record.activityID === newActivityID);
+
+  assert.equal(oldRecord.active, false);
+  assert.equal(oldRecord.endedAt, newCreatedAt.toISOString());
+  assert.equal(oldRecord.endReason, 'replacedByNewActivity');
+  assert.equal(oldRecord.createdAt, oldCreatedAt.toISOString());
+
+  assert.equal(newRecord.active, true);
+  assert.equal(newRecord.createdAt, newCreatedAt.toISOString());
+  assert.equal(newRecord.lastPushAt, null);
+  assert.equal(newRecord.lastSuccessAt, null);
+  assert.equal(newRecord.consecutiveEmptyCycles, 0);
+  assert.equal(newRecord.backoffUntil, null);
+  assert.equal(newRecord.backoffReason, null);
+});
+
 test('builds ContentState with Swift Date JSON numbers', () => {
   const now = new Date('2026-06-14T15:20:00Z');
   const contentState = buildContentState(

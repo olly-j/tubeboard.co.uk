@@ -83,20 +83,12 @@ export class LiveActivityStore {
     await this.load();
     const nowIso = now.toISOString();
     const matchIndex = this.state.records.findIndex((record) => {
-      if (record.environment !== payload.environment) {
-        return false;
-      }
-
-      if (record.activityID === payload.activityID) {
-        return true;
-      }
-
-      return record.installID === payload.installID
-        && record.stationID === payload.stationID
-        && record.lineID === payload.lineID;
+      return record.environment === payload.environment
+        && record.activityID === payload.activityID;
     });
 
     const previous = matchIndex >= 0 ? this.state.records[matchIndex] : {};
+    const isSameActivity = previous.activityID === payload.activityID;
     const record = {
       ...previous,
       installID: payload.installID,
@@ -115,17 +107,39 @@ export class LiveActivityStore {
       buildNumber: payload.buildNumber,
       environment: payload.environment,
       active: true,
-      createdAt: previous.createdAt || nowIso,
+      createdAt: isSameActivity && previous.createdAt ? previous.createdAt : nowIso,
       updatedAt: nowIso,
       endedAt: null,
       endReason: null,
-      apnsFailureReason: null
+      apnsFailureReason: null,
+      lastPushAt: isSameActivity ? previous.lastPushAt : null,
+      lastSuccessAt: isSameActivity ? previous.lastSuccessAt : null,
+      consecutiveEmptyCycles: isSameActivity ? previous.consecutiveEmptyCycles || 0 : 0,
+      backoffUntil: null,
+      backoffReason: null
     };
 
     if (matchIndex >= 0) {
       this.state.records[matchIndex] = record;
     } else {
       this.state.records.push(record);
+    }
+
+    for (const olderRecord of this.state.records) {
+      if (olderRecord === record || olderRecord.active === false) {
+        continue;
+      }
+
+      if (olderRecord.environment === payload.environment
+        && olderRecord.installID === payload.installID
+        && olderRecord.stationID === payload.stationID
+        && olderRecord.lineID === payload.lineID
+        && olderRecord.activityID !== payload.activityID) {
+        olderRecord.active = false;
+        olderRecord.endedAt = nowIso;
+        olderRecord.endReason = 'replacedByNewActivity';
+        olderRecord.updatedAt = nowIso;
+      }
     }
 
     await this.save();
