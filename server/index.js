@@ -48,7 +48,17 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/privacy/') {
+      sendRedirect(response, '/privacy');
+      return;
+    }
+
     if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/support.html') {
+      sendRedirect(response, '/support');
+      return;
+    }
+
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/support/') {
       sendRedirect(response, '/support');
       return;
     }
