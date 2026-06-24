@@ -7,26 +7,80 @@
   <meta name="description" content="TubeBoard is a fast live departure board for London Tube stations. Pick a station, see the next trains, and save favourites for quick checks.">
   <meta name="theme-color" content="#050607">
   <link rel="canonical" href="https://www.tubeboard.co.uk/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="TubeBoard">
   <meta property="og:title" content="TubeBoard - The live Tube board in your pocket">
   <meta property="og:description" content="A focused London Tube arrivals app for iPhone, built around live countdowns and favourite stations.">
   <meta property="og:url" content="https://www.tubeboard.co.uk/">
   <meta property="og:image" content="https://www.tubeboard.co.uk/assets/tubeboard-og-1200x630.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="TubeBoard, the live Tube board in your pocket, shown on iPhone.">
+  <meta property="og:locale" content="en_GB">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="TubeBoard - The live Tube board in your pocket">
   <meta name="twitter:description" content="A focused London Tube arrivals app for iPhone, built around live countdowns and favourite stations.">
   <meta name="twitter:image" content="https://www.tubeboard.co.uk/assets/tubeboard-og-1200x630.png">
+  <meta name="twitter:image:alt" content="TubeBoard, the live Tube board in your pocket, shown on iPhone.">
+
   <link rel="icon" type="image/png" sizes="32x32" href="assets/tubeboard-icon-32.png">
   <link rel="icon" type="image/png" sizes="512x512" href="assets/tubeboard-icon-512.png">
   <link rel="apple-touch-icon" sizes="180x180" href="assets/tubeboard-icon-180.png">
-  <link rel="stylesheet" href="styles.css?v=20260616-design3">
+
+  <link rel="preload" as="font" type="font/ttf" href="assets/fonts/london-underground-regular.ttf" crossorigin>
+  <link rel="preload" as="image" href="assets/screenshots/app-central-board.png" fetchpriority="high">
+  <link rel="stylesheet" href="styles.css?v=20260624-polish">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "https://www.tubeboard.co.uk/#website",
+        "url": "https://www.tubeboard.co.uk/",
+        "name": "TubeBoard",
+        "description": "A fast live departure board for London Tube stations, for iPhone.",
+        "publisher": { "@id": "https://www.tubeboard.co.uk/#org" },
+        "inLanguage": "en-GB"
+      },
+      {
+        "@type": "Organization",
+        "@id": "https://www.tubeboard.co.uk/#org",
+        "name": "TubeBoard",
+        "url": "https://www.tubeboard.co.uk/",
+        "logo": "https://www.tubeboard.co.uk/assets/tubeboard-icon-512.png",
+        "email": "support@tubeboard.co.uk"
+      },
+      {
+        "@type": "MobileApplication",
+        "@id": "https://www.tubeboard.co.uk/#app",
+        "name": "TubeBoard",
+        "applicationCategory": "TravelApplication",
+        "operatingSystem": "iOS",
+        "url": "https://www.tubeboard.co.uk/",
+        "image": "https://www.tubeboard.co.uk/assets/tubeboard-icon-512.png",
+        "description": "TubeBoard is an independent iPhone app for checking live London Tube arrivals in a fast platform-board view with favourite stations and seconds-based countdowns.",
+        "publisher": { "@id": "https://www.tubeboard.co.uk/#org" }
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="nav">
     <a class="brand" href="/" aria-label="TubeBoard home">
       <span class="brand-mark" aria-hidden="true"></span>
       <span>TubeBoard</span>
     </a>
-    <nav aria-label="Primary navigation">
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" hidden>
+      <span class="nav-toggle-bars" aria-hidden="true"></span>
+      <span class="nav-toggle-label">Menu</span>
+    </button>
+    <nav id="primary-nav" aria-label="Primary">
       <a href="#board">Board</a>
       <a href="#features">Features</a>
       <a href="#faq">FAQ</a>
@@ -34,13 +88,13 @@
     </nav>
   </header>
 
-  <main>
+  <main id="main">
     <section class="hero">
       <div class="hero-copy">
-        <img class="hero-icon" src="assets/tubeboard-icon-512.png" alt="" aria-hidden="true">
+        <img class="hero-icon" src="assets/tubeboard-icon-512.png" alt="" aria-hidden="true" width="512" height="512" decoding="async">
         <p class="eyebrow">Live arrivals powered by TfL Open Data</p>
         <h1>TubeBoard</h1>
-        <p class="lead">TubeBoard is a fast live departure board for London Tube stations. Pick a station, see the next trains, and save favourites for quick checks.</p>
+        <p class="lead">A fast live departure board for London Tube stations. Pick a station, see the next trains, and save favourites for quick checks.</p>
         <div class="cta-row" id="download">
           <span class="button button-disabled" aria-disabled="true">Coming soon</span>
           <a class="button button-ghost" href="#board">See the board</a>
@@ -48,55 +102,61 @@
         <p class="note">Preparing for App Store / TestFlight release.</p>
       </div>
 
-      <div class="hero-visual" aria-label="TubeBoard live arrivals preview">
+      <div class="hero-visual">
         <figure class="phone phone-hero">
-          <img src="assets/screenshots/app-central-board.png" alt="TubeBoard app showing Central line arrivals at Woodford">
+          <img src="assets/screenshots/app-central-board.png" alt="TubeBoard app showing Central line arrivals at Woodford" width="1179" height="2556" fetchpriority="high" decoding="async">
         </figure>
       </div>
     </section>
 
-    <section class="board-demo" id="board">
-      <div>
+    <section class="board-demo" id="board" aria-labelledby="board-heading">
+      <div class="board-intro">
         <p class="eyebrow">App screenshots</p>
-        <h2>Fast boards for the stations you use.</h2>
+        <h2 id="board-heading">Fast boards for the stations you use.</h2>
         <p class="note">Live arrivals powered by TfL Open Data.</p>
       </div>
-      <div class="app-screens">
-        <figure class="phone phone-small">
-          <img src="assets/screenshots/app-home.png" alt="TubeBoard app home screen with an Add Station button">
-          <figcaption>Station selection entry point</figcaption>
-        </figure>
-        <figure class="phone phone-small">
-          <img src="assets/screenshots/app-central-board.png" alt="TubeBoard app Central line board for Woodford">
-          <figcaption>Live Tube arrivals</figcaption>
-        </figure>
-        <figure class="phone phone-small">
-          <img src="assets/screenshots/app-district-board.png" alt="TubeBoard app District line board for Chiswick Park">
-          <figcaption>Example app screenshot</figcaption>
-        </figure>
-      </div>
+      <ul class="app-screens" role="list">
+        <li class="reveal">
+          <figure class="phone phone-small">
+            <img src="assets/screenshots/app-home.png" alt="TubeBoard app home screen with an Add Station button" width="1179" height="2556" loading="lazy" decoding="async">
+            <figcaption>Station selection entry point</figcaption>
+          </figure>
+        </li>
+        <li class="reveal">
+          <figure class="phone phone-small">
+            <img src="assets/screenshots/app-central-board.png" alt="TubeBoard app Central line board for Woodford" width="1179" height="2556" loading="lazy" decoding="async">
+            <figcaption>Live Tube arrivals</figcaption>
+          </figure>
+        </li>
+        <li class="reveal">
+          <figure class="phone phone-small">
+            <img src="assets/screenshots/app-district-board.png" alt="TubeBoard app District line board for Chiswick Park" width="1179" height="2556" loading="lazy" decoding="async">
+            <figcaption>Example app screenshot</figcaption>
+          </figure>
+        </li>
+      </ul>
     </section>
 
-    <section class="features" id="features">
-      <article>
-        <span class="feature-index">01</span>
+    <section class="features" id="features" aria-label="Features">
+      <article class="reveal">
+        <span class="feature-index" aria-hidden="true">01</span>
         <h3>Live Tube arrivals</h3>
         <p>See the next trains for selected London Tube stations in a quick, glanceable board.</p>
       </article>
-      <article>
-        <span class="feature-index">02</span>
+      <article class="reveal">
+        <span class="feature-index" aria-hidden="true">02</span>
         <h3>Favourite stations</h3>
         <p>Keep regular stops close so everyday checks take only a moment.</p>
       </article>
-      <article>
-        <span class="feature-index">03</span>
+      <article class="reveal">
+        <span class="feature-index" aria-hidden="true">03</span>
         <h3>Simple platform-board view</h3>
         <p>Countdowns, destinations, and platforms stay focused on the next useful answer.</p>
       </article>
     </section>
 
-    <section class="faq" id="faq">
-      <h2>FAQ</h2>
+    <section class="faq" id="faq" aria-labelledby="faq-heading">
+      <h2 id="faq-heading">FAQ</h2>
       <details open>
         <summary>Is TubeBoard official?</summary>
         <p>No. TubeBoard is an independent app and is not affiliated with or endorsed by Transport for London.</p>
@@ -119,5 +179,40 @@
     <a href="/privacy">Privacy</a>
     <a href="/support">Support</a>
   </footer>
+
+  <script>
+    // Progressive enhancement: collapse primary nav into a toggle on small screens.
+    // Without JS the full nav stays visible and the toggle button stays hidden.
+    (function () {
+      var toggle = document.querySelector('.nav-toggle');
+      var nav = document.getElementById('primary-nav');
+      if (!toggle || !nav) return;
+
+      toggle.hidden = false;
+      document.body.classList.add('has-nav-toggle');
+
+      var close = function () {
+        toggle.setAttribute('aria-expanded', 'false');
+        document.body.classList.remove('nav-open');
+      };
+
+      toggle.addEventListener('click', function () {
+        var open = toggle.getAttribute('aria-expanded') === 'true';
+        toggle.setAttribute('aria-expanded', String(!open));
+        document.body.classList.toggle('nav-open', !open);
+      });
+
+      nav.addEventListener('click', function (event) {
+        if (event.target.closest('a')) close();
+      });
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && toggle.getAttribute('aria-expanded') === 'true') {
+          close();
+          toggle.focus();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

@@ -50,6 +50,8 @@
 
 html {
   scroll-behavior: smooth;
+  /* Keep anchored targets clear of the sticky header (WCAG 2.4.11). */
+  scroll-padding-top: 92px;
 }
 
 body {
@@ -74,6 +76,27 @@ body::before {
 
 a {
   color: inherit;
+}
+
+.skip-link {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 60;
+  padding: 10px 16px;
+  background: var(--ink);
+  color: var(--yellow);
+  font-family: var(--font-display);
+  font-weight: 800;
+  text-decoration: none;
+  border-radius: 6px;
+  box-shadow: 4px 4px 0 var(--yellow);
+  transform: translateY(-160%);
+  transition: transform 160ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
 }
 
 .nav {
@@ -121,12 +144,67 @@ nav a {
 }
 
 nav a:not(.button) {
-  padding: 4px 0;
+  padding: 6px 2px;
   border-bottom: 3px solid transparent;
+  transition: border-color 160ms ease;
 }
 
 nav a:not(.button):hover {
   border-color: var(--orange);
+}
+
+.nav-toggle {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+  background: var(--yellow);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 820;
+  cursor: pointer;
+  box-shadow: 3px 3px 0 var(--ink);
+}
+
+.nav-toggle-bars,
+.nav-toggle-bars::before,
+.nav-toggle-bars::after {
+  content: "";
+  display: block;
+  width: 20px;
+  height: 2.5px;
+  background: var(--ink);
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+
+.nav-toggle-bars {
+  position: relative;
+}
+
+.nav-toggle-bars::before {
+  position: absolute;
+  top: -6px;
+}
+
+.nav-toggle-bars::after {
+  position: absolute;
+  top: 6px;
+}
+
+.nav-open .nav-toggle-bars {
+  background: transparent;
+}
+
+.nav-open .nav-toggle-bars::before {
+  transform: translateY(6px) rotate(45deg);
+}
+
+.nav-open .nav-toggle-bars::after {
+  transform: translateY(-6px) rotate(-45deg);
 }
 
 .button {
@@ -377,6 +455,14 @@ h3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: clamp(14px, 2vw, 28px);
   align-items: start;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.app-screens > li {
+  display: flex;
+  flex-direction: column;
 }
 
 figcaption {
@@ -395,6 +481,12 @@ figcaption {
   padding: 6px;
   border-color: #2b2b2b;
   box-shadow: 8px 8px 0 rgba(255, 211, 41, 0.18);
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+
+.phone-small:hover {
+  transform: translateY(-6px);
+  box-shadow: 10px 14px 0 rgba(255, 211, 41, 0.26);
 }
 
 .phone-small img {
@@ -415,6 +507,11 @@ article {
   border-left: 1px solid var(--rail);
   border-top: 8px solid var(--ink);
   background: #ffffff;
+  transition: background-color 180ms ease;
+}
+
+article:hover {
+  background: var(--paper);
 }
 
 article:nth-child(1) {
@@ -527,8 +624,41 @@ footer a {
 }
 
 @media (max-width: 920px) {
-  nav {
+  /* Collapse the primary nav behind an accessible toggle.
+     Falls back to a visible nav when JS is unavailable. */
+  .has-nav-toggle .nav-toggle {
+    display: inline-flex;
+  }
+
+  .has-nav-toggle nav {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    left: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding: 12px clamp(20px, 5vw, 72px) 18px;
+    background: #ffffff;
+    border-bottom: 4px solid var(--ink);
+    box-shadow: 0 18px 24px -18px rgba(8, 8, 8, 0.5);
+  }
+
+  .has-nav-toggle nav:not([hidden]) {
     display: none;
+  }
+
+  .has-nav-toggle.nav-open nav {
+    display: flex;
+  }
+
+  .has-nav-toggle nav a:not(.button) {
+    padding: 12px 2px;
+    border-bottom: 1px solid var(--rail);
+  }
+
+  .has-nav-toggle nav .button {
+    margin-top: 8px;
   }
 
   .hero,
@@ -662,11 +792,41 @@ footer a {
   }
 }
 
+/* Tasteful scroll-driven entrance. Base state is fully visible, so the
+   content is intact without JS, without scroll-timeline support, and when
+   reduced motion is requested. Enhancement is layered on top only when safe. */
+@media (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .reveal {
+      animation: reveal-in linear both;
+      animation-timeline: view();
+      animation-range: entry 5% cover 22%;
+    }
+  }
+}
+
+@keyframes reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     scroll-behavior: auto !important;
     transition: none !important;
+    animation: none !important;
+  }
+
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }
