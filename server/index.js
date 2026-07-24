@@ -29,7 +29,17 @@ const server = http.createServer(async (request, response) => {
 
   try {
     const requestHost = (request.headers.host || '').toLowerCase();
-    const url = new URL(request.url || '/', `http://${requestHost || 'localhost'}`);
+    const requestTarget = request.url || '/';
+
+    // Fly's internal health checker does not use a public website hostname.
+    // Keep this deliberately narrow so the probe can verify the process
+    // without weakening host validation for pages or API routes.
+    if ((request.method === 'GET' || request.method === 'HEAD') && requestTarget === '/healthz') {
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    const url = new URL(requestTarget, `http://${requestHost || 'localhost'}`);
 
     if (requestHost === 'www.tubeboard.co.uk') {
       sendRedirect(response, `https://tubeboard.co.uk${url.pathname}${url.search}`, 308);
@@ -48,11 +58,6 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === 'POST' && url.pathname === '/api/live-activities/end') {
       await handleActivityEnd(request, response);
-      return;
-    }
-
-    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/healthz') {
-      sendJson(response, 200, { ok: true });
       return;
     }
 
