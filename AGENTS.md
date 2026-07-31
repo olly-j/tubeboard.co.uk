@@ -51,6 +51,13 @@ repositories in the same task. Never silently choose one side.
   physical-device validation gap.
 - Do not introduce automatic production deployment without a separate owner
   decision and least-privilege/security review.
+- Follow `.github/SECURITY.md` for vulnerabilities or credential exposure. Use
+  private reporting, rotate credentials before source cleanup, and keep
+  sensitive evidence out of the central `TB-NNN` execution record.
+- Dependency alerts, secret scanning, push protection, and private
+  vulnerability reporting are enabled. Do not enable automated update PRs,
+  CodeQL, or scheduled security workflows without a central owner-approved
+  compatibility, runtime, and cost assessment.
 
 ## GitHub And Review
 
