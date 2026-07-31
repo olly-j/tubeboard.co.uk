@@ -25,8 +25,31 @@ const rateLimiter = new TokenRateLimiter({
 const port = Number.parseInt(process.env.PORT || '4173', 10);
 
 const server = http.createServer(async (request, response) => {
+  setSecurityHeaders(response);
+
   try {
-    const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    const requestHost = (request.headers.host || '').toLowerCase();
+    const requestTarget = request.url || '/';
+
+    // Fly's internal health checker does not use a public website hostname.
+    // Keep this deliberately narrow so the probe can verify the process
+    // without weakening host validation for pages or API routes.
+    if ((request.method === 'GET' || request.method === 'HEAD') && requestTarget === '/healthz') {
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    const url = new URL(requestTarget, `http://${requestHost || 'localhost'}`);
+
+    if (requestHost === 'www.tubeboard.co.uk') {
+      sendRedirect(response, `https://tubeboard.co.uk${url.pathname}${url.search}`, 308);
+      return;
+    }
+
+    if (!isAllowedHost(requestHost)) {
+      sendJson(response, 400, { ok: false, error: 'Unexpected Host header' });
+      return;
+    }
 
     if (request.method === 'POST' && url.pathname === '/api/live-activities/tokens') {
       await handleTokenRegistration(request, response);
@@ -38,34 +61,37 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
-    if (request.method === 'GET' && url.pathname === '/healthz') {
-      sendJson(response, 200, { ok: true });
-      return;
-    }
-
     if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/privacy.html') {
-      sendRedirect(response, '/privacy');
+      sendRedirect(response, '/privacy', 308);
       return;
     }
 
     if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/privacy/') {
-      sendRedirect(response, '/privacy');
+      sendRedirect(response, '/privacy', 308);
       return;
     }
 
     if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/support.html') {
-      sendRedirect(response, '/support');
+      sendRedirect(response, '/support', 308);
       return;
     }
 
     if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/support/') {
-      sendRedirect(response, '/support');
+      sendRedirect(response, '/support', 308);
       return;
     }
 
-    await serveStaticFile(url.pathname, response);
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      response.setHeader('allow', 'GET, HEAD');
+      sendJson(response, 405, { ok: false, error: 'Method not allowed' });
+      return;
+    }
+
+    await serveStaticFile(url.pathname, request, response);
   } catch (error) {
-    const status = Number.isInteger(error.status) ? error.status : 500;
+    const status = error instanceof URIError
+      ? 400
+      : Number.isInteger(error.status) ? error.status : 500;
     if (status >= 500) {
       console.error(`Request failed: ${error.message}`);
     }
@@ -185,7 +211,7 @@ async function readJsonBody(request) {
   }
 }
 
-async function serveStaticFile(urlPathname, response) {
+async function serveStaticFile(urlPathname, request, response) {
   const cleanPath = decodeURIComponent(urlPathname.split('?')[0]);
   const relativePath = getStaticRelativePath(cleanPath);
   const filePath = path.resolve(siteDir, relativePath);
@@ -199,10 +225,45 @@ async function serveStaticFile(urlPathname, response) {
   try {
     const stats = await fs.stat(filePath);
     const finalPath = stats.isDirectory() ? path.join(filePath, 'index.html') : filePath;
-    const file = await fs.readFile(finalPath);
+    const finalStats = await fs.stat(finalPath);
+    const lastModified = finalStats.mtime.toUTCString();
+    const etag = `W/"${finalStats.size}-${Math.trunc(finalStats.mtimeMs)}"`;
+    const isNotModified = request.headers['if-none-match'] === etag
+      || request.headers['if-modified-since'] === lastModified;
+
+    if (isNotModified) {
+      response.writeHead(304, {
+        etag,
+        'last-modified': lastModified,
+        'cache-control': getCacheControl(finalPath)
+      });
+      response.end();
+      return;
+    }
+
+    const file = request.method === 'HEAD' ? null : await fs.readFile(finalPath);
     response.writeHead(200, {
       'content-type': getContentType(finalPath),
-      'cache-control': getCacheControl(finalPath)
+      'content-length': finalStats.size,
+      'cache-control': getCacheControl(finalPath),
+      etag,
+      'last-modified': lastModified
+    });
+    response.end(file);
+  } catch {
+    await serveNotFound(request, response);
+  }
+}
+
+async function serveNotFound(request, response) {
+  const notFoundPath = path.join(siteDir, '404.html');
+  try {
+    const file = request.method === 'HEAD' ? null : await fs.readFile(notFoundPath);
+    const stats = await fs.stat(notFoundPath);
+    response.writeHead(404, {
+      'content-type': 'text/html; charset=utf-8',
+      'content-length': stats.size,
+      'cache-control': 'no-store'
     });
     response.end(file);
   } catch {
@@ -242,12 +303,47 @@ function sendText(response, statusCode, text) {
   response.end(text);
 }
 
-function sendRedirect(response, location) {
-  response.writeHead(301, {
+function sendRedirect(response, location, statusCode = 308) {
+  response.writeHead(statusCode, {
     location,
     'cache-control': 'public, max-age=300'
   });
   response.end();
+}
+
+function setSecurityHeaders(response) {
+  response.setHeader('content-security-policy', [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "connect-src 'self'",
+    "font-src 'self'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+    "img-src 'self' data:",
+    "object-src 'none'",
+    "script-src 'self'",
+    "style-src 'self'"
+  ].join('; '));
+  response.setHeader('cross-origin-opener-policy', 'same-origin');
+  response.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  response.setHeader('referrer-policy', 'strict-origin-when-cross-origin');
+  response.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
+  response.setHeader('x-content-type-options', 'nosniff');
+  response.setHeader('x-frame-options', 'DENY');
+}
+
+function isAllowedHost(host) {
+  if (!host) {
+    return false;
+  }
+
+  const hostname = host.replace(/:\d+$/, '');
+  return hostname === 'tubeboard.co.uk'
+    || hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '::1'
+    || hostname.endsWith('.fly.dev')
+    || hostname.endsWith('.internal');
 }
 
 function getClientIp(request) {
@@ -269,6 +365,8 @@ function getContentType(filePath) {
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.avif': 'image/avif',
     '.svg': 'image/svg+xml; charset=utf-8',
     '.ico': 'image/x-icon',
     '.txt': 'text/plain; charset=utf-8',
@@ -282,7 +380,18 @@ function getContentType(filePath) {
 }
 
 function getCacheControl(filePath) {
-  return /\.(png|jpg|jpeg|svg|ttf|woff2?)$/i.test(filePath)
-    ? 'public, max-age=31536000, immutable'
-    : 'public, max-age=300';
+  if (/\.html$/i.test(filePath)) {
+    return 'public, max-age=0, must-revalidate';
+  }
+
+  if (/(robots\.txt|sitemap\.xml)$/i.test(filePath)) {
+    return 'public, max-age=300';
+  }
+
+  if (/(?:[-.]v?\d{3,}|[.-][a-f0-9]{8,})/i.test(path.basename(filePath))
+      && /\.(css|js|png|jpg|jpeg|webp|avif|svg|ttf|woff2?)$/i.test(filePath)) {
+    return 'public, max-age=31536000, immutable';
+  }
+
+  return 'public, max-age=3600, must-revalidate';
 }

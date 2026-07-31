@@ -148,6 +148,66 @@ test('new activity ID starts a fresh record instead of reusing same board lifecy
   assert.equal(newRecord.backoffReason, null);
 });
 
+test('expires active records at eight hours and purges inactive records after retention', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const filePath = path.join(tempDir, 'records.json');
+  const store = new LiveActivityStore(filePath);
+  const config = {
+    ...loadConfig({}),
+    maxActiveMs: 8 * 60 * 60 * 1000,
+    retentionMs: 24 * 60 * 60 * 1000
+  };
+
+  await store.upsertToken(validTokenPayload, new Date('2026-07-20T00:00:00Z'));
+  await store.expireOld(new Date('2026-07-20T08:00:01Z'), config);
+
+  assert.equal(store.state.records.length, 1);
+  assert.equal(store.state.records[0].active, false);
+  assert.equal(store.state.records[0].endReason, 'maxActivityLifetimeReached');
+
+  await store.expireOld(new Date('2026-07-21T08:00:02Z'), config);
+  assert.equal(store.state.records.length, 0);
+
+  const persisted = JSON.parse(await fs.readFile(filePath, 'utf8'));
+  assert.deepEqual(persisted.records, []);
+});
+
+test('uses server update time for inactive retention and removes malformed legacy records', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const now = new Date('2026-07-24T12:00:00Z');
+  const config = {
+    ...loadConfig({}),
+    retentionMs: 24 * 60 * 60 * 1000
+  };
+
+  store.state.records = [
+    {
+      activityID: 'recent',
+      active: false,
+      endedAt: '2000-01-01T00:00:00Z',
+      updatedAt: '2026-07-24T11:00:00Z'
+    },
+    {
+      activityID: 'old',
+      active: false,
+      endedAt: '2099-01-01T00:00:00Z',
+      updatedAt: '2026-07-22T11:00:00Z'
+    },
+    {
+      activityID: 'malformed',
+      active: false,
+      endedAt: '2099-01-01T00:00:00Z'
+    }
+  ];
+  store.loaded = true;
+  await store.save();
+
+  await store.expireOld(now, config);
+
+  assert.deepEqual(store.state.records.map((record) => record.activityID), ['recent']);
+});
+
 test('builds ContentState with Swift Date JSON numbers', () => {
   const now = new Date('2026-06-14T15:20:00Z');
   const contentState = buildContentState(

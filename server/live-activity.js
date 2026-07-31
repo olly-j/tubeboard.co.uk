@@ -238,7 +238,7 @@ export class LiveActivityStore {
 
       const createdAt = Date.parse(record.createdAt || record.tokenUpdatedAt || record.updatedAt);
       const lastSuccessAt = Date.parse(record.lastSuccessAt || record.updatedAt || record.tokenUpdatedAt);
-      const tooOld = Number.isFinite(createdAt) && nowMs - createdAt > config.maxActiveMs;
+      const tooOld = !Number.isFinite(createdAt) || nowMs - createdAt > config.maxActiveMs;
       const tooStale = Number.isFinite(lastSuccessAt) && nowMs - lastSuccessAt > config.retentionMs;
 
       if (tooOld || tooStale) {
@@ -249,6 +249,26 @@ export class LiveActivityStore {
         changed = true;
       }
     }
+
+    const retainedRecords = this.state.records.filter((record) => {
+      if (record.active !== false) {
+        return true;
+      }
+
+      // updatedAt is written by this service whenever a record is deactivated.
+      // Do not trust the client-supplied endedAt value as the retention clock.
+      const inactiveSince = Date.parse(record.updatedAt || '');
+      const retain = Number.isFinite(inactiveSince)
+        && nowMs - inactiveSince <= config.retentionMs;
+
+      if (!retain) {
+        changed = true;
+      }
+
+      return retain;
+    });
+
+    this.state.records = retainedRecords;
 
     if (changed) {
       await this.save();
