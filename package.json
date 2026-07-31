@@ -1,12 +1,13 @@
 {
   "name": "tubeboard-website-service",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node server/index.js",
     "dev": "LIVE_ACTIVITY_WORKER_ENABLED=false node server/index.js",
-    "test": "node --test"
+    "test": "node --test",
+    "check": "npm test && node --check server/index.js && node --check server/live-activity.js && node --check server/version.js && node --check site-20260724.js && scripts/check-repository.sh"
   },
   "engines": {
     "node": ">=20"

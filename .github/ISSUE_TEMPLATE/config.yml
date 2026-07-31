@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: TubeBoard central backlog and issues
+    url: https://github.com/olly-j/My-Train-Times/issues
+    about: Create or update the owner-reviewed TB-NNN record in the app repository.
