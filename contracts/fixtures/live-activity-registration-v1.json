@@ -1,0 +1,19 @@
+{
+  "installID": "A7D20A75-1F4E-4C4E-AF64-2D6D6E2FB1E9",
+  "activityID": "E8C5C7A6-2E62-4F22-A35F-2C5A3F9A7D35",
+  "stationID": "940GZZLULYN",
+  "lineID": "central",
+  "selectionMode": "platform",
+  "platformID": "eastbound-platform-2",
+  "platformHeading": "Eastbound - Platform 2",
+  "platformLabel": "Platform 2",
+  "platformDirection": "Eastbound",
+  "activityStartedAt": "2026-06-14T15:20:00Z",
+  "activityEndsAt": "2026-06-14T15:50:00Z",
+  "pushTokenHex": "7f2a7f2a7f2a7f2a7f2a7f2a7f2a7f2a",
+  "tokenUpdatedAt": "2026-06-14T15:20:00Z",
+  "appBundleID": "OllyJ.My-Train-Times",
+  "appVersion": "1.0",
+  "buildNumber": "20260724081533",
+  "environment": "production"
+}

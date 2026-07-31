@@ -11,6 +11,11 @@ import {
   validateEndPayload,
   validateTokenPayload
 } from './live-activity.js';
+import {
+  LIVE_ACTIVITY_CONTRACT_VERSION,
+  SERVICE_VERSION,
+  SOURCE_REVISION
+} from './version.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -35,7 +40,12 @@ const server = http.createServer(async (request, response) => {
     // Keep this deliberately narrow so the probe can verify the process
     // without weakening host validation for pages or API routes.
     if ((request.method === 'GET' || request.method === 'HEAD') && requestTarget === '/healthz') {
-      sendJson(response, 200, { ok: true });
+      sendJson(response, 200, {
+        ok: true,
+        serviceVersion: SERVICE_VERSION,
+        contractVersion: LIVE_ACTIVITY_CONTRACT_VERSION,
+        sourceRevision: SOURCE_REVISION
+      });
       return;
     }
 

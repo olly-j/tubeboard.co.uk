@@ -4,8 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  buildEndApnsPayload,
   buildApnsPayload,
   buildContentState,
+  buildPausedApnsPayload,
   getRolloverDelayMs,
   LiveActivityStore,
   loadConfig,
@@ -67,6 +69,34 @@ test('validates token registration payloads', () => {
   assert.match(missingPlatform.errors.join('\n'), /platformID/);
 });
 
+test('validates and normalizes optional Live Activity duration fields', () => {
+  const timed = validateTokenPayload({
+    ...validTokenPayload,
+    activityStartedAt: '2026-06-14T15:20:00Z',
+    activityEndsAt: '2026-06-14T15:50:00Z'
+  });
+
+  assert.equal(timed.ok, true);
+  assert.equal(timed.value.activityStartedAt, '2026-06-14T15:20:00.000Z');
+  assert.equal(timed.value.activityEndsAt, '2026-06-14T15:50:00.000Z');
+
+  const invalid = validateTokenPayload({
+    ...validTokenPayload,
+    activityStartedAt: 'not-a-date',
+    activityEndsAt: '2026-06-14T15:10:00Z'
+  });
+  assert.equal(invalid.ok, false);
+  assert.match(invalid.errors.join('\n'), /activityStartedAt/);
+
+  const reversed = validateTokenPayload({
+    ...validTokenPayload,
+    activityStartedAt: '2026-06-14T15:20:00Z',
+    activityEndsAt: '2026-06-14T15:10:00Z'
+  });
+  assert.equal(reversed.ok, false);
+  assert.match(reversed.errors.join('\n'), /must not be before/);
+});
+
 test('validates activity end payloads', () => {
   assert.equal(validateEndPayload({
     installID: validTokenPayload.installID,
@@ -105,6 +135,43 @@ test('token refresh for same activity preserves lifecycle fields', async () => {
   assert.equal(store.state.records[0].consecutiveEmptyCycles, 2);
   assert.equal(store.state.records[0].backoffUntil, null);
   assert.equal(store.state.records[0].backoffReason, null);
+});
+
+test('stores the app-selected Live Activity duration', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const validation = validateTokenPayload({
+    ...validTokenPayload,
+    activityStartedAt: '2026-06-14T15:20:00Z',
+    activityEndsAt: '2026-06-14T15:50:00Z'
+  });
+
+  await store.upsertToken(validation.value, new Date('2026-06-14T15:20:00Z'));
+
+  assert.equal(store.state.records[0].activityStartedAt, '2026-06-14T15:20:00.000Z');
+  assert.equal(store.state.records[0].activityEndsAt, '2026-06-14T15:50:00.000Z');
+});
+
+test('clears a previous pause when the app extends the same activity', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const first = validateTokenPayload({
+    ...validTokenPayload,
+    activityStartedAt: '2026-06-14T15:20:00Z',
+    activityEndsAt: '2026-06-14T15:50:00Z'
+  });
+  await store.upsertToken(first.value, new Date('2026-06-14T15:20:00Z'));
+  await store.markPaused(validTokenPayload.activityID, validTokenPayload.environment, new Date('2026-06-14T15:50:00Z'));
+
+  const extended = validateTokenPayload({
+    ...validTokenPayload,
+    activityStartedAt: '2026-06-14T15:20:00Z',
+    activityEndsAt: '2026-06-14T16:20:00Z'
+  });
+  await store.upsertToken(extended.value, new Date('2026-06-14T15:55:00Z'));
+
+  assert.equal(store.state.records[0].pausedAt, null);
+  assert.equal(store.state.records[0].activityEndsAt, '2026-06-14T16:20:00.000Z');
 });
 
 test('new activity ID starts a fresh record instead of reusing same board lifecycle', async () => {
@@ -447,6 +514,85 @@ test('builds APNs envelope with Unix timestamps', () => {
   assert.equal(payload.aps.event, 'update');
   assert.equal(payload.aps['content-state'].updatedAt, 803832000);
   assert.equal(payload.aps['stale-date'], Math.floor(now.getTime() / 1000) + 300);
+});
+
+test('builds pause and end APNs transitions for an expired duration', () => {
+  const now = new Date('2026-06-14T15:50:00Z');
+  const record = {
+    stationID: '940GZZLULYN',
+    lineID: 'central',
+    selectionMode: 'platform',
+    platformLabel: 'Platform 2',
+    platformDirection: 'Eastbound',
+    lastStationName: 'Leyton',
+    lastLineName: 'Central',
+    lastPlatform: 'Eastbound - Platform 2'
+  };
+
+  const paused = buildPausedApnsPayload(record, now);
+  assert.equal(paused.aps.event, 'update');
+  assert.equal(paused.aps['content-state'].lifecycleState, 'paused');
+  assert.equal(paused.aps['content-state'].status, 'Updates paused');
+  assert.equal(paused.aps['content-state'].stationName, 'Leyton');
+  assert.equal(paused.aps['stale-date'], undefined);
+
+  const ended = buildEndApnsPayload(record, now);
+  assert.equal(ended.aps.event, 'end');
+  assert.equal(ended.aps['dismissal-date'], Math.floor(now.getTime() / 1000));
+  assert.equal(ended.aps['content-state'].lifecycleState, 'paused');
+});
+
+test('worker pauses and later ends an activity at its selected duration', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const startedAt = new Date('2026-06-14T15:20:00Z');
+  const endsAt = new Date('2026-06-14T15:50:00Z');
+  const validation = validateTokenPayload({
+    ...validTokenPayload,
+    activityStartedAt: startedAt.toISOString(),
+    activityEndsAt: endsAt.toISOString()
+  });
+  await store.upsertToken(validation.value, startedAt);
+
+  const pushes = [];
+  const config = {
+    ...loadConfig({}),
+    pauseGraceMs: 10 * 60 * 1000
+  };
+  const logger = { info() {}, warn() {}, error() {} };
+
+  await runLiveActivityWorkerCycle({
+    store,
+    config,
+    now: endsAt,
+    pushImpl: async (_record, payload) => {
+      pushes.push(payload);
+      return { status: 200 };
+    },
+    logger
+  });
+
+  assert.equal(pushes.length, 1);
+  assert.equal(pushes[0].aps.event, 'update');
+  assert.equal(store.state.records[0].pausedAt, endsAt.toISOString());
+  assert.equal(store.state.records[0].active, true);
+
+  const endTime = new Date(endsAt.getTime() + 10 * 60 * 1000);
+  await runLiveActivityWorkerCycle({
+    store,
+    config,
+    now: endTime,
+    pushImpl: async (_record, payload) => {
+      pushes.push(payload);
+      return { status: 200 };
+    },
+    logger
+  });
+
+  assert.equal(pushes.length, 2);
+  assert.equal(pushes[1].aps.event, 'end');
+  assert.equal(store.state.records[0].active, false);
+  assert.equal(store.state.records[0].endReason, 'activityDurationEnded');
 });
 
 test('platform empty arrivals still produce heartbeat pushes', async () => {

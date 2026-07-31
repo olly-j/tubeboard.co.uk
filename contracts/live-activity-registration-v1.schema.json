@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tubeboard.co.uk/contracts/live-activity-registration-v1.schema.json",
+  "title": "TubeBoard Live Activity token registration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "x-tubeboard-contract-version": 1,
+  "required": [
+    "installID",
+    "activityID",
+    "stationID",
+    "lineID",
+    "selectionMode",
+    "pushTokenHex",
+    "tokenUpdatedAt",
+    "appBundleID",
+    "appVersion",
+    "buildNumber",
+    "environment"
+  ],
+  "properties": {
+    "installID": {"type": "string", "minLength": 1},
+    "activityID": {"type": "string", "minLength": 1},
+    "stationID": {"type": "string", "pattern": "^[A-Za-z0-9_-]{3,80}$"},
+    "lineID": {"type": "string", "minLength": 1},
+    "selectionMode": {"enum": ["platform", "allPlatforms"]},
+    "platformID": {"type": ["string", "null"]},
+    "platformHeading": {"type": ["string", "null"]},
+    "platformLabel": {"type": ["string", "null"]},
+    "platformDirection": {"type": ["string", "null"]},
+    "activityStartedAt": {"type": ["string", "null"], "format": "date-time"},
+    "activityEndsAt": {"type": ["string", "null"], "format": "date-time"},
+    "pushTokenHex": {"type": "string", "pattern": "^[a-fA-F0-9]{32,512}$"},
+    "tokenUpdatedAt": {"type": "string", "format": "date-time"},
+    "appBundleID": {"type": "string", "pattern": "^[A-Za-z0-9.-]+$"},
+    "appVersion": {"type": "string", "minLength": 1},
+    "buildNumber": {"type": "string", "minLength": 1},
+    "environment": {"enum": ["production", "sandbox"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"selectionMode": {"const": "platform"}}},
+      "then": {"required": ["platformID"]}
+    }
+  ]
+}

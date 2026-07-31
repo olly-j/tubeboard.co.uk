@@ -29,6 +29,7 @@ export function loadConfig(env = process.env) {
     workerIntervalMs: parsePositiveInteger(env.LIVE_ACTIVITY_WORKER_INTERVAL_MS, 90_000),
     maxActiveMs: parsePositiveInteger(env.LIVE_ACTIVITY_MAX_ACTIVE_HOURS, 8) * 60 * 60 * 1000,
     retentionMs: parsePositiveInteger(env.LIVE_ACTIVITY_RETENTION_HOURS, 24) * 60 * 60 * 1000,
+    pauseGraceMs: parsePositiveInteger(env.LIVE_ACTIVITY_PAUSE_GRACE_MINUTES, 10) * 60 * 1000,
     tokenRateLimit: parsePositiveInteger(env.LIVE_ACTIVITY_TOKEN_RATE_LIMIT, 6),
     tokenRateWindowMs: parsePositiveInteger(env.LIVE_ACTIVITY_TOKEN_RATE_WINDOW_MS, 60_000),
     tflAppKey: env.TFL_APP_KEY || '',
@@ -100,6 +101,8 @@ export class LiveActivityStore {
       platformHeading: payload.platformHeading,
       platformLabel: payload.platformLabel,
       platformDirection: payload.platformDirection,
+      activityStartedAt: payload.activityStartedAt,
+      activityEndsAt: payload.activityEndsAt,
       pushTokenHex: payload.pushTokenHex,
       tokenUpdatedAt: payload.tokenUpdatedAt,
       appBundleID: payload.appBundleID,
@@ -115,6 +118,9 @@ export class LiveActivityStore {
       lastPushAt: isSameActivity ? previous.lastPushAt : null,
       lastSuccessAt: isSameActivity ? previous.lastSuccessAt : null,
       consecutiveEmptyCycles: isSameActivity ? previous.consecutiveEmptyCycles || 0 : 0,
+      pausedAt: isSameActivity && previous.activityEndsAt === payload.activityEndsAt
+        ? previous.pausedAt || null
+        : null,
       backoffUntil: null,
       backoffReason: null
     };
@@ -195,6 +201,11 @@ export class LiveActivityStore {
     record.lastSuccessAt = now.toISOString();
     record.updatedAt = now.toISOString();
     record.consecutiveEmptyCycles = info.emptyArrivals ? (record.consecutiveEmptyCycles || 0) + 1 : 0;
+    if (info.contentState) {
+      record.lastStationName = info.contentState.stationName;
+      record.lastLineName = info.contentState.lineName;
+      record.lastPlatform = info.contentState.platform;
+    }
     record.backoffUntil = null;
     await this.save();
   }
@@ -208,6 +219,36 @@ export class LiveActivityStore {
 
     record.backoffUntil = new Date(now.getTime() + delayMs).toISOString();
     record.backoffReason = reason;
+    record.updatedAt = now.toISOString();
+    await this.save();
+  }
+
+  async markPaused(activityID, environment, now = new Date()) {
+    await this.load();
+    const record = this.findByActivity(activityID, environment);
+    if (!record) {
+      return;
+    }
+
+    record.pausedAt = now.toISOString();
+    record.lastPushAt = now.toISOString();
+    record.lastSuccessAt = now.toISOString();
+    record.updatedAt = now.toISOString();
+    record.backoffUntil = null;
+    record.backoffReason = null;
+    await this.save();
+  }
+
+  async markDurationEnded(activityID, environment, now = new Date()) {
+    await this.load();
+    const record = this.findByActivity(activityID, environment);
+    if (!record) {
+      return;
+    }
+
+    record.active = false;
+    record.endedAt = now.toISOString();
+    record.endReason = 'activityDurationEnded';
     record.updatedAt = now.toISOString();
     await this.save();
   }
@@ -354,6 +395,12 @@ export function validateTokenPayload(input) {
     errors.push('appBundleID is invalid');
   }
 
+  const activityStartedAt = optionalDateString(payload.activityStartedAt, 'activityStartedAt', errors);
+  const activityEndsAt = optionalDateString(payload.activityEndsAt, 'activityEndsAt', errors);
+  if (activityStartedAt && activityEndsAt && Date.parse(activityEndsAt) < Date.parse(activityStartedAt)) {
+    errors.push('activityEndsAt must not be before activityStartedAt');
+  }
+
   return {
     ok: errors.length === 0,
     errors,
@@ -367,6 +414,8 @@ export function validateTokenPayload(input) {
       platformHeading: optionalString(payload.platformHeading),
       platformLabel: optionalString(payload.platformLabel),
       platformDirection: optionalString(payload.platformDirection),
+      activityStartedAt,
+      activityEndsAt,
       pushTokenHex: String(payload.pushTokenHex || '').trim().toLowerCase(),
       tokenUpdatedAt: String(payload.tokenUpdatedAt || '').trim(),
       appBundleID: String(payload.appBundleID || '').trim(),
@@ -521,6 +570,42 @@ export function buildApnsPayload(contentState, now = new Date()) {
   };
 }
 
+export function buildPausedContentState(record, now = new Date()) {
+  return {
+    stationName: record.lastStationName || cleanStationName(record.stationName || record.stationID),
+    lineName: record.lastLineName || TUBE_LINES.get(record.lineID) || titleCase(record.lineID),
+    platform: record.lastPlatform || getSelectedPlatformLabel(record),
+    arrivals: [],
+    status: 'Updates paused',
+    statusReason: 'Tap to refresh live departures',
+    isDisrupted: false,
+    updatedAt: toSwiftDateSeconds(now),
+    staleAt: toSwiftDateSeconds(now),
+    lifecycleState: 'paused'
+  };
+}
+
+export function buildPausedApnsPayload(record, now = new Date()) {
+  return {
+    aps: {
+      timestamp: toUnixSeconds(now),
+      event: 'update',
+      'content-state': buildPausedContentState(record, now)
+    }
+  };
+}
+
+export function buildEndApnsPayload(record, now = new Date()) {
+  return {
+    aps: {
+      timestamp: toUnixSeconds(now),
+      event: 'end',
+      'content-state': buildPausedContentState(record, now),
+      'dismissal-date': toUnixSeconds(now)
+    }
+  };
+}
+
 export async function pushLiveActivityUpdate(record, payload, config) {
   if (!config.apns.teamId || !config.apns.keyId || (!config.apns.authKey && !config.apns.authKeyPath)) {
     const error = new Error('APNs is not configured');
@@ -580,11 +665,47 @@ export async function pushLiveActivityUpdate(record, payload, config) {
   });
 }
 
-export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null }) {
-  const now = new Date();
+export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date() }) {
   await store.expireOld(now, config);
   const records = await store.listActive(now, config);
   if (records.length === 0) {
+    return;
+  }
+
+  const liveRecords = [];
+  for (const record of records) {
+    const activityEndsAt = Date.parse(record.activityEndsAt || '');
+    if (!Number.isFinite(activityEndsAt) || activityEndsAt > now.getTime()) {
+      liveRecords.push(record);
+      continue;
+    }
+
+    try {
+      const pausedAt = Date.parse(record.pausedAt || '');
+      if (!Number.isFinite(pausedAt)) {
+        const pushResult = await pushImpl(record, buildPausedApnsPayload(record, now), config);
+        await store.markPaused(record.activityID, record.environment, now);
+        logger.info(`Live Activity ${record.activityID} paused after its selected duration: APNs ${pushResult?.status || 200}`);
+        continue;
+      }
+
+      if (now.getTime() - pausedAt >= config.pauseGraceMs) {
+        const pushResult = await pushImpl(record, buildEndApnsPayload(record, now), config);
+        await store.markDurationEnded(record.activityID, record.environment, now);
+        logger.info(`Live Activity ${record.activityID} ended after its pause grace period: APNs ${pushResult?.status || 200}`);
+      }
+    } catch (error) {
+      if (error.permanent) {
+        await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
+        logger.warn(`Live Activity ${record.activityID} deactivated after permanent APNs error: ${error.reason || error.message}`);
+      } else {
+        await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
+        logger.warn(`Live Activity ${record.activityID} duration transition backed off: ${error.message}`);
+      }
+    }
+  }
+
+  if (liveRecords.length === 0) {
     return;
   }
 
@@ -592,7 +713,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
   try {
     statuses = await fetchTfLStatuses(config, fetchImpl);
   } catch (error) {
-    for (const record of records) {
+    for (const record of liveRecords) {
       await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
     }
     logger.warn(`Live Activity worker backed off all records: ${error.message}`);
@@ -601,7 +722,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
 
   const arrivalsByStation = new Map();
 
-  for (const record of records) {
+  for (const record of liveRecords) {
     try {
       if (!arrivalsByStation.has(record.stationID)) {
         arrivalsByStation.set(record.stationID, await fetchTfLArrivals(record.stationID, config, fetchImpl));
@@ -618,7 +739,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
 
       const payload = buildApnsPayload(contentState, now);
       const pushResult = await pushImpl(record, payload, config);
-      await store.markPushed(record.activityID, record.environment, { emptyArrivals }, now);
+      await store.markPushed(record.activityID, record.environment, { emptyArrivals, contentState }, now);
       logger.info(`Live Activity ${record.activityID} pushed: APNs ${pushResult?.status || 200}, environment ${record.environment}, selectionMode ${getRecordSelectionMode(record)}, arrivals ${contentState.arrivals.length}`);
       if (typeof scheduleRolloverPush === 'function') {
         scheduleRolloverPush(record, contentState, now, config.workerIntervalMs);
@@ -773,6 +894,19 @@ export function normalizePlatformID(value) {
 
 function optionalString(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function optionalDateString(value, field, errors) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+    errors.push(`${field} is invalid`);
+    return null;
+  }
+
+  return new Date(value).toISOString();
 }
 
 function normalizeArrival(arrival, now) {
