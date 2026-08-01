@@ -8,6 +8,7 @@ cd "$repo_root"
 required=(
   AGENTS.md
   CONTRIBUTING.md
+  .github/SECURITY.md
   .github/ISSUE_TEMPLATE/config.yml
   .github/pull_request_template.md
   .github/workflows/service-quality.yml
