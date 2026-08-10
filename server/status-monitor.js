@@ -336,7 +336,7 @@ export function renderStatusPage(snapshot, selectedLineID = null) {
       <p>Return to TubeBoard and try the board again. Compare with station information before travelling. If the problem continues, <a href="mailto:support@tubeboard.co.uk">email TubeBoard support</a> with the line, station, approximate time, app version and a screenshot if useful.</p>
     </section>
   </main>
-  <footer class="site-footer"><div class="footer-brand"><strong>TubeBoard</strong><p>Live London Tube departures.</p></div><nav aria-label="Footer"><a href="/">Home</a><a href="/support">Support</a><a href="/privacy">Privacy</a></nav><div class="footer-legal"><p>Powered by TfL Open Data. TubeBoard is independent and is not affiliated with, endorsed by or sponsored by Transport for London.</p><p>© 2026 TubeBoard.</p></div></footer>
+  <footer class="site-footer"><div class="footer-brand"><strong>TubeBoard</strong><p>Live London Tube departures.</p></div><nav aria-label="Footer"><a href="/">Home</a><a href="/support">Support</a><a href="/privacy">Privacy</a><a href="https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046">App Store</a></nav><div class="footer-legal"><p>Powered by TfL Open Data. TubeBoard is independent and is not affiliated with, endorsed by or sponsored by Transport for London.</p><p>© 2026 TubeBoard.</p></div></footer>
 </body>
 </html>`;
 }
