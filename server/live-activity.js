@@ -987,7 +987,7 @@ function toSwiftDateSeconds(date) {
   return date.getTime() / 1000 - APPLE_REFERENCE_UNIX_SECONDS;
 }
 
-async function createApnsJwt(apnsConfig) {
+export async function createApnsJwt(apnsConfig) {
   const privateKey = await readApnsKey(apnsConfig);
   const header = base64UrlJson({ alg: 'ES256', kid: apnsConfig.keyId });
   const claims = base64UrlJson({ iss: apnsConfig.teamId, iat: toUnixSeconds(new Date()) });
@@ -1019,7 +1019,7 @@ function base64Url(value) {
     .replace(/\//g, '_');
 }
 
-function parseApnsReason(body) {
+export function parseApnsReason(body) {
   try {
     const parsed = JSON.parse(body);
     return parsed.reason || 'Unknown';
@@ -1028,7 +1028,7 @@ function parseApnsReason(body) {
   }
 }
 
-function isPermanentApnsError(status, reason) {
+export function isPermanentApnsError(status, reason) {
   return status === 410
     || (status === 400 && ['BadDeviceToken', 'DeviceTokenNotForTopic', 'TopicDisallowed', 'BadTopic'].includes(reason));
 }

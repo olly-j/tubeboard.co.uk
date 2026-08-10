@@ -2,7 +2,11 @@
 
 Production website and Live Activity service for [tubeboard.co.uk](https://tubeboard.co.uk/).
 
-The dependency-free website is served by the Node service that also runs the Live Activity API and worker. Develop locally with:
+The static website is served by the Node service that also runs the Live
+Activity API, Premium disruption-alert API, and their workers. The only
+runtime package is Apple's official App Store Server Library, pinned in the
+lockfile so Premium entitlement evidence can be verified server-side. Develop
+locally with:
 
 ```sh
 npm run dev

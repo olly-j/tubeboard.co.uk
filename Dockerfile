@@ -10,9 +10,11 @@ ENV TUBEBOARD_GIT_SHA=${TUBEBOARD_GIT_SHA}
 
 WORKDIR /app
 
-COPY package.json ./
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
 COPY server ./server
 COPY contracts ./contracts
+COPY certificates ./certificates
 COPY assets/product ./assets/product
 COPY assets/tubeboard-icon-v3-32.png assets/tubeboard-icon-v3-180.png assets/tubeboard-icon-v3-512.png assets/tubeboard-og-20260724.png ./assets/
 COPY index.html privacy.html support.html 404.html styles-20260810.css site-20260724.js robots.txt sitemap.xml .nojekyll ./
