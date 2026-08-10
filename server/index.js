@@ -16,6 +16,11 @@ import {
   SERVICE_VERSION,
   SOURCE_REVISION
 } from './version.js';
+import {
+  TubeBoardStatusMonitor,
+  loadStatusConfig,
+  renderStatusPage
+} from './status-monitor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -26,6 +31,9 @@ const store = new LiveActivityStore(dataFile);
 const rateLimiter = new TokenRateLimiter({
   limit: config.tokenRateLimit,
   windowMs: config.tokenRateWindowMs
+});
+const statusMonitor = new TubeBoardStatusMonitor({
+  config: loadStatusConfig({ ...process.env, TFL_APP_KEY: config.tflAppKey })
 });
 const port = Number.parseInt(process.env.PORT || '4173', 10);
 
@@ -71,6 +79,23 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/api/status/v1') {
+      sendJson(
+        response,
+        200,
+        statusMonitor.getSnapshot(),
+        'public, max-age=60, stale-while-revalidate=120',
+        request.method === 'HEAD'
+      );
+      return;
+    }
+
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/status') {
+      const html = renderStatusPage(statusMonitor.getSnapshot(), url.searchParams.get('line'));
+      sendHtml(response, 200, html, request.method === 'HEAD');
+      return;
+    }
+
     if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/privacy.html') {
       sendRedirect(response, '/privacy', 308);
       return;
@@ -88,6 +113,11 @@ const server = http.createServer(async (request, response) => {
 
     if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/support/') {
       sendRedirect(response, '/support', 308);
+      return;
+    }
+
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/status/') {
+      sendRedirect(response, `/status${url.search}`, 308);
       return;
     }
 
@@ -115,6 +145,7 @@ const server = http.createServer(async (request, response) => {
 server.listen(port, () => {
   console.log(`TubeBoard service listening on http://localhost:${port}`);
   console.log(`Serving static site from ${siteDir}`);
+  statusMonitor.start();
 });
 
 if (config.workerEnabled) {
@@ -297,12 +328,23 @@ function getStaticRelativePath(cleanPath) {
   return cleanPath.replace(/^\/+/, '');
 }
 
-function sendJson(response, statusCode, payload) {
+function sendJson(response, statusCode, payload, cacheControl = 'no-store', isHead = false) {
+  const body = JSON.stringify(payload);
   response.writeHead(statusCode, {
     'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store'
+    'content-length': Buffer.byteLength(body),
+    'cache-control': cacheControl
   });
-  response.end(JSON.stringify(payload));
+  response.end(isHead ? null : body);
+}
+
+function sendHtml(response, statusCode, html, isHead = false) {
+  response.writeHead(statusCode, {
+    'content-type': 'text/html; charset=utf-8',
+    'content-length': Buffer.byteLength(html),
+    'cache-control': 'public, max-age=60, stale-while-revalidate=120'
+  });
+  response.end(isHead ? null : html);
 }
 
 function sendText(response, statusCode, text) {

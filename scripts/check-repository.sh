@@ -14,9 +14,11 @@ required=(
   .github/workflows/service-quality.yml
   contracts/live-activity-registration-v1.schema.json
   contracts/fixtures/live-activity-registration-v1.json
+  contracts/tubeboard-status-v1.schema.json
   docs/live-activity-service.md
   scripts/deploy-production.sh
   server/version.js
+  server/status-monitor.js
 )
 
 for path in "${required[@]}"; do
@@ -28,6 +30,7 @@ done
 
 python3 -m json.tool contracts/live-activity-registration-v1.schema.json >/dev/null
 python3 -m json.tool contracts/fixtures/live-activity-registration-v1.json >/dev/null
+python3 -m json.tool contracts/tubeboard-status-v1.schema.json >/dev/null
 python3 -c 'import pathlib, tomllib; tomllib.loads(pathlib.Path("fly.toml").read_text())'
 
 if grep -Rqs -- 'flyctl deploy' .github/workflows; then
