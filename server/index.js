@@ -21,6 +21,15 @@ import {
   loadStatusConfig,
   renderStatusPage
 } from './status-monitor.js';
+import {
+  DISRUPTION_ALERT_CONTRACT_VERSION,
+  DisruptionAlertStore,
+  loadDisruptionAlertConfig,
+  runDisruptionAlertWorkerCycle,
+  validateDeletePayload,
+  validateRegistrationPayload,
+  verifyPremiumTransaction
+} from './disruption-alerts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
@@ -34,6 +43,23 @@ const rateLimiter = new TokenRateLimiter({
 });
 const statusMonitor = new TubeBoardStatusMonitor({
   config: loadStatusConfig({ ...process.env, TFL_APP_KEY: config.tflAppKey })
+});
+const disruptionAlertConfig = loadDisruptionAlertConfig({
+  ...process.env,
+  TFL_APP_KEY: config.tflAppKey,
+  APNS_TEAM_ID: config.apns.teamId,
+  APNS_KEY_ID: config.apns.keyId,
+  APNS_AUTH_KEY_PATH: config.apns.authKeyPath,
+  APNS_AUTH_KEY: config.apns.authKey,
+  APNS_BUNDLE_ID: config.apns.bundleId
+});
+const disruptionAlertStore = new DisruptionAlertStore(
+  path.resolve(projectRoot, disruptionAlertConfig.dataFile),
+  disruptionAlertConfig.encryptionKey
+);
+const disruptionAlertRateLimiter = new TokenRateLimiter({
+  limit: 6,
+  windowMs: 60_000
 });
 const port = Number.parseInt(process.env.PORT || '4173', 10);
 
@@ -52,6 +78,8 @@ const server = http.createServer(async (request, response) => {
         ok: true,
         serviceVersion: SERVICE_VERSION,
         contractVersion: LIVE_ACTIVITY_CONTRACT_VERSION,
+        disruptionAlertContractVersion: DISRUPTION_ALERT_CONTRACT_VERSION,
+        disruptionAlertWorkerEnabled: disruptionAlertConfig.workerEnabled,
         sourceRevision: SOURCE_REVISION
       });
       return;
@@ -76,6 +104,16 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === 'POST' && url.pathname === '/api/live-activities/end') {
       await handleActivityEnd(request, response);
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/disruption-alerts/registrations') {
+      await handleDisruptionAlertRegistration(request, response);
+      return;
+    }
+
+    if (request.method === 'DELETE' && url.pathname === '/api/disruption-alerts/registrations') {
+      await handleDisruptionAlertDeletion(request, response);
       return;
     }
 
@@ -189,6 +227,20 @@ if (config.workerEnabled) {
   setInterval(runCycle, config.workerIntervalMs);
 }
 
+if (disruptionAlertConfig.workerEnabled) {
+  const runDisruptionAlertCycle = () => {
+    runDisruptionAlertWorkerCycle({
+      store: disruptionAlertStore,
+      config: disruptionAlertConfig
+    }).catch((error) => {
+      console.error(`Disruption alert worker cycle failed: ${error.message}`);
+    });
+  };
+
+  setTimeout(runDisruptionAlertCycle, 4_000);
+  setInterval(runDisruptionAlertCycle, disruptionAlertConfig.workerIntervalMs);
+}
+
 async function handleTokenRegistration(request, response) {
   const ipAddress = getClientIp(request);
   const body = await readJsonBody(request);
@@ -222,6 +274,58 @@ async function handleActivityEnd(request, response) {
   sendJson(response, 200, { ok: true });
 }
 
+async function handleDisruptionAlertRegistration(request, response) {
+  const body = await readJsonBody(request);
+  const validation = validateRegistrationPayload(body);
+  if (!validation.ok) {
+    sendJson(response, 400, { ok: false, errors: validation.errors });
+    return;
+  }
+
+  const rateKey = `${validation.value.installID}:${getClientIp(request)}`;
+  if (!disruptionAlertRateLimiter.check(rateKey)) {
+    sendJson(response, 429, { ok: false, error: 'Too many alert preference updates' });
+    return;
+  }
+
+  if (!disruptionAlertConfig.encryptionKey) {
+    sendJson(response, 503, { ok: false, error: 'Disruption alert registration is not configured' });
+    return;
+  }
+
+  let entitlement;
+  try {
+    entitlement = await verifyPremiumTransaction(
+      validation.value.transactionJWS,
+      validation.value.storeEnvironment,
+      disruptionAlertConfig
+    );
+  } catch {
+    sendJson(response, 403, { ok: false, error: 'Premium access could not be verified' });
+    return;
+  }
+  const result = await disruptionAlertStore.upsert(validation.value, entitlement);
+  sendJson(response, 200, { ok: true, active: true, expiresAt: result.expiresAt });
+}
+
+async function handleDisruptionAlertDeletion(request, response) {
+  const body = await readJsonBody(request);
+  const validation = validateDeletePayload(body);
+  if (!validation.ok) {
+    sendJson(response, 400, { ok: false, errors: validation.errors });
+    return;
+  }
+
+  const rateKey = `${validation.value.installID}:${getClientIp(request)}`;
+  if (!disruptionAlertRateLimiter.check(rateKey)) {
+    sendJson(response, 429, { ok: false, error: 'Too many alert preference updates' });
+    return;
+  }
+
+  await disruptionAlertStore.deleteByInstallID(validation.value.installID);
+  sendJson(response, 200, { ok: true, active: false });
+}
+
 async function readJsonBody(request) {
   const contentType = request.headers['content-type'] || '';
   if (!contentType.includes('application/json')) {
@@ -235,7 +339,7 @@ async function readJsonBody(request) {
 
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 16 * 1024) {
+    if (size > 32 * 1024) {
       const error = new Error('Request body is too large');
       error.status = 413;
       throw error;
@@ -255,6 +359,10 @@ async function readJsonBody(request) {
 async function serveStaticFile(urlPathname, request, response) {
   const cleanPath = decodeURIComponent(urlPathname.split('?')[0]);
   const relativePath = getStaticRelativePath(cleanPath);
+  if (!relativePath) {
+    await serveNotFound(request, response);
+    return;
+  }
   const filePath = path.resolve(siteDir, relativePath);
   const relativeToSite = path.relative(siteDir, filePath);
 
@@ -325,7 +433,26 @@ function getStaticRelativePath(cleanPath) {
     return 'support.html';
   }
 
-  return cleanPath.replace(/^\/+/, '');
+  const publicFiles = new Set([
+    '/index.html',
+    '/404.html',
+    '/robots.txt',
+    '/sitemap.xml',
+    '/styles-20260810.css',
+    '/site-20260724.js',
+    '/contracts/live-activity-registration-v1.schema.json',
+    '/contracts/disruption-alert-registration-v1.schema.json',
+    '/contracts/tubeboard-status-v1.schema.json'
+  ]);
+  if (publicFiles.has(cleanPath)) {
+    return cleanPath.slice(1);
+  }
+
+  if (/^\/assets\/[A-Za-z0-9._/-]+$/.test(cleanPath) && !cleanPath.includes('..')) {
+    return cleanPath.slice(1);
+  }
+
+  return null;
 }
 
 function sendJson(response, statusCode, payload, cacheControl = 'no-store', isHead = false) {

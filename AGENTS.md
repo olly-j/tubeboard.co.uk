@@ -10,9 +10,9 @@ service. It is part of the TubeBoard workspace coordinated from
   `TB-NNN` IDs live in `olly-j/My-Train-Times`.
 - Service implementation, tests, Fly configuration, and deployment history
   live here.
-- The versioned registration contract lives in
-  `contracts/live-activity-registration-v1.schema.json`; the app repository
-  retains an audited identical copy so either repository can be used offline.
+- The versioned Live Activity and disruption-alert registration contracts live
+  under `contracts/`; the app repository retains audited identical copies so
+  either repository can be used offline.
 - Every change requires an owner-approved app-repository `TB-NNN` Issue. Use
   `Relates to olly-j/My-Train-Times#NN`; do not open a competing service
   backlog or close the central Issue from a service PR.
@@ -39,10 +39,12 @@ repositories in the same task. Never silently choose one side.
 
 ## Production Safety
 
-- Never commit `.env`, APNs keys, TfL keys, runtime token records, Fly tokens,
-  logs containing tokens, or `/data/live-activities.json`.
-- Treat `pushTokenHex`, install IDs, activity IDs, and stored records as
-  sensitive operational data. Do not expose them in logs or health output.
+- Never commit `.env`, APNs keys, encryption keys, TfL keys, runtime token
+  records, Fly tokens, logs containing tokens, or files under `/data`.
+- Treat push tokens, StoreKit JWS values, install IDs, activity IDs, and stored
+  records as sensitive operational data. Never log a StoreKit JWS or raw token,
+  and do not expose them in health output. Validate Premium evidence with the
+  pinned official Apple library and discard the JWS after verification.
 - Preserve the persistent Fly volume and single-worker assumption.
 - A merge is source-ready, not deployed. Only an explicit owner instruction
   authorizes `scripts/deploy-production.sh --confirm-production`.

@@ -43,7 +43,7 @@
       <p class="section-context">Privacy</p>
       <h1>Privacy, in plain English.</h1>
       <p class="legal-lead">TubeBoard needs no account and contains no advertising or cross-app tracking. Most of the information that makes the app yours stays on your device.</p>
-      <p class="policy-date">Last updated 24 July 2026</p>
+      <p class="policy-date">Last updated 10 August 2026</p>
     </header>
 
     <div class="legal-layout">
@@ -55,6 +55,7 @@
           <li>No website cookies or analytics</li>
           <li>Nearby Station is matched on-device</li>
           <li>Live Activity registrations are short-lived</li>
+          <li>Disruption alerts are opt-in and use no location history</li>
         </ul>
       </aside>
 
@@ -82,12 +83,18 @@
 
         <section>
           <h2>Purchases</h2>
-          <p>Premium purchases are processed by Apple through the App Store. TubeBoard can read your current entitlement status so it can unlock Premium, but does not receive or store your payment-card details. Apple’s purchase terms and privacy policy apply.</p>
+          <p>Premium purchases are processed by Apple through the App Store. TubeBoard can read your current entitlement status so it can unlock Premium, but does not receive or store your payment-card details. If you enable Premium disruption alerts in a supported build, the app sends an Apple-signed transaction to the TubeBoard service. The service verifies it with Apple’s official library, immediately discards the signed transaction, and retains only the product identifier, expiry date if applicable, and verification time for the alert registration. Apple’s purchase terms and privacy policy apply.</p>
+        </section>
+
+        <section>
+          <h2>Premium disruption alerts</h2>
+          <p>If you opt in, TubeBoard sends a random install identifier, the Apple push token, your selected lines, severity and quiet-hours preferences, time zone, resumed-service setting, app/build details and push environment. The service uses these only to decide whether to send the alerts you requested. It does not receive your location, account, favourites, notification-open history or payment details.</p>
+          <p>The service hashes the random install identifier and encrypts the push token at rest. Turning alerts off deletes the registration immediately. Apple’s invalid-token response also deletes it immediately; expired Premium access is removed at expiry; otherwise inactive registrations are deleted after 90 days. Operational logs do not contain the token, random identifier or signed purchase transaction and are retained for no more than 14 days.</p>
         </section>
 
         <section>
           <h2>Website and service logs</h2>
-          <p>This website has no account, forms, advertising pixels, analytics scripts or cookies. Like most hosted services, the infrastructure may create routine security and operational logs such as request time, requested path, response status, user agent and IP address. The Live Activity API also uses a short-lived, in-memory rate limit to protect the service from abuse.</p>
+          <p>This website has no account, forms, advertising pixels, analytics scripts or cookies. Like most hosted services, the infrastructure may create routine security and operational logs such as request time, requested path, response status, user agent and IP address. Notification APIs also use short-lived, in-memory rate limits to protect the service from abuse. Service operational logs are kept for no more than 14 days.</p>
         </section>
 
         <section>

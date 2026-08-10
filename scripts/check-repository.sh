@@ -14,7 +14,11 @@ required=(
   .github/workflows/service-quality.yml
   contracts/live-activity-registration-v1.schema.json
   contracts/fixtures/live-activity-registration-v1.json
+  contracts/disruption-alert-registration-v1.schema.json
+  contracts/fixtures/disruption-alert-registration-v1.json
   contracts/tubeboard-status-v1.schema.json
+  certificates/AppleRootCA-G2.pem
+  certificates/AppleRootCA-G3.pem
   docs/live-activity-service.md
   scripts/deploy-production.sh
   server/version.js
@@ -30,7 +34,11 @@ done
 
 python3 -m json.tool contracts/live-activity-registration-v1.schema.json >/dev/null
 python3 -m json.tool contracts/fixtures/live-activity-registration-v1.json >/dev/null
+python3 -m json.tool contracts/disruption-alert-registration-v1.schema.json >/dev/null
+python3 -m json.tool contracts/fixtures/disruption-alert-registration-v1.json >/dev/null
 python3 -m json.tool contracts/tubeboard-status-v1.schema.json >/dev/null
+openssl x509 -in certificates/AppleRootCA-G2.pem -noout -subject -fingerprint -sha256 >/dev/null
+openssl x509 -in certificates/AppleRootCA-G3.pem -noout -subject -fingerprint -sha256 >/dev/null
 python3 -c 'import pathlib, tomllib; tomllib.loads(pathlib.Path("fly.toml").read_text())'
 
 if grep -Rqs -- 'flyctl deploy' .github/workflows; then
@@ -38,8 +46,13 @@ if grep -Rqs -- 'flyctl deploy' .github/workflows; then
   exit 1
 fi
 
-if git ls-files | grep -Eq '(^|/)(\.env|live-activities\.json)$|\.p8$|\.pem$|\.key$'; then
+if git ls-files | grep -Eq '(^|/)(\.env|live-activities\.json|disruption-alerts\.json)$|\.p8$|\.key$'; then
   echo "Sensitive service material is tracked by Git." >&2
+  exit 1
+fi
+
+if git grep -I -l -E -- '-----BEGIN (EC |RSA )?PRIVATE KEY-----' >/dev/null; then
+  echo "A private key block is tracked by Git." >&2
   exit 1
 fi
 

@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import test from 'node:test';
+import { validateRegistrationPayload } from '../server/disruption-alerts.js';
 import { validateTokenPayload } from '../server/live-activity.js';
 import { LIVE_ACTIVITY_CONTRACT_VERSION } from '../server/version.js';
 
 const schemaPath = new URL('../contracts/live-activity-registration-v1.schema.json', import.meta.url);
 const fixturePath = new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url);
+const disruptionAlertSchemaPath = new URL('../contracts/disruption-alert-registration-v1.schema.json', import.meta.url);
+const disruptionAlertFixturePath = new URL('../contracts/fixtures/disruption-alert-registration-v1.json', import.meta.url);
 const homePagePath = new URL('../index.html', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
 
@@ -24,6 +27,17 @@ test('versioned registration fixture matches the service validator', async () =>
     schema.required.filter((field) => fixture[field] === undefined),
     []
   );
+});
+
+test('versioned disruption-alert fixture matches the service validator', async () => {
+  const schema = JSON.parse(await fs.readFile(disruptionAlertSchemaPath, 'utf8'));
+  const fixture = JSON.parse(await fs.readFile(disruptionAlertFixturePath, 'utf8'));
+  const validation = validateRegistrationPayload(fixture);
+
+  assert.equal(schema['x-tubeboard-contract-version'], 1);
+  assert.equal(validation.ok, true, validation.errors.join('\n'));
+  assert.deepEqual(Object.keys(fixture).sort(), Object.keys(schema.properties).sort());
+  assert.deepEqual(schema.required.filter((field) => fixture[field] === undefined), []);
 });
 
 test('public home page links to the live App Store listing without launch placeholders', async () => {
