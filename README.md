@@ -17,3 +17,8 @@ revision evidence, and secrets.
 Product scope and owner decisions are coordinated by `TB-NNN` Issues in
 `olly-j/My-Train-Times` and the private TubeBoard Delivery Project. Read
 `AGENTS.md` before changing this repository.
+
+The public service also provides a server-rendered data-health page at
+`GET /status` and a privacy-safe versioned response at `GET /api/status/v1`.
+The production monitor is disabled by default outside Fly configuration so a
+local development server never creates recurring TfL traffic unexpectedly.

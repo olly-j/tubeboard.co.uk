@@ -24,6 +24,8 @@ The service listens on `http://localhost:4173` locally by default. On Fly.io, `f
 - `POST /api/live-activities/tokens`
 - `POST /api/live-activities/end`
 - `GET /healthz`
+- `GET /status`
+- `GET /api/status/v1`
 
 The token endpoint stores records in `data/live-activities.json` locally and
 `/data/live-activities.json` on Fly.io. Push tokens are never returned by the
@@ -35,6 +37,18 @@ and fixture are under `contracts/`.
 - service version;
 - Live Activity contract version;
 - deployed source revision.
+
+`GET /status` is a server-rendered, no-sign-in support page. Its versioned JSON
+source, `GET /api/status/v1`, follows
+`contracts/tubeboard-status-v1.schema.json` and separates official TfL disruption from
+TubeBoard representative arrival-data health. The monitor runs only when
+`TUBEBOARD_STATUS_MONITOR_ENABLED=true`; Fly uses a five-minute cycle, at most
+23 sequential TfL requests per cycle, three unhealthy windows to degrade and
+two healthy windows to recover. Results older than 15 minutes become unknown.
+No raw TfL payload, status-page query, station, device or user data is stored.
+Set `TUBEBOARD_STATUS_NOTICE` to a bounded public incident message or disable
+the monitor to return checker state to unknown without affecting Live
+Activities. Manual full sweeps remain outside production under TB-037.
 
 ## Required Production Configuration
 
