@@ -59,6 +59,14 @@ test('one bounded cycle reports operational data separately from TfL status', as
   assert.equal(snapshot.checker.scheduledFullSweep, false);
 });
 
+test('Circle probes use stations whose TfL arrivals identify Circle trains', () => {
+  const circle = STATUS_LINES.find((line) => line.id === 'circle');
+
+  assert.deepEqual(circle.stations, ['940GZZLUERC', '940GZZLUBST']);
+  assert.ok(!circle.stations.includes('940GZZLUTWH'));
+  assert.ok(!circle.stations.includes('940GZZLUALD'));
+});
+
 test('requires three unhealthy windows to degrade and two healthy windows to recover', async () => {
   let responseMode = 'empty';
   const monitor = makeMonitor({

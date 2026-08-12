@@ -9,7 +9,11 @@ const REQUIRED_HEALTHY_WINDOWS = 2;
 export const STATUS_LINES = [
   { id: 'bakerloo', name: 'Bakerloo', stations: ['940GZZLUWKA', '940GZZLULBN'] },
   { id: 'central', name: 'Central', stations: ['940GZZLULYN', '940GZZLUBNK'] },
-  { id: 'circle', name: 'Circle', stations: ['940GZZLUTWH', '940GZZLUALD'] },
+  // Circle trains terminate at Edgware Road and pass Baker Street. Tower Hill
+  // and Aldgate are shared termini/through stations where TfL's StopPoint
+  // Arrivals response can be valid but omit Circle trains entirely, creating
+  // a permanent false-degraded signal while live boards remain available.
+  { id: 'circle', name: 'Circle', stations: ['940GZZLUERC', '940GZZLUBST'] },
   { id: 'district', name: 'District', stations: ['940GZZLUTWH', '940GZZLUUPK'] },
   { id: 'hammersmith-city', name: 'Hammersmith & City', stations: ['940GZZLUHSC', '940GZZLUWHM'] },
   { id: 'jubilee', name: 'Jubilee', stations: ['940GZZLUSJW', '940GZZLUWLO'] },
