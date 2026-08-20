@@ -59,6 +59,20 @@ test('one bounded cycle reports operational data separately from TfL status', as
   assert.equal(snapshot.checker.scheduledFullSweep, false);
 });
 
+test('a disruption takes precedence when TfL returns multiple official statuses', async () => {
+  const monitor = makeMonitor({
+    fetchImpl: healthyFetch({ multipleStatusLineID: 'central' }),
+    sleep: async () => {}
+  });
+
+  await monitor.runCycle();
+
+  const central = monitor.getSnapshot().lines.find((line) => line.id === 'central');
+  assert.equal(central.official.state, 'disrupted');
+  assert.equal(central.official.summary, 'Severe Delays');
+  assert.equal(central.official.reason, 'Central line: severe delays.');
+});
+
 test('Circle probes use stations whose TfL arrivals identify Circle trains', () => {
   const circle = STATUS_LINES.find((line) => line.id === 'circle');
 
@@ -133,8 +147,11 @@ test('a current snapshot becomes unknown after fifteen minutes', async () => {
 
   current = new Date(midday.getTime() + 16 * 60 * 1000);
   const stale = monitor.getSnapshot();
+  const schema = JSON.parse(await fs.readFile(schemaPath, 'utf8'));
   assert.equal(stale.state, 'unknown');
   assert.equal(stale.checker.state, 'stale');
+  assert.deepEqual(Object.keys(stale).sort(), schema.required.sort());
+  assert.ok(stale.lines.every((line) => line.official.state === 'unknown'));
   assert.ok(stale.lines.every((line) => line.tubeBoard.state === 'unknown'));
 });
 
@@ -236,6 +253,23 @@ function responseFor(url, options = {}) {
   if (pathname === '/Line/Mode/tube/Status') {
     const statuses = STATUS_LINES.map((line) => {
       const disrupted = options.disruptEveryLine || line.id === options.disruptedLineID;
+      if (line.id === options.multipleStatusLineID) {
+        return {
+          id: line.id,
+          lineStatuses: [
+            {
+              statusSeverity: 10,
+              statusSeverityDescription: 'Good Service',
+              reason: ''
+            },
+            {
+              statusSeverity: 6,
+              statusSeverityDescription: 'Severe Delays',
+              reason: `${line.name} line: severe delays.`
+            }
+          ]
+        };
+      }
       return {
         id: line.id,
         lineStatuses: [{
