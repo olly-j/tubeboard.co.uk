@@ -685,22 +685,22 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       if (!Number.isFinite(pausedAt)) {
         const pushResult = await pushImpl(record, buildPausedApnsPayload(record, now), config);
         await store.markPaused(record.activityID, record.environment, now);
-        logger.info(`Live Activity ${record.activityID} paused after its selected duration: APNs ${pushResult?.status || 200}`);
+        logger.info(`Live Activity paused after its selected duration: APNs ${pushResult?.status || 200}`);
         continue;
       }
 
       if (now.getTime() - pausedAt >= config.pauseGraceMs) {
         const pushResult = await pushImpl(record, buildEndApnsPayload(record, now), config);
         await store.markDurationEnded(record.activityID, record.environment, now);
-        logger.info(`Live Activity ${record.activityID} ended after its pause grace period: APNs ${pushResult?.status || 200}`);
+        logger.info(`Live Activity ended after its pause grace period: APNs ${pushResult?.status || 200}`);
       }
     } catch (error) {
       if (error.permanent) {
         await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
-        logger.warn(`Live Activity ${record.activityID} deactivated after permanent APNs error: ${error.reason || error.message}`);
+        logger.warn(`Live Activity deactivated after permanent APNs error: ${error.reason || error.message}`);
       } else {
         await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
-        logger.warn(`Live Activity ${record.activityID} duration transition backed off: ${error.message}`);
+        logger.warn(`Live Activity duration transition backed off: ${error.message}`);
       }
     }
   }
@@ -733,31 +733,31 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
 
       if (shouldBackoffEmptyArrivals(record, contentState)) {
         await store.markBackoff(record.activityID, record.environment, 5 * 60 * 1000, 'emptyArrivals', now);
-        logger.info(`Live Activity ${record.activityID} skipped after repeated empty all-platform arrivals`);
+        logger.info('Live Activity skipped after repeated empty all-platform arrivals');
         continue;
       }
 
       const payload = buildApnsPayload(contentState, now);
       const pushResult = await pushImpl(record, payload, config);
       await store.markPushed(record.activityID, record.environment, { emptyArrivals, contentState }, now);
-      logger.info(`Live Activity ${record.activityID} pushed: APNs ${pushResult?.status || 200}, environment ${record.environment}, selectionMode ${getRecordSelectionMode(record)}, arrivals ${contentState.arrivals.length}`);
+      logger.info(`Live Activity pushed: APNs ${pushResult?.status || 200}, environment ${record.environment}, selectionMode ${getRecordSelectionMode(record)}, arrivals ${contentState.arrivals.length}`);
       if (typeof scheduleRolloverPush === 'function') {
         scheduleRolloverPush(record, contentState, now, config.workerIntervalMs);
       }
     } catch (error) {
       if (error.permanent) {
         await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
-        logger.warn(`Live Activity ${record.activityID} deactivated after permanent APNs error: ${error.reason || error.message}`);
+        logger.warn(`Live Activity deactivated after permanent APNs error: ${error.reason || error.message}`);
         continue;
       }
 
       if (error.retryable || error.backoffMs) {
         await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
-        logger.warn(`Live Activity ${record.activityID} backed off: ${error.message}`);
+        logger.warn(`Live Activity backed off: ${error.message}`);
         continue;
       }
 
-      logger.error(`Live Activity ${record.activityID} update failed: ${error.message}`);
+      logger.error(`Live Activity update failed: ${error.message}`);
     }
   }
 }

@@ -27,6 +27,12 @@ test('versioned registration fixture matches the service validator', async () =>
     schema.required.filter((field) => fixture[field] === undefined),
     []
   );
+  assert.equal(schema.required.includes('selectionMode'), false);
+  assert.equal(
+    validateTokenPayload({ ...fixture, selectionMode: undefined }).ok,
+    true
+  );
+  assert.deepEqual(schema.allOf[0].if.required, ['selectionMode']);
 });
 
 test('versioned disruption-alert fixture matches the service validator', async () => {

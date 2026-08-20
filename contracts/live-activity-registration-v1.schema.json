@@ -10,7 +10,6 @@
     "activityID",
     "stationID",
     "lineID",
-    "selectionMode",
     "pushTokenHex",
     "tokenUpdatedAt",
     "appBundleID",
@@ -39,7 +38,10 @@
   },
   "allOf": [
     {
-      "if": {"properties": {"selectionMode": {"const": "platform"}}},
+      "if": {
+        "required": ["selectionMode"],
+        "properties": {"selectionMode": {"const": "platform"}}
+      },
       "then": {"required": ["platformID"]}
     }
   ]

@@ -149,6 +149,28 @@ test('TfL rate limiting returns bounded backoff and unknown status', async () =>
   assert.equal(monitor.getSnapshot().state, 'unknown');
 });
 
+test('a station 429 aborts the remaining shared-key sweep immediately', async () => {
+  const requestUrls = [];
+  const sleeps = [];
+  const monitor = makeMonitor({
+    fetchImpl: async (url) => {
+      requestUrls.push(String(url));
+      if (String(url).includes('/Status')) {
+        return responseFor(url);
+      }
+      return fakeResponse([], { status: 429, headers: { 'retry-after': '600' } });
+    },
+    sleep: async (milliseconds) => sleeps.push(milliseconds)
+  });
+
+  const result = await monitor.runCycle();
+
+  assert.equal(result.backoffMs, 10 * 60 * 1000);
+  assert.equal(monitor.getSnapshot().state, 'unknown');
+  assert.equal(requestUrls.length, 2);
+  assert.equal(sleeps.length, 1);
+});
+
 test('status page is server-rendered, highlights a canonical line and escapes notices', () => {
   const monitor = makeMonitor({
     config: makeConfig({ notice: '<script>alert(1)</script>' })

@@ -108,6 +108,11 @@ export class TubeBoardStatusMonitor {
           const observation = await this.fetchStationObservation(stationID, line.id);
           observations.push(observation);
           requestedBackoffMs = Math.max(requestedBackoffMs, observation.backoffMs || 0);
+          if (observation.state === 'rate-limited') {
+            const error = new Error('TfL rate limited the status sweep');
+            error.backoffMs = observation.backoffMs || this.config.intervalMs;
+            throw error;
+          }
         }
 
         const official = officialByLine.get(line.id) || unknownOfficialStatus();
