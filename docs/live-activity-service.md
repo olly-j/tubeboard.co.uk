@@ -39,6 +39,12 @@ predate explicit `selectionMode`: an omitted mode is treated as the original
 all-platform station selection. Service logs never include the client-supplied
 Live Activity identifier.
 
+When an app-selected duration elapses, the worker completes the existing
+pause-then-end transition before generic maximum-lifetime expiry, including
+when the ten-minute pause grace crosses the eight-hour ceiling. Existing APNs
+backoff, permanent-error cleanup and inactive-record retention remain the
+bounded failure and cleanup policy.
+
 The Premium disruption-alert endpoint validates the StoreKit 2 transaction
 JWS with Apple's pinned App Store Server Library and bundled official Apple G2
 and G3 root certificates. The signed transaction is discarded after
@@ -76,6 +82,10 @@ TubeBoard representative arrival-data health. The monitor runs only when
 two healthy windows to recover. Results older than 15 minutes become unknown.
 Any TfL `429` response aborts the remaining station sweep immediately and
 honours the bounded retry delay so the shared app key is not amplified.
+When TfL returns more than one valid official status for a line, a disruption
+takes precedence over Good Service. Once a snapshot is stale, both official
+and TubeBoard per-line truth become unknown, and the response retains exactly
+the published status schema v1 shape.
 No raw TfL payload, status-page query, station, device or user data is stored.
 Set `TUBEBOARD_STATUS_NOTICE` to a bounded public incident message or disable
 the monitor to return checker state to unknown without affecting Live
