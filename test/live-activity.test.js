@@ -602,6 +602,76 @@ test('worker pauses and later ends an activity at its selected duration', async 
   assert.ok(logMessages.every((message) => !message.includes(validTokenPayload.activityID)));
 });
 
+test('worker retries a selected-duration end after the generic maximum lifetime passes', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const startedAt = new Date('2026-06-14T00:00:00Z');
+  const endsAt = new Date('2026-06-14T07:55:00Z');
+  const validation = validateTokenPayload({
+    ...validTokenPayload,
+    activityStartedAt: startedAt.toISOString(),
+    activityEndsAt: endsAt.toISOString()
+  });
+  await store.upsertToken(validation.value, startedAt);
+
+  const pushes = [];
+  const config = {
+    ...loadConfig({}),
+    maxActiveMs: 8 * 60 * 60 * 1000,
+    pauseGraceMs: 10 * 60 * 1000
+  };
+  let failNextEnd = true;
+  const pushImpl = async (_record, payload) => {
+    pushes.push(payload);
+    if (payload.aps.event === 'end' && failNextEnd) {
+      failNextEnd = false;
+      const error = new Error('Temporary APNs failure');
+      error.backoffMs = 2 * 60 * 1000;
+      throw error;
+    }
+    return { status: 200 };
+  };
+  const logger = { info() {}, warn() {}, error() {} };
+
+  await runLiveActivityWorkerCycle({ store, config, now: endsAt, pushImpl, logger });
+  const firstEndAttempt = new Date(endsAt.getTime() + config.pauseGraceMs);
+  await runLiveActivityWorkerCycle({
+    store,
+    config,
+    now: firstEndAttempt,
+    pushImpl,
+    logger
+  });
+
+  assert.deepEqual(pushes.map((payload) => payload.aps.event), ['update', 'end']);
+  assert.equal(store.state.records[0].active, true);
+  assert.equal(
+    store.state.records[0].backoffUntil,
+    new Date(firstEndAttempt.getTime() + 2 * 60 * 1000).toISOString()
+  );
+
+  await runLiveActivityWorkerCycle({
+    store,
+    config,
+    now: new Date(firstEndAttempt.getTime() + 60 * 1000),
+    pushImpl,
+    logger
+  });
+  assert.deepEqual(pushes.map((payload) => payload.aps.event), ['update', 'end']);
+
+  await runLiveActivityWorkerCycle({
+    store,
+    config,
+    now: new Date(firstEndAttempt.getTime() + 2 * 60 * 1000),
+    pushImpl,
+    logger
+  });
+
+  assert.deepEqual(pushes.map((payload) => payload.aps.event), ['update', 'end', 'end']);
+  assert.equal(store.state.records[0].active, false);
+  assert.equal(store.state.records[0].endReason, 'activityDurationEnded');
+});
+
 test('platform empty arrivals still produce heartbeat pushes', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
   const store = new LiveActivityStore(path.join(tempDir, 'records.json'));

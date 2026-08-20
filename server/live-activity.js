@@ -22,6 +22,11 @@ const TOKEN_REDACTION = '[redacted]';
 const LIVE_ACTIVITY_STALE_BUFFER_MS = 300_000;
 const ARRIVAL_EXPIRY_GRACE_MS = 10_000;
 
+function selectedDurationHasElapsed(record, nowMs) {
+  const activityEndsAt = Date.parse(record.activityEndsAt || '');
+  return Number.isFinite(activityEndsAt) && activityEndsAt <= nowMs;
+}
+
 export function loadConfig(env = process.env) {
   return {
     dataFile: env.LIVE_ACTIVITY_DATA_FILE || path.join('data', 'live-activities.json'),
@@ -181,7 +186,10 @@ export class LiveActivityStore {
       }
 
       const createdAt = Date.parse(record.createdAt || record.tokenUpdatedAt || record.updatedAt);
-      if (Number.isFinite(createdAt) && nowMs - createdAt > config.maxActiveMs) {
+      const durationTransitionPending = selectedDurationHasElapsed(record, nowMs);
+      if (Number.isFinite(createdAt)
+        && nowMs - createdAt > config.maxActiveMs
+        && !durationTransitionPending) {
         return false;
       }
 
@@ -279,7 +287,12 @@ export class LiveActivityStore {
 
       const createdAt = Date.parse(record.createdAt || record.tokenUpdatedAt || record.updatedAt);
       const lastSuccessAt = Date.parse(record.lastSuccessAt || record.updatedAt || record.tokenUpdatedAt);
-      const tooOld = !Number.isFinite(createdAt) || nowMs - createdAt > config.maxActiveMs;
+      // A selected duration owns its pause/end transition once it has elapsed.
+      // Generic maximum-lifetime expiry must not remove it before APNs receives
+      // that end event; the existing retention ceiling still bounds retries.
+      const durationTransitionPending = selectedDurationHasElapsed(record, nowMs);
+      const tooOld = !durationTransitionPending
+        && (!Number.isFinite(createdAt) || nowMs - createdAt > config.maxActiveMs);
       const tooStale = Number.isFinite(lastSuccessAt) && nowMs - lastSuccessAt > config.retentionMs;
 
       if (tooOld || tooStale) {
