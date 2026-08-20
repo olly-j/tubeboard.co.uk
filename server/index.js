@@ -438,7 +438,7 @@ function getStaticRelativePath(cleanPath) {
     '/404.html',
     '/robots.txt',
     '/sitemap.xml',
-    '/styles-20260810.css',
+    '/styles-20260820.css',
     '/site-20260724.js',
     '/contracts/live-activity-registration-v1.schema.json',
     '/contracts/disruption-alert-registration-v1.schema.json',

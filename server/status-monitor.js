@@ -322,7 +322,7 @@ export function renderStatusPage(snapshot, selectedLineID = null) {
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://tubeboard.co.uk/status">
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/tubeboard-icon-v3-32.png">
-  <link rel="stylesheet" href="/styles-20260810.css">
+  <link rel="stylesheet" href="/styles-20260820.css">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>

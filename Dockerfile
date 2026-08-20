@@ -16,8 +16,8 @@ COPY server ./server
 COPY contracts ./contracts
 COPY certificates ./certificates
 COPY assets/product ./assets/product
-COPY assets/tubeboard-icon-v3-32.png assets/tubeboard-icon-v3-180.png assets/tubeboard-icon-v3-512.png assets/tubeboard-og-20260724.png ./assets/
-COPY index.html privacy.html support.html 404.html styles-20260810.css site-20260724.js robots.txt sitemap.xml .nojekyll ./
+COPY assets/tubeboard-icon-v3-32.png assets/tubeboard-icon-v3-180.png assets/tubeboard-icon-v3-512.png assets/tubeboard-og-20260724.png assets/tubeboard-og-v1-1-20260820.png ./assets/
+COPY index.html privacy.html support.html 404.html styles-20260820.css site-20260724.js robots.txt sitemap.xml .nojekyll ./
 
 EXPOSE 8080
 
