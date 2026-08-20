@@ -559,7 +559,12 @@ test('worker pauses and later ends an activity at its selected duration', async 
     ...loadConfig({}),
     pauseGraceMs: 10 * 60 * 1000
   };
-  const logger = { info() {}, warn() {}, error() {} };
+  const logMessages = [];
+  const logger = {
+    info(message) { logMessages.push(String(message)); },
+    warn(message) { logMessages.push(String(message)); },
+    error(message) { logMessages.push(String(message)); }
+  };
 
   await runLiveActivityWorkerCycle({
     store,
@@ -593,6 +598,8 @@ test('worker pauses and later ends an activity at its selected duration', async 
   assert.equal(pushes[1].aps.event, 'end');
   assert.equal(store.state.records[0].active, false);
   assert.equal(store.state.records[0].endReason, 'activityDurationEnded');
+  assert.ok(logMessages.length >= 2);
+  assert.ok(logMessages.every((message) => !message.includes(validTokenPayload.activityID)));
 });
 
 test('platform empty arrivals still produce heartbeat pushes', async () => {
