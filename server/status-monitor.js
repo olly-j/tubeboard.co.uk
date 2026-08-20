@@ -154,7 +154,7 @@ export class TubeBoardStatusMonitor {
       return structuredClone(this.snapshot);
     }
     if (at.getTime() - checkedAtMs > this.config.staleAfterMs) {
-      return markSnapshotStale(this.snapshot, at, this.config);
+      return markSnapshotStale(this.snapshot, this.config);
     }
     return structuredClone(this.snapshot);
   }
@@ -173,7 +173,11 @@ export class TubeBoardStatusMonitor {
         continue;
       }
 
-      const lineStatus = rawLine.lineStatuses.find((entry) => entry && Number.isInteger(entry.statusSeverity));
+      const validStatuses = rawLine.lineStatuses.filter((entry) => {
+        return entry && Number.isInteger(entry.statusSeverity);
+      });
+      const lineStatus = validStatuses.find((entry) => entry.statusSeverity !== 10)
+        || validStatuses[0];
       if (!lineStatus) {
         continue;
       }
@@ -408,7 +412,7 @@ function createUnknownSnapshot(now, config, reason = null) {
   };
 }
 
-function markSnapshotStale(snapshot, now, config) {
+function markSnapshotStale(snapshot, config) {
   const stale = structuredClone(snapshot);
   stale.state = 'unknown';
   stale.summary = 'The latest TubeBoard data check is too old to describe current conditions.';
@@ -416,13 +420,13 @@ function markSnapshotStale(snapshot, now, config) {
   stale.checker.state = config.enabled ? 'stale' : 'disabled';
   stale.lines = stale.lines.map((line) => ({
     ...line,
+    official: unknownOfficialStatus(),
     tubeBoard: {
       ...line.tubeBoard,
       state: 'unknown',
       reason: 'The latest TubeBoard data check is stale.'
     }
   }));
-  stale.generatedAt = now.toISOString();
   return stale;
 }
 
