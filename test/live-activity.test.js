@@ -602,6 +602,44 @@ test('worker pauses and later ends an activity at its selected duration', async 
   assert.ok(logMessages.every((message) => !message.includes(validTokenPayload.activityID)));
 });
 
+test('worker finishes a selected duration after the generic maximum lifetime passes', async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const startedAt = new Date('2026-06-14T00:00:00Z');
+  const endsAt = new Date('2026-06-14T07:55:00Z');
+  const validation = validateTokenPayload({
+    ...validTokenPayload,
+    activityStartedAt: startedAt.toISOString(),
+    activityEndsAt: endsAt.toISOString()
+  });
+  await store.upsertToken(validation.value, startedAt);
+
+  const pushes = [];
+  const config = {
+    ...loadConfig({}),
+    maxActiveMs: 8 * 60 * 60 * 1000,
+    pauseGraceMs: 10 * 60 * 1000
+  };
+  const pushImpl = async (_record, payload) => {
+    pushes.push(payload);
+    return { status: 200 };
+  };
+  const logger = { info() {}, warn() {}, error() {} };
+
+  await runLiveActivityWorkerCycle({ store, config, now: endsAt, pushImpl, logger });
+  await runLiveActivityWorkerCycle({
+    store,
+    config,
+    now: new Date(endsAt.getTime() + config.pauseGraceMs),
+    pushImpl,
+    logger
+  });
+
+  assert.deepEqual(pushes.map((payload) => payload.aps.event), ['update', 'end']);
+  assert.equal(store.state.records[0].active, false);
+  assert.equal(store.state.records[0].endReason, 'activityDurationEnded');
+});
+
 test('platform empty arrivals still produce heartbeat pushes', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
   const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
