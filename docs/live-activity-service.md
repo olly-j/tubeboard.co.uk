@@ -34,6 +34,11 @@ The token endpoint stores records in `data/live-activities.json` locally and
 API, and the data directory is ignored by git. The versioned request contract
 and fixture are under `contracts/`.
 
+The v1 registration contract remains backward compatible with clients that
+predate explicit `selectionMode`: an omitted mode is treated as the original
+all-platform station selection. Service logs never include the client-supplied
+Live Activity identifier.
+
 The Premium disruption-alert endpoint validates the StoreKit 2 transaction
 JWS with Apple's pinned App Store Server Library and bundled official Apple G2
 and G3 root certificates. The signed transaction is discarded after
@@ -69,6 +74,8 @@ TubeBoard representative arrival-data health. The monitor runs only when
 `TUBEBOARD_STATUS_MONITOR_ENABLED=true`; Fly uses a five-minute cycle, at most
 23 sequential TfL requests per cycle, three unhealthy windows to degrade and
 two healthy windows to recover. Results older than 15 minutes become unknown.
+Any TfL `429` response aborts the remaining station sweep immediately and
+honours the bounded retry delay so the shared app key is not amplified.
 No raw TfL payload, status-page query, station, device or user data is stored.
 Set `TUBEBOARD_STATUS_NOTICE` to a bounded public incident message or disable
 the monitor to return checker state to unknown without affecting Live

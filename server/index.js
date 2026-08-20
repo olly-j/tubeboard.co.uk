@@ -216,7 +216,7 @@ if (config.workerEnabled) {
         }
 
         rolloverTimers.set(timerKey, timer);
-        console.log(`Live Activity ${record.activityID} rollover refresh scheduled in ${Math.round(delayMs / 1000)}s`);
+        console.log(`Live Activity rollover refresh scheduled in ${Math.round(delayMs / 1000)}s`);
       }
     }).catch((error) => {
       console.error(`Live Activity worker cycle failed: ${error.message}`);
