@@ -13,13 +13,12 @@ const homePagePath = new URL('../index.html', import.meta.url);
 const supportPagePath = new URL('../support.html', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
 const v11ProductAssets = [
-  'home-status-v1-1-20260820',
-  'live-board-v1-1-20260820',
-  'detailed-board-v1-1-20260820',
-  'elizabeth-line-v1-1-20260820',
-  'widgets-v1-1-20260820',
-  'nearby-interchange-v1-1-20260820',
-  'premium-alerts-v1-1-20260820'
+  'home-status-v1-1-20260825',
+  'live-board-v1-1-20260825',
+  'detailed-board-v1-1-20260825',
+  'widgets-v1-1-20260825',
+  'nearby-interchange-v1-1-20260825',
+  'premium-alerts-v1-1-20260825'
 ];
 
 test('versioned registration fixture matches the service validator', async () => {
@@ -91,7 +90,8 @@ test('v1.1 website source describes the selected release surfaces truthfully', a
   assert.doesNotMatch(html, /refresh (?:their|its) Tube data throughout the day/i);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
   assert.doesNotMatch(html, /assets\/product\/(?:live-board|station-picker|detailed-board|time-to-leave)-20260723/i);
-  assert.match(html, /assets\/tubeboard-og-v1-1-20260820\.png/);
+  assert.match(html, /assets\/tubeboard-og-v1-1-20260825\.png/);
+  assert.doesNotMatch(html, /assets\/product\/elizabeth-line-v1-1/i);
   assert.match(mobileApplication.operatingSystem, /watchOS 11\.5 or later/);
   assert.match(mobileApplication.operatingSystem, /visionOS 26\.0 or later/);
   assert.ok(mobileApplication.featureList.includes('Elizabeth line stations, arrivals and status'));
@@ -102,7 +102,7 @@ test('v1.1 website source describes the selected release surfaces truthfully', a
     await fs.access(new URL(`../assets/product/${asset}.png`, import.meta.url));
     await fs.access(new URL(`../assets/product/${asset}.webp`, import.meta.url));
   }
-  await fs.access(new URL('../assets/tubeboard-og-v1-1-20260820.png', import.meta.url));
+  await fs.access(new URL('../assets/tubeboard-og-v1-1-20260825.png', import.meta.url));
 });
 
 test('v1.1 support explains platform widget configuration and offline state', async () => {
@@ -113,6 +113,6 @@ test('v1.1 support explains platform widget configuration and offline state', as
   assert.match(html, /shown separately as no current departures/i);
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
-  assert.match(html, /assets\/tubeboard-og-v1-1-20260820\.png/);
+  assert.match(html, /assets\/tubeboard-og-v1-1-20260825\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
 });
