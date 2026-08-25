@@ -1,4 +1,4 @@
-/* TubeBoard website — 10 August 2026 status release */
+/* TubeBoard website — 20 August 2026 v1.1 launch staging */
 :root {
   --page: #f6f6f3;
   --surface: #ffffff;
@@ -499,6 +499,85 @@ h3 {
 
 .product-frame-commute img {
   border-radius: 34px;
+}
+
+.release-highlights {
+  padding: clamp(90px, 11vw, 150px) var(--gutter);
+  background: var(--board);
+  color: #d8dad6;
+}
+
+.release-highlights-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.55fr);
+  gap: clamp(42px, 8vw, 130px);
+  align-items: end;
+  max-width: var(--max);
+  margin: 0 auto clamp(60px, 8vw, 96px);
+}
+
+.release-highlights-heading .section-context {
+  grid-column: 1 / -1;
+  margin-bottom: -28px;
+  color: var(--orange);
+}
+
+.release-highlights h2,
+.release-highlights h3 {
+  color: white;
+}
+
+.release-highlights-heading h2,
+.release-highlights-heading > p:last-child {
+  margin-bottom: 0;
+}
+
+.release-highlights-heading > p:last-child,
+.highlight-card p {
+  color: #b3b7b2;
+}
+
+.highlight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: var(--max);
+  margin: 0 auto;
+  border-top: 1px solid #737771;
+}
+
+.highlight-card {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 34px;
+  min-width: 0;
+  padding: 26px 28px 0;
+  border-left: 1px solid #3c3f3c;
+}
+
+.highlight-card:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.highlight-card:last-child {
+  padding-right: 0;
+}
+
+.highlight-card p {
+  margin-bottom: 0;
+}
+
+.product-frame-highlight {
+  align-self: end;
+  width: min(280px, 100%);
+  margin: 0 auto;
+  padding: 6px;
+  border-radius: 38px 38px 0 0;
+  border-bottom: 0;
+}
+
+.product-frame-highlight img {
+  border-radius: 32px 32px 0 0;
 }
 
 .surfaces {
@@ -1291,6 +1370,36 @@ details p {
     gap: 42px;
   }
 
+  .release-highlights-heading {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .release-highlights-heading .section-context {
+    grid-column: 1;
+    margin-bottom: 0;
+  }
+
+  .highlight-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .highlight-card,
+  .highlight-card:first-child,
+  .highlight-card:last-child {
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 0.62fr);
+    grid-template-rows: 1fr;
+    align-items: center;
+    gap: 32px;
+    padding: 30px 0 0;
+    border-bottom: 1px solid #3c3f3c;
+    border-left: 0;
+  }
+
+  .product-frame-highlight {
+    width: min(235px, 100%);
+  }
+
   .surfaces-heading {
     grid-template-columns: 1fr;
     gap: 10px;
@@ -1429,6 +1538,19 @@ details p {
 
   .product-frame-commute {
     width: min(270px, 100%);
+  }
+
+  .highlight-card,
+  .highlight-card:first-child,
+  .highlight-card:last-child {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+
+  .product-frame-highlight {
+    justify-self: start;
+    width: min(250px, 100%);
+    margin-left: 0;
   }
 
   .surface-list {
