@@ -1,0 +1,17 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": [
+          "5B8YD7QXWZ.OllyJ.My-Train-Times"
+        ],
+        "components": [
+          {
+            "/": "/train/v1",
+            "comment": "Open versioned TubeBoard Follow a Train links in the main app."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -30,3 +30,10 @@ Overground lines supported by TubeBoard v1.2. Existing disruption-alert clients 
 contract v1's Underground-only scope; contract v2 adds the six Overground IDs.
 The production monitor is disabled by default outside Fly configuration so a
 local development server never creates recurring TfL traffic unexpectedly.
+
+TB-077 sharing uses `GET /train/v1#<public-selection>` as the uninstalled-app
+fallback and `GET /.well-known/apple-app-site-association` for the exact app
+association. The bounded selection stays in the URL fragment, so it is never
+sent in the HTTP request. The page validates it locally, displays only its line
+and expiry state, and offers the live App Store listing; it stores no journey,
+device, account, purchase or recipient data.

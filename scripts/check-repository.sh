@@ -26,6 +26,10 @@ required=(
   scripts/deploy-production.sh
   server/version.js
   server/status-monitor.js
+  .well-known/apple-app-site-association
+  train-v1.html
+  train-20260828.css
+  train-20260828.js
 )
 
 for path in "${required[@]}"; do
@@ -43,6 +47,7 @@ python3 -m json.tool contracts/disruption-alert-registration-v2.schema.json >/de
 python3 -m json.tool contracts/fixtures/disruption-alert-registration-v2.json >/dev/null
 python3 -m json.tool contracts/tubeboard-status-v1.schema.json >/dev/null
 python3 -m json.tool contracts/tubeboard-status-v2.schema.json >/dev/null
+python3 -m json.tool .well-known/apple-app-site-association >/dev/null
 openssl x509 -in certificates/AppleRootCA-G2.pem -noout -subject -fingerprint -sha256 >/dev/null
 openssl x509 -in certificates/AppleRootCA-G3.pem -noout -subject -fingerprint -sha256 >/dev/null
 python3 -c 'import pathlib, tomllib; tomllib.loads(pathlib.Path("fly.toml").read_text())'

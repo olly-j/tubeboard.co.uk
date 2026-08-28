@@ -29,6 +29,15 @@ The service listens on `http://localhost:4173` locally by default. On Fly.io, `f
 - `GET /status`
 - `GET /api/status/v1`
 - `GET /api/status/v2`
+- `GET /train/v1#<public-selection>`
+- `GET /.well-known/apple-app-site-association`
+
+The TB-077 train-sharing fallback is a static, no-sign-in page. Its versioned
+public selection is carried only in the URL fragment and is parsed locally by
+the page; the server receives only `/train/v1`. The page makes no API request,
+stores no journey history, exposes no entitlement or identity, and fails
+closed for malformed, unsupported or expired input. The AASA file associates
+only `/train/v1` with `5B8YD7QXWZ.OllyJ.My-Train-Times`.
 
 The token endpoint stores records in `data/live-activities.json` locally and
 `/data/live-activities.json` on Fly.io. Push tokens are never returned by the

@@ -171,6 +171,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/train/v1/') {
+      sendRedirect(response, '/train/v1', 308);
+      return;
+    }
+
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       response.setHeader('allow', 'GET, HEAD');
       sendJson(response, 405, { ok: false, error: 'Method not allowed' });
@@ -445,6 +450,14 @@ function getStaticRelativePath(cleanPath) {
     return 'support.html';
   }
 
+  if (cleanPath === '/train/v1') {
+    return 'train-v1.html';
+  }
+
+  if (cleanPath === '/.well-known/apple-app-site-association') {
+    return '.well-known/apple-app-site-association';
+  }
+
   const publicFiles = new Set([
     '/index.html',
     '/404.html',
@@ -452,6 +465,8 @@ function getStaticRelativePath(cleanPath) {
     '/sitemap.xml',
     '/styles-20260820.css',
     '/site-20260724.js',
+    '/train-20260828.css',
+    '/train-20260828.js',
     '/contracts/live-activity-registration-v1.schema.json',
     '/contracts/disruption-alert-registration-v1.schema.json',
     '/contracts/disruption-alert-registration-v2.schema.json',
@@ -549,6 +564,10 @@ function getClientIp(request) {
 }
 
 function getContentType(filePath) {
+  if (path.basename(filePath) === 'apple-app-site-association') {
+    return 'application/json; charset=utf-8';
+  }
+
   const extension = path.extname(filePath).toLowerCase();
   const types = {
     '.html': 'text/html; charset=utf-8',
@@ -577,7 +596,7 @@ function getCacheControl(filePath) {
     return 'public, max-age=0, must-revalidate';
   }
 
-  if (/(robots\.txt|sitemap\.xml)$/i.test(filePath)) {
+  if (/(robots\.txt|sitemap\.xml|apple-app-site-association)$/i.test(filePath)) {
     return 'public, max-age=300';
   }
 
