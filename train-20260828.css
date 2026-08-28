@@ -1,0 +1,141 @@
+@font-face {
+  font-family: "London Underground";
+  src: url("/assets/fonts/london-underground-regular.ttf") format("truetype");
+  font-display: swap;
+}
+
+:root {
+  color-scheme: light;
+  --ink: #141414;
+  --muted: #55524d;
+  --paper: #f6f6f3;
+  --panel: #ffffff;
+  --orange: #a94400;
+  --focus: #0067b9;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.55;
+}
+a { color: inherit; }
+a:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -5rem;
+  padding: .7rem 1rem;
+  background: var(--ink);
+  color: #fff;
+  z-index: 5;
+}
+.skip-link:focus { top: 1rem; }
+.train-header,
+.train-footer,
+.train-main {
+  width: min(100% - 2rem, 72rem);
+  margin-inline: auto;
+}
+.train-header { padding-block: 1.25rem; }
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: .65rem;
+  font-weight: 750;
+  text-decoration: none;
+}
+.train-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(17rem, .85fr);
+  gap: clamp(1rem, 4vw, 3rem);
+  align-items: stretch;
+  padding-block: clamp(2rem, 7vw, 6rem);
+}
+.train-card,
+.train-explainer {
+  border: 1px solid #d9d6cf;
+  border-radius: 1.5rem;
+  background: var(--panel);
+  padding: clamp(1.5rem, 5vw, 3.5rem);
+}
+.eyebrow {
+  margin: 0 0 .8rem;
+  color: var(--orange);
+  font-size: .82rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+h1,
+h2 {
+  margin: 0;
+  font-family: "London Underground", -apple-system, sans-serif;
+  font-weight: 650;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+h1 { font-size: clamp(2.35rem, 7vw, 5.4rem); }
+h2 { font-size: clamp(1.8rem, 4vw, 3.1rem); }
+.train-symbol {
+  width: 4.4rem;
+  height: 4.4rem;
+  margin-bottom: 1.4rem;
+  border: .55rem solid #df251b;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+.train-symbol span {
+  width: 5.6rem;
+  height: 1.1rem;
+  background: #0019a8;
+}
+.train-status {
+  margin: 1.5rem 0 .5rem;
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+  font-weight: 750;
+}
+.train-detail,
+.train-explainer p,
+.train-footer { color: var(--muted); }
+.train-detail { max-width: 42rem; }
+.train-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  margin-top: 1.8rem;
+}
+.button-primary {
+  min-height: 3rem;
+  display: inline-flex;
+  align-items: center;
+  padding: .7rem 1.1rem;
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fff;
+  font-weight: 750;
+  text-decoration: none;
+}
+.text-link { font-weight: 700; text-underline-offset: .2em; }
+.train-note { padding: 1rem; background: #fff4d6; border-radius: .8rem; }
+.train-explainer p:last-child { margin-bottom: 0; }
+code { overflow-wrap: anywhere; }
+.train-footer {
+  border-top: 1px solid #d9d6cf;
+  padding-block: 1.5rem 2.5rem;
+  font-size: .92rem;
+}
+.train-footer nav { display: flex; flex-wrap: wrap; gap: 1.2rem; }
+
+@media (max-width: 48rem) {
+  .train-main { grid-template-columns: 1fr; padding-block: 1rem 3rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; }
+}

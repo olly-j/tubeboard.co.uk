@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shared train | TubeBoard</title>
+  <meta name="description" content="Open a short-lived shared train in TubeBoard, or download TubeBoard from the App Store.">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#f6f6f3">
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/tubeboard-icon-v3-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/assets/tubeboard-icon-v3-180.png">
+  <link rel="stylesheet" href="/train-20260828.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="train-header">
+    <a class="brand" href="/" aria-label="TubeBoard home">
+      <img src="/assets/tubeboard-icon-v3-32.png" alt="" width="32" height="32">
+      <span>TubeBoard</span>
+    </a>
+  </header>
+
+  <main id="main" class="train-main">
+    <section class="train-card" aria-labelledby="train-title">
+      <p class="eyebrow">Follow a Train</p>
+      <div class="train-symbol" aria-hidden="true"><span></span></div>
+      <h1 id="train-title">Open this shared train in TubeBoard.</h1>
+      <p id="train-status" class="train-status" role="status" aria-live="polite">
+        Checking this short-lived link on your device…
+      </p>
+      <p id="train-detail" class="train-detail">
+        Shared train links contain public TfL context only. TubeBoard does not create an account or store this journey.
+      </p>
+      <div class="train-actions">
+        <a class="button-primary" href="https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046">Get TubeBoard on the App Store</a>
+        <a class="text-link" href="/">Visit TubeBoard</a>
+      </div>
+      <noscript>
+        <p class="train-note">JavaScript is off, so this page cannot check whether the shared train context is still valid. TubeBoard validates the link again before showing any live calls.</p>
+      </noscript>
+    </section>
+
+    <section class="train-explainer" aria-labelledby="truth-title">
+      <p class="eyebrow">Live-data truth</p>
+      <h2 id="truth-title">A link is an invitation to re-check, not a tracking record.</h2>
+      <p>Train identities and predictions can change during disruption. The app revalidates the selected working with fresh TfL evidence and stops rather than guessing when the evidence no longer agrees.</p>
+      <p>The selection stays after the <code>#</code> in the address. Browsers do not send that fragment to the TubeBoard server.</p>
+    </section>
+  </main>
+
+  <footer class="train-footer">
+    <nav aria-label="Footer">
+      <a href="/privacy">Privacy</a>
+      <a href="/support">Support</a>
+      <a href="/status">Status</a>
+    </nav>
+    <p>Powered by TfL Open Data. TubeBoard is independent and is not affiliated with TfL.</p>
+  </footer>
+
+  <script type="module" src="/train-20260828.js"></script>
+</body>
+</html>
