@@ -352,6 +352,9 @@ export class TokenRateLimiter {
     this.schedule = schedule;
     this.cancel = cancel;
     this.buckets = new Map();
+    this.expiries = [];
+    this.sweepTimer = null;
+    this.sweepAt = null;
   }
 
   check(key, now = this.now()) {
@@ -360,22 +363,108 @@ export class TokenRateLimiter {
       .update(String(key))
       .digest('hex');
     const existing = this.buckets.get(bucketKey);
-    if (existing?.timer) {
-      this.cancel(existing.timer);
-    }
-
     const timestamps = (existing?.timestamps || [])
       .filter((timestamp) => now - timestamp < this.windowMs);
     timestamps.push(now);
-    const bucket = { timestamps, timer: null };
-    bucket.timer = this.schedule(() => {
-      if (this.buckets.get(bucketKey) === bucket) {
-        this.buckets.delete(bucketKey);
-      }
-    }, this.windowMs);
-    bucket.timer?.unref?.();
+    const expiresAt = now + this.windowMs;
+    const bucket = { timestamps, expiresAt };
     this.buckets.set(bucketKey, bucket);
+    this.pushExpiry({ bucketKey, expiresAt });
+    this.scheduleExpirySweep(now);
     return timestamps.length <= this.limit;
+  }
+
+  scheduleExpirySweep(now) {
+    this.discardStaleExpiries();
+    const nextExpiry = this.expiries[0];
+    if (!nextExpiry) {
+      if (this.sweepTimer) {
+        this.cancel(this.sweepTimer);
+      }
+      this.sweepTimer = null;
+      this.sweepAt = null;
+      return;
+    }
+
+    if (this.sweepTimer && this.sweepAt === nextExpiry.expiresAt) {
+      return;
+    }
+    if (this.sweepTimer) {
+      this.cancel(this.sweepTimer);
+    }
+
+    this.sweepAt = nextExpiry.expiresAt;
+    this.sweepTimer = this.schedule(() => {
+      this.sweepTimer = null;
+      this.sweepAt = null;
+      const sweepNow = this.now();
+      this.sweepExpired(sweepNow);
+      this.scheduleExpirySweep(sweepNow);
+    }, Math.max(0, nextExpiry.expiresAt - now));
+    this.sweepTimer?.unref?.();
+  }
+
+  sweepExpired(now) {
+    while (this.expiries[0]?.expiresAt <= now) {
+      const expiry = this.popExpiry();
+      const bucket = this.buckets.get(expiry.bucketKey);
+      if (bucket?.expiresAt === expiry.expiresAt) {
+        this.buckets.delete(expiry.bucketKey);
+      }
+    }
+  }
+
+  discardStaleExpiries() {
+    while (this.expiries.length > 0) {
+      const expiry = this.expiries[0];
+      const bucket = this.buckets.get(expiry.bucketKey);
+      if (bucket?.expiresAt === expiry.expiresAt) {
+        return;
+      }
+      this.popExpiry();
+    }
+  }
+
+  pushExpiry(expiry) {
+    this.expiries.push(expiry);
+    let index = this.expiries.length - 1;
+    while (index > 0) {
+      const parentIndex = Math.floor((index - 1) / 2);
+      if (this.expiries[parentIndex].expiresAt <= expiry.expiresAt) {
+        break;
+      }
+      this.expiries[index] = this.expiries[parentIndex];
+      index = parentIndex;
+    }
+    this.expiries[index] = expiry;
+  }
+
+  popExpiry() {
+    const first = this.expiries[0];
+    const last = this.expiries.pop();
+    if (this.expiries.length === 0) {
+      return first;
+    }
+
+    let index = 0;
+    while (true) {
+      const leftIndex = index * 2 + 1;
+      const rightIndex = leftIndex + 1;
+      if (leftIndex >= this.expiries.length) {
+        break;
+      }
+      const childIndex = rightIndex < this.expiries.length
+        && this.expiries[rightIndex].expiresAt < this.expiries[leftIndex].expiresAt
+        ? rightIndex
+        : leftIndex;
+      if (this.expiries[childIndex].expiresAt >= last.expiresAt) {
+        break;
+      }
+      this.expiries[index] = this.expiries[childIndex];
+      index = childIndex;
+    }
+    this.expiries[index] = last;
+    return first;
   }
 }
 

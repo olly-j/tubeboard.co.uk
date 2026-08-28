@@ -36,8 +36,8 @@ and fixture are under `contracts/`.
 
 Registration abuse controls combine the random install identifier and request
 IP only inside a keyed, per-process HMAC. The in-memory buckets are evicted
-after the 60-second rate-limit window, and neither the raw association nor the
-HMAC key is persisted or logged.
+after the 60-second rate-limit window by one shared, unreferenced expiry timer,
+and neither the raw association nor the HMAC key is persisted or logged.
 
 The v1 registration contract remains backward compatible with clients that
 predate explicit `selectionMode`: an omitted mode is treated as the original
