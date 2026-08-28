@@ -16,6 +16,8 @@ required=(
   contracts/fixtures/live-activity-registration-v1.json
   contracts/disruption-alert-registration-v1.schema.json
   contracts/fixtures/disruption-alert-registration-v1.json
+  contracts/disruption-alert-registration-v2.schema.json
+  contracts/fixtures/disruption-alert-registration-v2.json
   contracts/tubeboard-status-v1.schema.json
   certificates/AppleRootCA-G2.pem
   certificates/AppleRootCA-G3.pem
@@ -36,6 +38,8 @@ python3 -m json.tool contracts/live-activity-registration-v1.schema.json >/dev/n
 python3 -m json.tool contracts/fixtures/live-activity-registration-v1.json >/dev/null
 python3 -m json.tool contracts/disruption-alert-registration-v1.schema.json >/dev/null
 python3 -m json.tool contracts/fixtures/disruption-alert-registration-v1.json >/dev/null
+python3 -m json.tool contracts/disruption-alert-registration-v2.schema.json >/dev/null
+python3 -m json.tool contracts/fixtures/disruption-alert-registration-v2.json >/dev/null
 python3 -m json.tool contracts/tubeboard-status-v1.schema.json >/dev/null
 openssl x509 -in certificates/AppleRootCA-G2.pem -noout -subject -fingerprint -sha256 >/dev/null
 openssl x509 -in certificates/AppleRootCA-G3.pem -noout -subject -fingerprint -sha256 >/dev/null

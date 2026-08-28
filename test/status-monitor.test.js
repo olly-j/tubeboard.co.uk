@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   STATUS_SCHEMA_VERSION,
   STATUS_LINES,
+  STATUS_REQUEST_BUDGET_PER_CYCLE,
   TubeBoardStatusMonitor,
   isExpectedServiceWindow,
   loadStatusConfig,
@@ -21,7 +22,7 @@ test('starts unknown without making a live request', () => {
   assert.equal(snapshot.state, 'unknown');
   assert.equal(snapshot.checker.state, 'starting');
   assert.equal(snapshot.checkedAt, null);
-  assert.equal(snapshot.lines.length, 11);
+  assert.equal(snapshot.lines.length, 17);
 });
 
 test('versioned public status schema matches generated response fields', async () => {
@@ -32,7 +33,7 @@ test('versioned public status schema matches generated response fields', async (
   assert.equal(snapshot.schemaVersion, STATUS_SCHEMA_VERSION);
   assert.deepEqual(Object.keys(snapshot).sort(), schema.required.sort());
   assert.deepEqual(Object.keys(snapshot.checker).sort(), schema.properties.checker.required.sort());
-  assert.equal(snapshot.lines.length, 11);
+  assert.equal(snapshot.lines.length, 17);
   assert.deepEqual(Object.keys(snapshot.lines[0]).sort(), schema.$defs.line.required.sort());
   assert.deepEqual(Object.keys(snapshot.lines[0].official).sort(), schema.$defs.official.required.sort());
   assert.deepEqual(Object.keys(snapshot.lines[0].tubeBoard).sort(), schema.$defs.tubeBoard.required.sort());
@@ -49,13 +50,14 @@ test('one bounded cycle reports operational data separately from TfL status', as
   await monitor.runCycle();
   const snapshot = monitor.getSnapshot();
 
-  assert.equal(requestUrls.length, 23);
-  assert.equal(sleeps.length, 22);
+  assert.equal(requestUrls.length, 35);
+  assert.equal(sleeps.length, 34);
   assert.ok(sleeps.every((milliseconds) => milliseconds === 2_000));
   assert.equal(snapshot.state, 'operational');
   assert.equal(snapshot.lines.find((line) => line.id === 'district').official.state, 'disrupted');
   assert.equal(snapshot.lines.find((line) => line.id === 'district').tubeBoard.state, 'operational');
-  assert.equal(snapshot.checker.requestBudgetPerCycle, 23);
+  assert.equal(snapshot.checker.requestBudgetPerCycle, 35);
+  assert.equal(STATUS_REQUEST_BUDGET_PER_CYCLE, 35);
   assert.equal(snapshot.checker.scheduledFullSweep, false);
 });
 
@@ -79,6 +81,21 @@ test('Circle probes use stations whose TfL arrivals identify Circle trains', () 
   assert.deepEqual(circle.stations, ['940GZZLUERC', '940GZZLUBST']);
   assert.ok(!circle.stations.includes('940GZZLUTWH'));
   assert.ok(!circle.stations.includes('940GZZLUALD'));
+});
+
+test('public monitoring includes two representative stations for every named Overground line', () => {
+  const overground = STATUS_LINES.slice(-6);
+
+  assert.deepEqual(overground.map((line) => line.id), [
+    'liberty',
+    'lioness',
+    'mildmay',
+    'suffragette',
+    'weaver',
+    'windrush'
+  ]);
+  assert.ok(overground.every((line) => line.stations.length === 2));
+  assert.deepEqual(overground.find((line) => line.id === 'windrush').stations, ['910GHGHI', '910GWCROYDN']);
 });
 
 test('requires three unhealthy windows to degrade and two healthy windows to recover', async () => {
@@ -199,6 +216,8 @@ test('status page is server-rendered, highlights a canonical line and escapes no
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
   assert.match(html, /One empty response never declares a line outage/);
+  assert.match(html, /id="line-windrush"/);
+  assert.match(html, /aria-label="Supported line status"/);
 });
 
 test('production status configuration is opt-in and rate bounds cannot be weakened', () => {
@@ -250,7 +269,7 @@ function healthyFetch(options = {}) {
 
 function responseFor(url, options = {}) {
   const pathname = new URL(url).pathname;
-  if (pathname === '/Line/Mode/tube/Status') {
+  if (pathname === '/Line/Mode/tube,overground/Status') {
     const statuses = STATUS_LINES.map((line) => {
       const disrupted = options.disruptEveryLine || line.id === options.disruptedLineID;
       if (line.id === options.multipleStatusLineID) {

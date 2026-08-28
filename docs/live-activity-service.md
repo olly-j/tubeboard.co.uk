@@ -39,10 +39,12 @@ IP only inside a keyed, per-process HMAC. The in-memory buckets are evicted
 after the 60-second rate-limit window by one shared, unreferenced expiry timer,
 and neither the raw association nor the HMAC key is persisted or logged.
 
-The v1 registration contract remains backward compatible with clients that
+The Live Activity v1 registration contract remains backward compatible with clients that
 predate explicit `selectionMode`: an omitted mode is treated as the original
 all-platform station selection. Service logs never include the client-supplied
-Live Activity identifier.
+Live Activity identifier. Its line allowlist includes the 11 Underground and
+six named London Overground lines. The pre-existing Elizabeth registration gap
+is unchanged and remains owned by the app's separate contract-correction work.
 
 When an app-selected duration elapses, the worker completes the existing
 pause-then-end transition before generic maximum-lifetime expiry, including
@@ -50,7 +52,11 @@ when the ten-minute pause grace crosses the eight-hour ceiling. Existing APNs
 backoff, permanent-error cleanup and inactive-record retention remain the
 bounded failure and cleanup policy.
 
-The Premium disruption-alert endpoint validates the StoreKit 2 transaction
+The Premium disruption-alert endpoint accepts both versioned registration
+contracts. Contract v1 remains Underground-only for installed v1.1 clients;
+contract v2 adds Liberty, Lioness, Mildmay, Suffragette, Weaver and Windrush
+without changing the endpoint, stored preference shape or Premium rules. It
+validates the StoreKit 2 transaction
 JWS with Apple's pinned App Store Server Library and bundled official Apple G2
 and G3 root certificates. The signed transaction is discarded after
 verification. The service stores a SHA-256 digest of the random install ID,
@@ -59,7 +65,8 @@ hours/time zone, resumed-service preference, app/build/APNs environment, and
 minimal product/expiry verification metadata. It does not receive location,
 favourites, account details, payment details, or notification-open analytics.
 
-The alert worker polls the single TfL line-status endpoint once per minute. A
+The alert worker polls one combined Tube and Overground TfL line-status
+endpoint once per minute. A
 change must appear in two consecutive responses before it is eligible for a
 push. Severe-only, quiet-hour, line-selection and recovery preferences are
 applied before enqueueing; APNs collapse identifiers limit obsolete alerts.
@@ -68,8 +75,8 @@ Opt-out deletes immediately, expired Premium access deletes at its recorded
 expiry, and other inactive records expire after 90 days. The separate
 `/data/disruption-alerts.json` file uses the existing persistent volume.
 Static serving is allow-listed to the public pages, assets and versioned
-contract schemas; server source, dependencies, fixtures and certificates are
-not public routes.
+contract schemas, including disruption-alert v1 and v2; server source,
+dependencies, fixtures and certificates are not public routes.
 
 `GET /healthz` returns only non-sensitive release evidence:
 
@@ -83,8 +90,11 @@ source, `GET /api/status/v1`, follows
 `contracts/tubeboard-status-v1.schema.json` and separates official TfL disruption from
 TubeBoard representative arrival-data health. The monitor runs only when
 `TUBEBOARD_STATUS_MONITOR_ENABLED=true`; Fly uses a five-minute cycle, at most
-23 sequential TfL requests per cycle, three unhealthy windows to degrade and
-two healthy windows to recover. Results older than 15 minutes become unknown.
+35 sequential TfL requests per cycle (one combined status request plus two
+representative arrival probes for each of 17 lines), three unhealthy windows
+to degrade and two healthy windows to recover. That is 10,080 requests per day
+at the configured cadence, up from 6,624, with no new runtime or dependency.
+Results older than 15 minutes become unknown.
 Any TfL `429` response aborts the remaining station sweep immediately and
 honours the bounded retry delay so the shared app key is not amplified.
 When TfL returns more than one valid official status for a line, a disruption

@@ -24,5 +24,8 @@ Product scope and owner decisions are coordinated by `TB-NNN` Issues in
 
 The public service also provides a server-rendered data-health page at
 `GET /status` and a privacy-safe versioned response at `GET /api/status/v1`.
+Those surfaces monitor the 11 Underground and six named London Overground
+lines supported by TubeBoard v1.2. Existing disruption-alert clients retain
+contract v1's Underground-only scope; contract v2 adds the six Overground IDs.
 The production monitor is disabled by default outside Fly configuration so a
 local development server never creates recurring TfL traffic unexpectedly.

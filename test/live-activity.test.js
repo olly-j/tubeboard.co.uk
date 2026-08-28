@@ -8,6 +8,7 @@ import {
   buildApnsPayload,
   buildContentState,
   buildPausedApnsPayload,
+  fetchTfLStatuses,
   getRolloverDelayMs,
   LiveActivityStore,
   loadConfig,
@@ -148,6 +149,30 @@ test('validates token registration payloads', () => {
   });
   assert.equal(missingPlatform.ok, false);
   assert.match(missingPlatform.errors.join('\n'), /platformID/);
+});
+
+test('accepts the six named Overground lines while preserving the Elizabeth gap', () => {
+  const namedOvergroundLines = ['liberty', 'lioness', 'mildmay', 'suffragette', 'weaver', 'windrush'];
+
+  for (const lineID of namedOvergroundLines) {
+    const validation = validateTokenPayload({ ...validTokenPayload, lineID });
+    assert.equal(validation.ok, true, `${lineID}: ${validation.errors.join('\n')}`);
+  }
+
+  const elizabeth = validateTokenPayload({ ...validTokenPayload, lineID: 'elizabeth' });
+  assert.equal(elizabeth.ok, false);
+  assert.match(elizabeth.errors.join('\n'), /Live Activity line/);
+});
+
+test('requests Tube and Overground status in one Live Activity operation', async () => {
+  const requests = [];
+  await fetchTfLStatuses(loadConfig({}), async (url) => {
+    requests.push(String(url));
+    return jsonResponse([]);
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(new URL(requests[0]).pathname, '/Line/Mode/tube,overground/Status');
 });
 
 test('validates and normalizes optional Live Activity duration fields', () => {
@@ -394,6 +419,36 @@ test('builds ContentState with Swift Date JSON numbers', () => {
   assert.equal(contentState.arrivals[0].countdownText, '02:00');
   assert.equal(typeof contentState.updatedAt, 'number');
   assert.equal(typeof contentState.arrivals[0].expectedArrival, 'number');
+});
+
+test('builds a named Overground ContentState when direction and platform are blank', () => {
+  const now = new Date('2026-08-28T10:00:00Z');
+  const contentState = buildContentState(
+    { ...validTokenPayload, lineID: 'windrush', stationID: '910GHGHI' },
+    [{
+      id: 'windrush-1',
+      lineId: 'windrush',
+      stationName: 'Highbury & Islington Rail Station',
+      platformName: '',
+      platformDirection: '',
+      direction: '',
+      lineDirection: '',
+      destinationName: 'West Croydon Rail Station',
+      expectedArrival: '2026-08-28T10:04:00Z'
+    }],
+    [{
+      id: 'windrush',
+      lineStatuses: [{ statusSeverity: 9, statusSeverityDescription: 'Minor Delays', reason: 'Earlier signal failure' }]
+    }],
+    now
+  );
+
+  assert.equal(contentState.lineName, 'Windrush');
+  assert.equal(contentState.stationName, 'Highbury & Islington');
+  assert.equal(contentState.platform, null);
+  assert.equal(contentState.arrivals[0].destination, 'West Croydon');
+  assert.equal(contentState.status, 'Minor Delays');
+  assert.equal(contentState.isDisrupted, true);
 });
 
 test('keeps platform-specific Live Activities on the selected platform', () => {

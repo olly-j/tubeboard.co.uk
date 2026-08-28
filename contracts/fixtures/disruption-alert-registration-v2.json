@@ -1,0 +1,19 @@
+{
+  "contractVersion": 2,
+  "installID": "2f243a7e-d5f7-4aa7-a2f5-63c8b9ce0f14",
+  "deviceTokenHex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "transactionJWS": "eyJhbGciOiJFUzI1NiIsIng1YyI6WyJ0ZXN0LW9ubHktbm90LWEtcmVhbC10cmFuc2FjdGlvbiJdfQ.eyJwcm9kdWN0SWQiOiJ1ay5uZXQuamVmZmVycy50dWJlYm9hcmQucHJlbWl1bS55ZWFybHkifQ.dGVzdC1vbmx5LXNpZ25hdHVyZQ",
+  "selectedLineIDs": ["central", "liberty", "windrush"],
+  "severity": "severeOnly",
+  "quietHoursEnabled": true,
+  "quietHoursStartMinutes": 1320,
+  "quietHoursEndMinutes": 420,
+  "timeZone": "Europe/London",
+  "serviceResumedAlerts": true,
+  "tokenUpdatedAt": "2026-08-28T12:00:00.000Z",
+  "appBundleID": "OllyJ.My-Train-Times",
+  "appVersion": "1.2",
+  "buildNumber": "20260828120000",
+  "apnsEnvironment": "production",
+  "storeEnvironment": "sandbox"
+}

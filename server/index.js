@@ -442,6 +442,7 @@ function getStaticRelativePath(cleanPath) {
     '/site-20260724.js',
     '/contracts/live-activity-registration-v1.schema.json',
     '/contracts/disruption-alert-registration-v1.schema.json',
+    '/contracts/disruption-alert-registration-v2.schema.json',
     '/contracts/tubeboard-status-v1.schema.json'
   ]);
   if (publicFiles.has(cleanPath)) {
