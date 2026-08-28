@@ -96,19 +96,19 @@ test('public home page links to the live App Store listing without launch placeh
   assert.equal(mobileApplication.downloadUrl, appStoreURL);
 });
 
-test('website source describes the selected v1.2 Overground surfaces truthfully', async () => {
+test('website source remains compatible with the currently public app release', async () => {
   const html = await fs.readFile(homePagePath, 'utf8');
   const structuredDataText = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)?.[1];
   const structuredData = JSON.parse(structuredDataText);
   const mobileApplication = structuredData['@graph'].find((item) => item['@type'] === 'MobileApplication');
 
   assert.match(html, /Elizabeth line/);
-  assert.match(html, /Liberty, Lioness, Mildmay, Suffragette, Weaver and Windrush/);
   assert.match(html, /saved station and one of its real platforms/i);
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
   assert.match(html, /Opt-in disruption alerts/i);
-  assert.match(html, /selected Tube and London Overground lines/i);
+  assert.match(html, /selected Tube lines/i);
+  assert.doesNotMatch(html, /selected Tube and London Overground lines/i);
   assert.match(html, /cached or offline data clear/i);
   assert.match(html, /severity, resumed-service and quiet-hour controls/i);
   assert.doesNotMatch(html, /refresh (?:their|its) Tube data throughout the day/i);
@@ -119,9 +119,7 @@ test('website source describes the selected v1.2 Overground surfaces truthfully'
   assert.match(mobileApplication.operatingSystem, /watchOS 11\.5 or later/);
   assert.match(mobileApplication.operatingSystem, /visionOS 26\.0 or later/);
   assert.ok(mobileApplication.featureList.includes('Elizabeth line stations, arrivals and status'));
-  assert.ok(mobileApplication.featureList.includes(
-    'Liberty, Lioness, Mildmay, Suffragette, Weaver and Windrush London Overground stations, arrivals and status',
-  ));
+  assert.ok(!mobileApplication.featureList.some((feature) => /London Overground/i.test(feature)));
 
   for (const asset of v11ProductAssets) {
     assert.match(html, new RegExp(`/assets/product/${asset}\\.png`));
@@ -140,7 +138,8 @@ test('v1.1 support explains platform widget configuration and offline state', as
   assert.match(html, /shown separately as no current departures/i);
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
-  assert.match(html, /any Underground or named London Overground lines/i);
+  assert.match(html, /choose the lines you want under Settings/i);
+  assert.doesNotMatch(html, /named London Overground lines/i);
   assert.match(html, /assets\/tubeboard-og-v1-1-20260825\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
 });
