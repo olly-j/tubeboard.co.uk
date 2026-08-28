@@ -11,6 +11,7 @@ const disruptionAlertSchemaPath = new URL('../contracts/disruption-alert-registr
 const disruptionAlertFixturePath = new URL('../contracts/fixtures/disruption-alert-registration-v1.json', import.meta.url);
 const homePagePath = new URL('../index.html', import.meta.url);
 const supportPagePath = new URL('../support.html', import.meta.url);
+const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
 const v11ProductAssets = [
   'home-status-v1-1-20260825',
@@ -116,3 +117,25 @@ test('v1.1 support explains platform widget configuration and offline state', as
   assert.match(html, /assets\/tubeboard-og-v1-1-20260825\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
 });
+
+test('muted website copy keeps WCAG AA contrast on the softest section background', async () => {
+  const css = await fs.readFile(styleSheetPath, 'utf8');
+  const muted = css.match(/--muted:\s*(#[0-9a-f]{6})/i)?.[1];
+  const surfacesBackground = css.match(/\.surfaces\s*\{[^}]*background:\s*(#[0-9a-f]{6})/is)?.[1];
+
+  assert.ok(muted);
+  assert.ok(surfacesBackground);
+  assert.ok(contrastRatio(muted, surfacesBackground) >= 4.5);
+});
+
+function contrastRatio(first, second) {
+  const luminances = [first, second].map((hex) => {
+    const channels = [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16) / 255);
+    const linear = channels.map((value) => {
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+  }).sort((left, right) => right - left);
+
+  return (luminances[0] + 0.05) / (luminances[1] + 0.05);
+}

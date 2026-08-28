@@ -13,6 +13,7 @@ import {
   loadConfig,
   normalizePlatformID,
   runLiveActivityWorkerCycle,
+  TokenRateLimiter,
   validateEndPayload,
   validateTokenPayload
 } from '../server/live-activity.js';
@@ -38,6 +39,86 @@ const platformTokenPayload = {
   platformLabel: 'Platform 2',
   platformDirection: 'Eastbound'
 };
+
+test('rate limits with pseudonymous short-lived buckets', () => {
+  let currentTime = 0;
+  const scheduledSweeps = [];
+  const limiter = new TokenRateLimiter({
+    limit: 2,
+    windowMs: 1_000,
+    keySecret: Buffer.alloc(32, 7),
+    now: () => currentTime,
+    schedule: (callback, delay) => {
+      const sweep = { callback, delay, cancelled: false, unref() {} };
+      scheduledSweeps.push(sweep);
+      return sweep;
+    },
+    cancel: (sweep) => { sweep.cancelled = true; }
+  });
+  const rawKey = `${validTokenPayload.installID}:203.0.113.42`;
+
+  assert.equal(limiter.check(rawKey), true);
+  currentTime = 100;
+  assert.equal(limiter.check(rawKey), true);
+  currentTime = 200;
+  assert.equal(limiter.check(rawKey), false);
+  assert.equal(limiter.buckets.size, 1);
+  assert.equal([...limiter.buckets.keys()].some((key) => key.includes(rawKey)), false);
+  assert.equal(scheduledSweeps.at(-1).delay, 1_000);
+  assert.deepEqual(scheduledSweeps.slice(0, -1).map((sweep) => sweep.cancelled), [true, true]);
+
+  currentTime = 1_201;
+  scheduledSweeps.at(-1).callback();
+  assert.equal(limiter.buckets.size, 0);
+  assert.equal(limiter.check('different-install:198.51.100.7'), true);
+  assert.equal(limiter.buckets.size, 1);
+  currentTime = 1_202;
+  assert.equal(limiter.check(rawKey), true);
+});
+
+test('many rate-limit keys share one scheduler and expire while idle', () => {
+  let currentTime = 0;
+  const activeSweeps = new Set();
+  const scheduledSweeps = [];
+  let maximumActiveSweeps = 0;
+  const limiter = new TokenRateLimiter({
+    limit: 2,
+    windowMs: 1_000,
+    keySecret: Buffer.alloc(32, 9),
+    now: () => currentTime,
+    schedule: (callback, delay) => {
+      const sweep = {
+        delay,
+        unref() {},
+        run() {
+          activeSweeps.delete(sweep);
+          callback();
+        }
+      };
+      activeSweeps.add(sweep);
+      scheduledSweeps.push(sweep);
+      maximumActiveSweeps = Math.max(maximumActiveSweeps, activeSweeps.size);
+      return sweep;
+    },
+    cancel: (sweep) => { activeSweeps.delete(sweep); }
+  });
+
+  for (let index = 0; index < 100; index += 1) {
+    currentTime = index;
+    assert.equal(limiter.check(`install-${index}:203.0.113.42`), true);
+  }
+
+  assert.equal(limiter.buckets.size, 100);
+  assert.equal(scheduledSweeps.length, 1);
+  assert.equal(maximumActiveSweeps, 1);
+  assert.equal(activeSweeps.size, 1);
+
+  currentTime = 1_100;
+  scheduledSweeps[0].run();
+  assert.equal(limiter.buckets.size, 0);
+  assert.equal(activeSweeps.size, 0);
+  assert.equal(scheduledSweeps.length, 1);
+});
 
 test('validates token registration payloads', () => {
   assert.equal(validateTokenPayload(validTokenPayload).ok, true);
