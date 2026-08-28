@@ -49,9 +49,11 @@ test('rate limits with pseudonymous short-lived buckets', () => {
     keySecret: Buffer.alloc(32, 7),
     now: () => currentTime,
     schedule: (callback, delay) => {
-      scheduledSweeps.push({ callback, delay });
-      return { unref() {} };
-    }
+      const sweep = { callback, delay, cancelled: false, unref() {} };
+      scheduledSweeps.push(sweep);
+      return sweep;
+    },
+    cancel: (sweep) => { sweep.cancelled = true; }
   });
   const rawKey = `${validTokenPayload.installID}:203.0.113.42`;
 
@@ -62,10 +64,11 @@ test('rate limits with pseudonymous short-lived buckets', () => {
   assert.equal(limiter.check(rawKey), false);
   assert.equal(limiter.buckets.size, 1);
   assert.equal([...limiter.buckets.keys()].some((key) => key.includes(rawKey)), false);
-  assert.equal(scheduledSweeps[0].delay, 1_000);
+  assert.equal(scheduledSweeps.at(-1).delay, 1_000);
+  assert.deepEqual(scheduledSweeps.slice(0, -1).map((sweep) => sweep.cancelled), [true, true]);
 
   currentTime = 1_201;
-  scheduledSweeps.shift().callback();
+  scheduledSweeps.at(-1).callback();
   assert.equal(limiter.buckets.size, 0);
   assert.equal(limiter.check('different-install:198.51.100.7'), true);
   assert.equal(limiter.buckets.size, 1);

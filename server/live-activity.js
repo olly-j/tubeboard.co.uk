@@ -342,62 +342,40 @@ export class TokenRateLimiter {
     windowMs,
     keySecret = crypto.randomBytes(32),
     now = Date.now,
-    schedule = setTimeout
+    schedule = setTimeout,
+    cancel = clearTimeout
   }) {
     this.limit = limit;
     this.windowMs = windowMs;
     this.keySecret = Buffer.from(keySecret);
     this.now = now;
     this.schedule = schedule;
+    this.cancel = cancel;
     this.buckets = new Map();
-    this.sweepTimer = null;
   }
 
   check(key, now = this.now()) {
-    this.sweepExpired(now);
-
     const bucketKey = crypto
       .createHmac('sha256', this.keySecret)
       .update(String(key))
       .digest('hex');
-    const bucket = this.buckets.get(bucketKey) || [];
-    const fresh = bucket.filter((timestamp) => now - timestamp < this.windowMs);
-    fresh.push(now);
-    this.buckets.set(bucketKey, fresh);
-    this.scheduleExpirySweep(now);
-    return fresh.length <= this.limit;
-  }
+    const existing = this.buckets.get(bucketKey);
+    if (existing?.timer) {
+      this.cancel(existing.timer);
+    }
 
-  sweepExpired(now) {
-    for (const [bucketKey, timestamps] of this.buckets) {
-      const fresh = timestamps.filter((timestamp) => now - timestamp < this.windowMs);
-      if (fresh.length === 0) {
+    const timestamps = (existing?.timestamps || [])
+      .filter((timestamp) => now - timestamp < this.windowMs);
+    timestamps.push(now);
+    const bucket = { timestamps, timer: null };
+    bucket.timer = this.schedule(() => {
+      if (this.buckets.get(bucketKey) === bucket) {
         this.buckets.delete(bucketKey);
-      } else if (fresh.length !== timestamps.length) {
-        this.buckets.set(bucketKey, fresh);
       }
-    }
-  }
-
-  scheduleExpirySweep(now) {
-    if (this.sweepTimer !== null || this.buckets.size === 0) {
-      return;
-    }
-
-    let nextExpiryAt = Number.POSITIVE_INFINITY;
-    for (const timestamps of this.buckets.values()) {
-      for (const timestamp of timestamps) {
-        nextExpiryAt = Math.min(nextExpiryAt, timestamp + this.windowMs);
-      }
-    }
-    const delay = Math.max(0, nextExpiryAt - now);
-    this.sweepTimer = this.schedule(() => {
-      this.sweepTimer = null;
-      const sweepNow = this.now();
-      this.sweepExpired(sweepNow);
-      this.scheduleExpirySweep(sweepNow);
-    }, delay);
-    this.sweepTimer?.unref?.();
+    }, this.windowMs);
+    bucket.timer?.unref?.();
+    this.buckets.set(bucketKey, bucket);
+    return timestamps.length <= this.limit;
   }
 }
 
