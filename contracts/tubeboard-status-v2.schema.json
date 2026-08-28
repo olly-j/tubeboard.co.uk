@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tubeboard.co.uk/contracts/tubeboard-status-v2.schema.json",
+  "title": "TubeBoard public data status v2",
+  "type": "object",
+  "additionalProperties": false,
+  "x-tubeboard-contract-version": 2,
+  "required": [
+    "schemaVersion",
+    "state",
+    "summary",
+    "checkedAt",
+    "staleAt",
+    "notice",
+    "checker",
+    "lines"
+  ],
+  "properties": {
+    "schemaVersion": {"const": 2},
+    "state": {"enum": ["operational", "degraded", "unknown"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 500},
+    "checkedAt": {"type": ["string", "null"], "format": "date-time"},
+    "staleAt": {"type": ["string", "null"], "format": "date-time"},
+    "notice": {"type": ["string", "null"], "maxLength": 280},
+    "checker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "intervalSeconds", "requestBudgetPerCycle", "scheduledFullSweep"],
+      "properties": {
+        "state": {"enum": ["starting", "current", "stale", "disabled"]},
+        "intervalSeconds": {"type": "integer", "minimum": 300, "maximum": 3600},
+        "requestBudgetPerCycle": {"type": "integer", "minimum": 0, "maximum": 35},
+        "scheduledFullSweep": {"const": false}
+      }
+    },
+    "lines": {
+      "type": "array",
+      "minItems": 17,
+      "maxItems": 17,
+      "items": {"$ref": "#/$defs/line"}
+    }
+  },
+  "$defs": {
+    "official": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "summary", "reason"],
+      "properties": {
+        "state": {"enum": ["good-service", "disrupted", "unknown"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 500},
+        "reason": {"type": ["string", "null"], "maxLength": 500}
+      }
+    },
+    "tubeBoard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "sampledStations", "successfulStations"],
+      "properties": {
+        "state": {"enum": ["operational", "degraded", "unknown"]},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+        "sampledStations": {"type": "integer", "minimum": 0, "maximum": 2},
+        "successfulStations": {"type": "integer", "minimum": 0, "maximum": 2}
+      }
+    },
+    "line": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "official", "tubeBoard"],
+      "properties": {
+        "id": {
+          "enum": [
+            "bakerloo",
+            "central",
+            "circle",
+            "district",
+            "hammersmith-city",
+            "jubilee",
+            "metropolitan",
+            "northern",
+            "piccadilly",
+            "victoria",
+            "waterloo-city",
+            "liberty",
+            "lioness",
+            "mildmay",
+            "suffragette",
+            "weaver",
+            "windrush"
+          ]
+        },
+        "name": {"type": "string", "minLength": 1, "maxLength": 80},
+        "official": {"$ref": "#/$defs/official"},
+        "tubeBoard": {"$ref": "#/$defs/tubeBoard"}
+      }
+    }
+  }
+}

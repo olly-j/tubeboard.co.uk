@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  DISRUPTION_ALERT_CONTRACT_VERSION,
+  DISRUPTION_ALERT_LINES,
   DisruptionAlertStore,
   buildAlertPayload,
   loadAppleRootCertificates,
@@ -24,6 +26,7 @@ test('registration and deletion validation fail closed', () => {
   const valid = registrationPayload();
   assert.equal(validateRegistrationPayload(valid).ok, true);
   assert.equal(validateDeletePayload({ contractVersion: 1, installID: valid.installID }).ok, true);
+  assert.equal(validateDeletePayload({ contractVersion: 2, installID: valid.installID }).ok, true);
 
   const invalid = validateRegistrationPayload({
     ...valid,
@@ -37,6 +40,25 @@ test('registration and deletion validation fail closed', () => {
   assert.match(invalid.errors.join('\n'), /selectedLineIDs/);
   assert.match(invalid.errors.join('\n'), /severity/);
   assert.match(invalid.errors.join('\n'), /timeZone/);
+});
+
+test('contract v1 remains Tube-only while v2 accepts every named Overground line', () => {
+  const overgroundLineIDs = ['liberty', 'lioness', 'mildmay', 'suffragette', 'weaver', 'windrush'];
+  const v1 = validateRegistrationPayload(registrationPayload({ selectedLineIDs: overgroundLineIDs }));
+  const v2 = validateRegistrationPayload(registrationPayload({
+    contractVersion: 2,
+    selectedLineIDs: [...DISRUPTION_ALERT_LINES.keys()]
+  }));
+
+  assert.equal(DISRUPTION_ALERT_CONTRACT_VERSION, 2);
+  assert.equal(v1.ok, false);
+  assert.match(v1.errors.join('\n'), /contract v1/);
+  assert.equal(v2.ok, true, v2.errors.join('\n'));
+  assert.equal(v2.value.selectedLineIDs.length, 17);
+  assert.deepEqual(
+    overgroundLineIDs.filter((lineID) => !v2.value.selectedLineIDs.includes(lineID)),
+    []
+  );
 });
 
 test('bundled Apple roots are the expected official G2 and G3 certificates', async () => {
@@ -151,6 +173,27 @@ test('TfL status changes require two matching observations before notification',
   assert.equal(transitions[0].after.status, 'Severe Delays');
 });
 
+test('Overground status is normalized with its official named-line identity', () => {
+  const statuses = normalizeTubeStatuses([{
+    id: 'windrush',
+    name: 'Windrush',
+    lineStatuses: [{
+      statusSeverity: 9,
+      statusSeverityDescription: 'Minor Delays',
+      reason: 'A points failure'
+    }]
+  }]);
+
+  assert.deepEqual(statuses, [{
+    lineID: 'windrush',
+    lineName: 'Windrush',
+    severity: 9,
+    status: 'Minor Delays',
+    reason: 'A points failure',
+    isDisrupted: true
+  }]);
+});
+
 test('severity, recovery and overnight quiet-hour preferences are enforced', () => {
   const severeTransition = transition({ beforeSeverity: 10, afterSeverity: 6 });
   const minorTransition = transition({ beforeSeverity: 10, afterSeverity: 9 });
@@ -172,6 +215,20 @@ test('notification payload is bounded and deep-links to the affected line', () =
   assert.equal(payload.aps.alert.body, 'Signal failure');
   assert.equal(payload.deepLink, 'tubeboard://line-status/central');
   assert.equal(payload.lineID, 'central');
+  assert.equal(payload.contractVersion, 2);
+});
+
+test('queued alerts preserve each registration contract version', async () => {
+  const { store } = await temporaryStore();
+  await store.upsert(registrationPayload(), premiumEntitlement(), now);
+  const transitionValue = transition({ beforeSeverity: 10, afterSeverity: 6 });
+
+  await store.enqueue([{
+    ...transitionValue,
+    fingerprint: 'central-severe'
+  }], store.state.records, now);
+
+  assert.equal(store.state.queue[0].payload.contractVersion, 1);
 });
 
 test('worker sends one alert only after a stable transition', async () => {
@@ -202,6 +259,26 @@ test('worker sends one alert only after a stable transition', async () => {
   assert.equal(pushes[0].token, deviceToken);
   assert.equal(pushes[0].item.lineID, 'central');
   assert.equal(store.state.queue.length, 0);
+});
+
+test('worker requests the combined Tube and Overground status catalogue', async () => {
+  const { store } = await temporaryStore();
+  await store.upsert(registrationPayload({ contractVersion: 2, selectedLineIDs: ['liberty'] }), premiumEntitlement(), now);
+  const requested = [];
+
+  await runDisruptionAlertWorkerCycle({
+    store,
+    config: workerConfig(),
+    fetchImpl: async (url) => {
+      requested.push(String(url));
+      return { ok: true, json: async () => [] };
+    },
+    pushImpl: async () => ({ status: 200 }),
+    logger: quietLogger(),
+    now
+  });
+
+  assert.equal(new URL(requested[0]).pathname, '/Line/Mode/tube,overground/Status');
 });
 
 test('permanent APNs errors delete the registration and do not retain a retry', async () => {

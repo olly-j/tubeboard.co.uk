@@ -17,6 +17,20 @@ export const TUBE_LINES = new Map([
   ['waterloo-city', 'Waterloo & City']
 ]);
 
+export const OVERGROUND_LINES = new Map([
+  ['liberty', 'Liberty'],
+  ['lioness', 'Lioness'],
+  ['mildmay', 'Mildmay'],
+  ['suffragette', 'Suffragette'],
+  ['weaver', 'Weaver'],
+  ['windrush', 'Windrush']
+]);
+
+export const LIVE_ACTIVITY_LINES = new Map([
+  ...TUBE_LINES,
+  ...OVERGROUND_LINES
+]);
+
 const APPLE_REFERENCE_UNIX_SECONDS = 978307200;
 const TOKEN_REDACTION = '[redacted]';
 const LIVE_ACTIVITY_STALE_BUFFER_MS = 300_000;
@@ -494,8 +508,8 @@ export function validateTokenPayload(input) {
     errors.push('stationID is invalid');
   }
 
-  if (typeof payload.lineID === 'string' && !TUBE_LINES.has(payload.lineID)) {
-    errors.push('lineID is not a supported Tube line');
+  if (typeof payload.lineID === 'string' && !LIVE_ACTIVITY_LINES.has(payload.lineID)) {
+    errors.push('lineID is not a supported Live Activity line');
   }
 
   const explicitSelectionMode = optionalString(payload.selectionMode);
@@ -618,7 +632,7 @@ export async function fetchTfLArrivals(stationID, config, fetchImpl = fetch) {
 }
 
 export async function fetchTfLStatuses(config, fetchImpl = fetch) {
-  const statusesUrl = new URL('https://api.tfl.gov.uk/Line/Mode/tube/Status');
+  const statusesUrl = new URL('https://api.tfl.gov.uk/Line/Mode/tube,overground/Status');
 
   if (config.tflAppKey) {
     statusesUrl.searchParams.set('app_key', config.tflAppKey);
@@ -645,7 +659,7 @@ export async function fetchTfLStatuses(config, fetchImpl = fetch) {
 }
 
 export function buildContentState(record, arrivals, statuses, now = new Date()) {
-  const lineName = TUBE_LINES.get(record.lineID) || titleCase(record.lineID);
+  const lineName = LIVE_ACTIVITY_LINES.get(record.lineID) || titleCase(record.lineID);
   const lineArrivals = arrivals.filter((arrival) => matchesLine(arrival, record.lineID, lineName));
   const selectedArrivals = applySelectionMode(record, lineArrivals);
   const filteredArrivals = selectedArrivals
@@ -702,7 +716,7 @@ export function buildApnsPayload(contentState, now = new Date()) {
 export function buildPausedContentState(record, now = new Date()) {
   return {
     stationName: record.lastStationName || cleanStationName(record.stationName || record.stationID),
-    lineName: record.lastLineName || TUBE_LINES.get(record.lineID) || titleCase(record.lineID),
+    lineName: record.lastLineName || LIVE_ACTIVITY_LINES.get(record.lineID) || titleCase(record.lineID),
     platform: record.lastPlatform || getSelectedPlatformLabel(record),
     arrivals: [],
     status: 'Updates paused',

@@ -1,4 +1,5 @@
-export const STATUS_SCHEMA_VERSION = 1;
+export const STATUS_SCHEMA_VERSION = 2;
+export const STATUS_V1_SCHEMA_VERSION = 1;
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_STALE_AFTER_MS = 15 * 60 * 1000;
 const DEFAULT_REQUEST_SPACING_MS = 2_000;
@@ -21,8 +22,44 @@ export const STATUS_LINES = [
   { id: 'northern', name: 'Northern', stations: ['940GZZLUCTN', '940GZZLUMDN'] },
   { id: 'piccadilly', name: 'Piccadilly', stations: ['940GZZLUCKS', '940GZZLUUXB'] },
   { id: 'victoria', name: 'Victoria', stations: ['940GZZLUPCO', '940GZZLUBLR'] },
-  { id: 'waterloo-city', name: 'Waterloo & City', stations: ['940GZZLUWLO', '940GZZLUBNK'] }
+  { id: 'waterloo-city', name: 'Waterloo & City', stations: ['940GZZLUWLO', '940GZZLUBNK'] },
+  { id: 'liberty', name: 'Liberty', stations: ['910GROMFORD', '910GUPMNSTR'] },
+  { id: 'lioness', name: 'Lioness', stations: ['910GEUSTON', '910GWATFJDC'] },
+  { id: 'mildmay', name: 'Mildmay', stations: ['910GSTFD', '910GRICHMND'] },
+  { id: 'suffragette', name: 'Suffragette', stations: ['910GGOSPLOK', '910GBARKRIV'] },
+  { id: 'weaver', name: 'Weaver', stations: ['910GLIVST', '910GCHINGFD'] },
+  { id: 'windrush', name: 'Windrush', stations: ['910GHGHI', '910GWCROYDN'] }
 ];
+
+export const STATUS_REQUEST_BUDGET_PER_CYCLE = 1 + STATUS_LINES.reduce(
+  (total, line) => total + line.stations.length,
+  0
+);
+export const STATUS_V1_REQUEST_BUDGET_PER_CYCLE = 23;
+const STATUS_V1_LINE_IDS = new Set(STATUS_LINES.slice(0, 11).map((line) => line.id));
+
+export function statusSnapshotForVersion(snapshot, version) {
+  if (version === STATUS_SCHEMA_VERSION) {
+    return structuredClone(snapshot);
+  }
+  if (version !== STATUS_V1_SCHEMA_VERSION) {
+    throw new RangeError(`Unsupported status contract version ${version}`);
+  }
+
+  const lines = snapshot.lines.filter((line) => STATUS_V1_LINE_IDS.has(line.id));
+  const state = overallState(lines);
+  return {
+    ...structuredClone(snapshot),
+    schemaVersion: STATUS_V1_SCHEMA_VERSION,
+    state,
+    summary: overallSummary(state),
+    checker: {
+      ...structuredClone(snapshot.checker),
+      requestBudgetPerCycle: STATUS_V1_REQUEST_BUDGET_PER_CYCLE
+    },
+    lines
+  };
+}
 
 export function loadStatusConfig(env = process.env) {
   return {
@@ -132,7 +169,7 @@ export class TubeBoardStatusMonitor {
         checker: {
           state: 'current',
           intervalSeconds: Math.round(this.config.intervalMs / 1000),
-          requestBudgetPerCycle: 23,
+          requestBudgetPerCycle: STATUS_REQUEST_BUDGET_PER_CYCLE,
           scheduledFullSweep: false
         },
         lines
@@ -160,7 +197,7 @@ export class TubeBoardStatusMonitor {
   }
 
   async fetchOfficialStatuses() {
-    const url = new URL('https://api.tfl.gov.uk/Line/Mode/tube/Status');
+    const url = new URL('https://api.tfl.gov.uk/Line/Mode/tube,overground/Status');
     addAppKey(url, this.config.tflAppKey);
     const result = await fetchJson(url, this.config, this.fetchImpl);
     if (!Array.isArray(result.value)) {
@@ -317,7 +354,7 @@ export function renderStatusPage(snapshot, selectedLineID = null) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TubeBoard data status</title>
-  <meta name="description" content="Current TubeBoard data checks and official TfL service information, line by line.">
+  <meta name="description" content="Current TubeBoard data checks and official TfL service information for Underground and London Overground lines.">
   <meta name="theme-color" content="#f6f6f3">
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://tubeboard.co.uk/status">
@@ -343,7 +380,7 @@ export function renderStatusPage(snapshot, selectedLineID = null) {
       <p><strong>TubeBoard data</strong> checks whether representative TfL arrival responses remain usable by the app. <strong>Official TfL service</strong> reports disruption information supplied by TfL. They are different: an official disruption is not automatically a TubeBoard data fault.</p>
       <p>One empty response never declares a line outage. Unknown means the checker is stale, unavailable, outside its evidence window, or still confirming a possible issue.</p>
     </section>
-    <section class="status-lines" aria-label="Tube line status">${lineRows}</section>
+    <section class="status-lines" aria-label="Supported line status">${lineRows}</section>
     <section class="status-actions" aria-labelledby="status-actions-title">
       <h2 id="status-actions-title">Still seeing a problem?</h2>
       <p>Return to TubeBoard and try the board again. Compare with station information before travelling. If the problem continues, <a href="mailto:support@tubeboard.co.uk">email TubeBoard support</a> with the line, station, approximate time, app version and a screenshot if useful.</p>
@@ -395,7 +432,7 @@ function createUnknownSnapshot(now, config, reason = null) {
     checker: {
       state: enabled ? 'starting' : 'disabled',
       intervalSeconds: Math.round(config.intervalMs / 1000),
-      requestBudgetPerCycle: 23,
+      requestBudgetPerCycle: STATUS_REQUEST_BUDGET_PER_CYCLE,
       scheduledFullSweep: false
     },
     lines: STATUS_LINES.map((line) => ({
@@ -487,7 +524,7 @@ function overallState(lines) {
 }
 
 function overallSummary(state) {
-  if (state === 'operational') return 'Representative TubeBoard arrival checks are returning usable data across every Tube line.';
+  if (state === 'operational') return 'Representative TubeBoard arrival checks are returning usable data across every supported line.';
   if (state === 'degraded') return 'Repeated checks have found a possible TubeBoard arrival-data problem on one or more lines.';
   return 'TubeBoard does not currently have enough fresh evidence to classify every line.';
 }

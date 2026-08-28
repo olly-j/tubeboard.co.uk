@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tubeboard.co.uk/contracts/disruption-alert-registration-v2.schema.json",
+  "title": "TubeBoard Premium disruption-alert registration v2",
+  "type": "object",
+  "additionalProperties": false,
+  "x-tubeboard-contract-version": 2,
+  "required": [
+    "contractVersion",
+    "installID",
+    "deviceTokenHex",
+    "transactionJWS",
+    "selectedLineIDs",
+    "severity",
+    "quietHoursEnabled",
+    "quietHoursStartMinutes",
+    "quietHoursEndMinutes",
+    "timeZone",
+    "serviceResumedAlerts",
+    "tokenUpdatedAt",
+    "appBundleID",
+    "appVersion",
+    "buildNumber",
+    "apnsEnvironment",
+    "storeEnvironment"
+  ],
+  "properties": {
+    "contractVersion": {"const": 2},
+    "installID": {"type": "string", "format": "uuid"},
+    "deviceTokenHex": {"type": "string", "pattern": "^[a-fA-F0-9]{32,512}$"},
+    "transactionJWS": {"type": "string", "minLength": 100, "maxLength": 20000},
+    "selectedLineIDs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 17,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "bakerloo",
+          "central",
+          "circle",
+          "district",
+          "hammersmith-city",
+          "jubilee",
+          "metropolitan",
+          "northern",
+          "piccadilly",
+          "victoria",
+          "waterloo-city",
+          "liberty",
+          "lioness",
+          "mildmay",
+          "suffragette",
+          "weaver",
+          "windrush"
+        ]
+      }
+    },
+    "severity": {"enum": ["severeOnly", "allDisruptions"]},
+    "quietHoursEnabled": {"type": "boolean"},
+    "quietHoursStartMinutes": {"type": "integer", "minimum": 0, "maximum": 1439},
+    "quietHoursEndMinutes": {"type": "integer", "minimum": 0, "maximum": 1439},
+    "timeZone": {"type": "string", "minLength": 1, "maxLength": 80},
+    "serviceResumedAlerts": {"type": "boolean"},
+    "tokenUpdatedAt": {"type": "string", "format": "date-time"},
+    "appBundleID": {"const": "OllyJ.My-Train-Times"},
+    "appVersion": {"type": "string", "minLength": 1, "maxLength": 40},
+    "buildNumber": {"type": "string", "minLength": 1, "maxLength": 40},
+    "apnsEnvironment": {"enum": ["production", "sandbox"]},
+    "storeEnvironment": {"enum": ["production", "sandbox"]}
+  }
+}

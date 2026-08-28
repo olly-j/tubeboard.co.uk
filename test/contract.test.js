@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import test from 'node:test';
-import { validateRegistrationPayload } from '../server/disruption-alerts.js';
+import {
+  DISRUPTION_ALERT_CONTRACT_VERSION,
+  validateRegistrationPayload
+} from '../server/disruption-alerts.js';
 import { validateTokenPayload } from '../server/live-activity.js';
 import { LIVE_ACTIVITY_CONTRACT_VERSION } from '../server/version.js';
 
@@ -9,7 +12,10 @@ const schemaPath = new URL('../contracts/live-activity-registration-v1.schema.js
 const fixturePath = new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url);
 const disruptionAlertSchemaPath = new URL('../contracts/disruption-alert-registration-v1.schema.json', import.meta.url);
 const disruptionAlertFixturePath = new URL('../contracts/fixtures/disruption-alert-registration-v1.json', import.meta.url);
+const disruptionAlertV2SchemaPath = new URL('../contracts/disruption-alert-registration-v2.schema.json', import.meta.url);
+const disruptionAlertV2FixturePath = new URL('../contracts/fixtures/disruption-alert-registration-v2.json', import.meta.url);
 const homePagePath = new URL('../index.html', import.meta.url);
+const privacyPagePath = new URL('../privacy.html', import.meta.url);
 const supportPagePath = new URL('../support.html', import.meta.url);
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
@@ -56,6 +62,21 @@ test('versioned disruption-alert fixture matches the service validator', async (
   assert.deepEqual(schema.required.filter((field) => fixture[field] === undefined), []);
 });
 
+test('versioned disruption-alert v2 fixture adds the six named Overground lines', async () => {
+  const schema = JSON.parse(await fs.readFile(disruptionAlertV2SchemaPath, 'utf8'));
+  const fixture = JSON.parse(await fs.readFile(disruptionAlertV2FixturePath, 'utf8'));
+  const validation = validateRegistrationPayload(fixture);
+
+  assert.equal(schema['x-tubeboard-contract-version'], DISRUPTION_ALERT_CONTRACT_VERSION);
+  assert.equal(validation.ok, true, validation.errors.join('\n'));
+  assert.deepEqual(Object.keys(fixture).sort(), Object.keys(schema.properties).sort());
+  assert.deepEqual(schema.required.filter((field) => fixture[field] === undefined), []);
+  assert.deepEqual(
+    schema.properties.selectedLineIDs.items.enum.slice(-6),
+    ['liberty', 'lioness', 'mildmay', 'suffragette', 'weaver', 'windrush']
+  );
+});
+
 test('public home page links to the live App Store listing without launch placeholders', async () => {
   const html = await fs.readFile(homePagePath, 'utf8');
   const structuredDataText = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)?.[1];
@@ -75,7 +96,7 @@ test('public home page links to the live App Store listing without launch placeh
   assert.equal(mobileApplication.downloadUrl, appStoreURL);
 });
 
-test('v1.1 website source describes the selected release surfaces truthfully', async () => {
+test('website source remains compatible with the currently public app release', async () => {
   const html = await fs.readFile(homePagePath, 'utf8');
   const structuredDataText = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)?.[1];
   const structuredData = JSON.parse(structuredDataText);
@@ -86,6 +107,8 @@ test('v1.1 website source describes the selected release surfaces truthfully', a
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
   assert.match(html, /Opt-in disruption alerts/i);
+  assert.match(html, /selected Tube lines/i);
+  assert.doesNotMatch(html, /selected Tube and London Overground lines/i);
   assert.match(html, /cached or offline data clear/i);
   assert.match(html, /severity, resumed-service and quiet-hour controls/i);
   assert.doesNotMatch(html, /refresh (?:their|its) Tube data throughout the day/i);
@@ -96,6 +119,7 @@ test('v1.1 website source describes the selected release surfaces truthfully', a
   assert.match(mobileApplication.operatingSystem, /watchOS 11\.5 or later/);
   assert.match(mobileApplication.operatingSystem, /visionOS 26\.0 or later/);
   assert.ok(mobileApplication.featureList.includes('Elizabeth line stations, arrivals and status'));
+  assert.ok(!mobileApplication.featureList.some((feature) => /London Overground/i.test(feature)));
 
   for (const asset of v11ProductAssets) {
     assert.match(html, new RegExp(`/assets/product/${asset}\\.png`));
@@ -114,8 +138,18 @@ test('v1.1 support explains platform widget configuration and offline state', as
   assert.match(html, /shown separately as no current departures/i);
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
+  assert.match(html, /choose the lines you want under Settings/i);
+  assert.doesNotMatch(html, /named London Overground lines/i);
   assert.match(html, /assets\/tubeboard-og-v1-1-20260825\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
+});
+
+test('privacy scope describes the supported London rail service without changing data-use claims', async () => {
+  const html = await fs.readFile(privacyPagePath, 'utf8');
+
+  assert.match(html, /intended for supported London rail departure information/i);
+  assert.doesNotMatch(html, /intended for London Underground information/i);
+  assert.match(html, /does not knowingly collect children’s information/i);
 });
 
 test('muted website copy keeps WCAG AA contrast on the softest section background', async () => {

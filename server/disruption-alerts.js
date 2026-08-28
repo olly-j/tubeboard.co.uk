@@ -7,13 +7,19 @@ import {
   SignedDataVerifier
 } from '@apple/app-store-server-library';
 import {
+  OVERGROUND_LINES,
   TUBE_LINES,
   createApnsJwt,
   isPermanentApnsError,
   parseApnsReason
 } from './live-activity.js';
 
-export const DISRUPTION_ALERT_CONTRACT_VERSION = 1;
+export const DISRUPTION_ALERT_CONTRACT_VERSION = 2;
+export const DISRUPTION_ALERT_CONTRACT_VERSIONS = new Set([1, 2]);
+export const DISRUPTION_ALERT_LINES = new Map([
+  ...TUBE_LINES,
+  ...OVERGROUND_LINES
+]);
 export const TUBEBOARD_BUNDLE_ID = 'OllyJ.My-Train-Times';
 export const PREMIUM_PRODUCT_IDS = new Set([
   'uk.net.jeffers.tubeboard.premium.monthly',
@@ -54,8 +60,8 @@ export function validateRegistrationPayload(input) {
   const payload = input && typeof input === 'object' ? input : {};
   const errors = [];
 
-  if (payload.contractVersion !== DISRUPTION_ALERT_CONTRACT_VERSION) {
-    errors.push(`contractVersion must be ${DISRUPTION_ALERT_CONTRACT_VERSION}`);
+  if (!DISRUPTION_ALERT_CONTRACT_VERSIONS.has(payload.contractVersion)) {
+    errors.push('contractVersion must be 1 or 2');
   }
 
   for (const field of [
@@ -86,12 +92,13 @@ export function validateRegistrationPayload(input) {
     errors.push('transactionJWS is invalid');
   }
 
+  const supportedLines = payload.contractVersion === 1 ? TUBE_LINES : DISRUPTION_ALERT_LINES;
   if (!Array.isArray(payload.selectedLineIDs)
       || payload.selectedLineIDs.length < 1
-      || payload.selectedLineIDs.length > TUBE_LINES.size
-      || payload.selectedLineIDs.some((lineID) => !TUBE_LINES.has(lineID))
+      || payload.selectedLineIDs.length > supportedLines.size
+      || payload.selectedLineIDs.some((lineID) => !supportedLines.has(lineID))
       || new Set(payload.selectedLineIDs).size !== payload.selectedLineIDs.length) {
-    errors.push('selectedLineIDs must contain 1 to 11 supported Tube lines');
+    errors.push(`selectedLineIDs must contain 1 to ${supportedLines.size} lines supported by contract v${payload.contractVersion}`);
   }
 
   if (!['severeOnly', 'allDisruptions'].includes(payload.severity)) {
@@ -142,7 +149,7 @@ export function validateRegistrationPayload(input) {
     ok: errors.length === 0,
     errors,
     value: {
-      contractVersion: DISRUPTION_ALERT_CONTRACT_VERSION,
+      contractVersion: payload.contractVersion,
       installID: String(payload.installID || '').trim().toLowerCase(),
       deviceTokenHex: String(payload.deviceTokenHex || '').trim().toLowerCase(),
       transactionJWS: String(payload.transactionJWS || '').trim(),
@@ -166,8 +173,8 @@ export function validateRegistrationPayload(input) {
 export function validateDeletePayload(input) {
   const payload = input && typeof input === 'object' ? input : {};
   const errors = [];
-  if (payload.contractVersion !== DISRUPTION_ALERT_CONTRACT_VERSION) {
-    errors.push(`contractVersion must be ${DISRUPTION_ALERT_CONTRACT_VERSION}`);
+  if (!DISRUPTION_ALERT_CONTRACT_VERSIONS.has(payload.contractVersion)) {
+    errors.push('contractVersion must be 1 or 2');
   }
   if (typeof payload.installID !== 'string' || !isUUID(payload.installID)) {
     errors.push('installID must be a UUID');
@@ -176,7 +183,7 @@ export function validateDeletePayload(input) {
     ok: errors.length === 0,
     errors,
     value: {
-      contractVersion: DISRUPTION_ALERT_CONTRACT_VERSION,
+      contractVersion: payload.contractVersion,
       installID: String(payload.installID || '').trim().toLowerCase()
     }
   };
@@ -294,6 +301,7 @@ export class DisruptionAlertStore {
     const previous = existingIndex >= 0 ? this.state.records[existingIndex] : {};
     const record = {
       ...previous,
+      contractVersion: payload.contractVersion,
       installDigest,
       tokenDigest,
       encryptedToken: encryptToken(payload.deviceTokenHex, this.encryptionKey),
@@ -418,7 +426,7 @@ export class DisruptionAlertStore {
           id,
           installDigest: record.installDigest,
           lineID: transition.after.lineID,
-          payload: buildAlertPayload(transition),
+          payload: buildAlertPayload(transition, record.contractVersion || 1),
           collapseID: `tubeboard-${transition.after.lineID}`,
           attempts: 0,
           nextAttemptAt: now.toISOString(),
@@ -474,7 +482,7 @@ export class DisruptionAlertStore {
 export function normalizeTubeStatuses(input) {
   const lines = Array.isArray(input) ? input : [];
   return lines.flatMap((line) => {
-    if (!TUBE_LINES.has(line.id) || !Array.isArray(line.lineStatuses) || line.lineStatuses.length === 0) {
+    if (!DISRUPTION_ALERT_LINES.has(line.id) || !Array.isArray(line.lineStatuses) || line.lineStatuses.length === 0) {
       return [];
     }
     const candidate = [...line.lineStatuses].sort((left, right) => {
@@ -483,7 +491,7 @@ export function normalizeTubeStatuses(input) {
     const severity = numericSeverity(candidate.statusSeverity);
     return [{
       lineID: line.id,
-      lineName: line.name || TUBE_LINES.get(line.id),
+      lineName: line.name || DISRUPTION_ALERT_LINES.get(line.id),
       severity,
       status: cleanText(candidate.statusSeverityDescription || (severity === 10 ? 'Good Service' : 'Disruption')),
       reason: cleanText(candidate.reason || ''),
@@ -518,7 +526,7 @@ export function isWithinQuietHours(record, now = new Date()) {
   return start < end ? current >= start && current < end : current >= start || current < end;
 }
 
-export function buildAlertPayload(transition) {
+export function buildAlertPayload(transition, contractVersion = DISRUPTION_ALERT_CONTRACT_VERSION) {
   const status = transition.after;
   const resumed = !status.isDisrupted;
   const title = resumed
@@ -536,7 +544,7 @@ export function buildAlertPayload(transition) {
     },
     deepLink: `tubeboard://line-status/${encodeURIComponent(status.lineID)}`,
     lineID: status.lineID,
-    contractVersion: DISRUPTION_ALERT_CONTRACT_VERSION
+    contractVersion
   };
 }
 
@@ -598,7 +606,7 @@ export async function runDisruptionAlertWorkerCycle({
   const records = await store.activeRecords(now, config.inactivityMs);
   if (records.length === 0) return { registrations: 0, transitions: 0, queued: 0 };
 
-  const url = new URL('https://api.tfl.gov.uk/Line/Mode/tube/Status');
+  const url = new URL('https://api.tfl.gov.uk/Line/Mode/tube,overground/Status');
   if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
   const response = await fetchImpl(url);
   if (!response.ok) throw retryableError(`TfL status request failed: ${response.status}`, 120_000);

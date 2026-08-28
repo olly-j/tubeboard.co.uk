@@ -23,6 +23,10 @@ Product scope and owner decisions are coordinated by `TB-NNN` Issues in
 `AGENTS.md` before changing this repository.
 
 The public service also provides a server-rendered data-health page at
-`GET /status` and a privacy-safe versioned response at `GET /api/status/v1`.
+`GET /status` and privacy-safe versioned responses at `GET /api/status/v1`
+and `GET /api/status/v2`. Status contract v1 retains its 11-line Underground
+scope; v2 and the HTML page cover those lines plus the six named London
+Overground lines supported by TubeBoard v1.2. Existing disruption-alert clients retain
+contract v1's Underground-only scope; contract v2 adds the six Overground IDs.
 The production monitor is disabled by default outside Fly configuration so a
 local development server never creates recurring TfL traffic unexpectedly.

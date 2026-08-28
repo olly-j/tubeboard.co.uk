@@ -19,7 +19,8 @@ import {
 import {
   TubeBoardStatusMonitor,
   loadStatusConfig,
-  renderStatusPage
+  renderStatusPage,
+  statusSnapshotForVersion
 } from './status-monitor.js';
 import {
   DISRUPTION_ALERT_CONTRACT_VERSION,
@@ -121,7 +122,18 @@ const server = http.createServer(async (request, response) => {
       sendJson(
         response,
         200,
-        statusMonitor.getSnapshot(),
+        statusSnapshotForVersion(statusMonitor.getSnapshot(), 1),
+        'public, max-age=60, stale-while-revalidate=120',
+        request.method === 'HEAD'
+      );
+      return;
+    }
+
+    if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/api/status/v2') {
+      sendJson(
+        response,
+        200,
+        statusSnapshotForVersion(statusMonitor.getSnapshot(), 2),
         'public, max-age=60, stale-while-revalidate=120',
         request.method === 'HEAD'
       );
@@ -442,7 +454,9 @@ function getStaticRelativePath(cleanPath) {
     '/site-20260724.js',
     '/contracts/live-activity-registration-v1.schema.json',
     '/contracts/disruption-alert-registration-v1.schema.json',
-    '/contracts/tubeboard-status-v1.schema.json'
+    '/contracts/disruption-alert-registration-v2.schema.json',
+    '/contracts/tubeboard-status-v1.schema.json',
+    '/contracts/tubeboard-status-v2.schema.json'
   ]);
   if (publicFiles.has(cleanPath)) {
     return cleanPath.slice(1);
