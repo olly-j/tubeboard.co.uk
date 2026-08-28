@@ -34,6 +34,11 @@ The token endpoint stores records in `data/live-activities.json` locally and
 API, and the data directory is ignored by git. The versioned request contract
 and fixture are under `contracts/`.
 
+Registration abuse controls combine the random install identifier and request
+IP only inside a keyed, per-process HMAC. The in-memory buckets are evicted
+after the 60-second rate-limit window, and neither the raw association nor the
+HMAC key is persisted or logged.
+
 The v1 registration contract remains backward compatible with clients that
 predate explicit `selectionMode`: an omitted mode is treated as the original
 all-platform station selection. Service logs never include the client-supplied

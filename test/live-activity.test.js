@@ -13,6 +13,7 @@ import {
   loadConfig,
   normalizePlatformID,
   runLiveActivityWorkerCycle,
+  TokenRateLimiter,
   validateEndPayload,
   validateTokenPayload
 } from '../server/live-activity.js';
@@ -38,6 +39,25 @@ const platformTokenPayload = {
   platformLabel: 'Platform 2',
   platformDirection: 'Eastbound'
 };
+
+test('rate limits with pseudonymous short-lived buckets', () => {
+  const limiter = new TokenRateLimiter({
+    limit: 2,
+    windowMs: 1_000,
+    keySecret: Buffer.alloc(32, 7)
+  });
+  const rawKey = `${validTokenPayload.installID}:203.0.113.42`;
+
+  assert.equal(limiter.check(rawKey, 0), true);
+  assert.equal(limiter.check(rawKey, 100), true);
+  assert.equal(limiter.check(rawKey, 200), false);
+  assert.equal(limiter.buckets.size, 1);
+  assert.equal([...limiter.buckets.keys()].some((key) => key.includes(rawKey)), false);
+
+  assert.equal(limiter.check('different-install:198.51.100.7', 1_201), true);
+  assert.equal(limiter.buckets.size, 1);
+  assert.equal(limiter.check(rawKey, 1_202), true);
+});
 
 test('validates token registration payloads', () => {
   assert.equal(validateTokenPayload(validTokenPayload).ok, true);

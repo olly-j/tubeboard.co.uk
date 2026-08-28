@@ -337,18 +337,40 @@ export class LiveActivityStore {
 }
 
 export class TokenRateLimiter {
-  constructor({ limit, windowMs }) {
+  constructor({ limit, windowMs, keySecret = crypto.randomBytes(32) }) {
     this.limit = limit;
     this.windowMs = windowMs;
+    this.keySecret = Buffer.from(keySecret);
     this.buckets = new Map();
+    this.nextSweepAt = 0;
   }
 
   check(key, now = Date.now()) {
-    const bucket = this.buckets.get(key) || [];
+    if (now >= this.nextSweepAt) {
+      this.sweepExpired(now);
+      this.nextSweepAt = now + this.windowMs;
+    }
+
+    const bucketKey = crypto
+      .createHmac('sha256', this.keySecret)
+      .update(String(key))
+      .digest('hex');
+    const bucket = this.buckets.get(bucketKey) || [];
     const fresh = bucket.filter((timestamp) => now - timestamp < this.windowMs);
     fresh.push(now);
-    this.buckets.set(key, fresh);
+    this.buckets.set(bucketKey, fresh);
     return fresh.length <= this.limit;
+  }
+
+  sweepExpired(now) {
+    for (const [bucketKey, timestamps] of this.buckets) {
+      const fresh = timestamps.filter((timestamp) => now - timestamp < this.windowMs);
+      if (fresh.length === 0) {
+        this.buckets.delete(bucketKey);
+      } else if (fresh.length !== timestamps.length) {
+        this.buckets.set(bucketKey, fresh);
+      }
+    }
   }
 }
 
