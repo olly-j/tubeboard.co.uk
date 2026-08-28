@@ -15,6 +15,7 @@ const disruptionAlertFixturePath = new URL('../contracts/fixtures/disruption-ale
 const disruptionAlertV2SchemaPath = new URL('../contracts/disruption-alert-registration-v2.schema.json', import.meta.url);
 const disruptionAlertV2FixturePath = new URL('../contracts/fixtures/disruption-alert-registration-v2.json', import.meta.url);
 const homePagePath = new URL('../index.html', import.meta.url);
+const privacyPagePath = new URL('../privacy.html', import.meta.url);
 const supportPagePath = new URL('../support.html', import.meta.url);
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
@@ -102,6 +103,7 @@ test('website source describes the selected v1.2 Overground surfaces truthfully'
   const mobileApplication = structuredData['@graph'].find((item) => item['@type'] === 'MobileApplication');
 
   assert.match(html, /Elizabeth line/);
+  assert.match(html, /Liberty, Lioness, Mildmay, Suffragette, Weaver and Windrush/);
   assert.match(html, /saved station and one of its real platforms/i);
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
@@ -117,6 +119,9 @@ test('website source describes the selected v1.2 Overground surfaces truthfully'
   assert.match(mobileApplication.operatingSystem, /watchOS 11\.5 or later/);
   assert.match(mobileApplication.operatingSystem, /visionOS 26\.0 or later/);
   assert.ok(mobileApplication.featureList.includes('Elizabeth line stations, arrivals and status'));
+  assert.ok(mobileApplication.featureList.includes(
+    'Liberty, Lioness, Mildmay, Suffragette, Weaver and Windrush London Overground stations, arrivals and status',
+  ));
 
   for (const asset of v11ProductAssets) {
     assert.match(html, new RegExp(`/assets/product/${asset}\\.png`));
@@ -138,6 +143,14 @@ test('v1.1 support explains platform widget configuration and offline state', as
   assert.match(html, /any Underground or named London Overground lines/i);
   assert.match(html, /assets\/tubeboard-og-v1-1-20260825\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
+});
+
+test('privacy scope describes the supported London rail service without changing data-use claims', async () => {
+  const html = await fs.readFile(privacyPagePath, 'utf8');
+
+  assert.match(html, /intended for supported London rail departure information/i);
+  assert.doesNotMatch(html, /intended for London Underground information/i);
+  assert.match(html, /does not knowingly collect children’s information/i);
 });
 
 test('muted website copy keeps WCAG AA contrast on the softest section background', async () => {
