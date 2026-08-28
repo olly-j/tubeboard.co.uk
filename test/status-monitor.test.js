@@ -5,13 +5,16 @@ import {
   STATUS_SCHEMA_VERSION,
   STATUS_LINES,
   STATUS_REQUEST_BUDGET_PER_CYCLE,
+  STATUS_V1_REQUEST_BUDGET_PER_CYCLE,
   TubeBoardStatusMonitor,
   isExpectedServiceWindow,
   loadStatusConfig,
-  renderStatusPage
+  renderStatusPage,
+  statusSnapshotForVersion
 } from '../server/status-monitor.js';
 
-const schemaPath = new URL('../contracts/tubeboard-status-v1.schema.json', import.meta.url);
+const v1SchemaPath = new URL('../contracts/tubeboard-status-v1.schema.json', import.meta.url);
+const v2SchemaPath = new URL('../contracts/tubeboard-status-v2.schema.json', import.meta.url);
 
 const midday = new Date('2026-08-10T12:00:00Z');
 
@@ -25,18 +28,42 @@ test('starts unknown without making a live request', () => {
   assert.equal(snapshot.lines.length, 17);
 });
 
-test('versioned public status schema matches generated response fields', async () => {
-  const schema = JSON.parse(await fs.readFile(schemaPath, 'utf8'));
+test('versioned public status schemas preserve v1 and add the 17-line v2 response', async () => {
+  const v1Schema = JSON.parse(await fs.readFile(v1SchemaPath, 'utf8'));
+  const v2Schema = JSON.parse(await fs.readFile(v2SchemaPath, 'utf8'));
   const snapshot = makeMonitor().getSnapshot();
+  const v1Snapshot = statusSnapshotForVersion(snapshot, 1);
+  const v2Snapshot = statusSnapshotForVersion(snapshot, 2);
 
-  assert.equal(schema['x-tubeboard-contract-version'], STATUS_SCHEMA_VERSION);
-  assert.equal(snapshot.schemaVersion, STATUS_SCHEMA_VERSION);
-  assert.deepEqual(Object.keys(snapshot).sort(), schema.required.sort());
-  assert.deepEqual(Object.keys(snapshot.checker).sort(), schema.properties.checker.required.sort());
-  assert.equal(snapshot.lines.length, 17);
-  assert.deepEqual(Object.keys(snapshot.lines[0]).sort(), schema.$defs.line.required.sort());
-  assert.deepEqual(Object.keys(snapshot.lines[0].official).sort(), schema.$defs.official.required.sort());
-  assert.deepEqual(Object.keys(snapshot.lines[0].tubeBoard).sort(), schema.$defs.tubeBoard.required.sort());
+  assert.equal(v1Schema['x-tubeboard-contract-version'], 1);
+  assert.equal(v1Snapshot.schemaVersion, 1);
+  assert.equal(v1Snapshot.lines.length, 11);
+  assert.equal(v1Snapshot.checker.requestBudgetPerCycle, 23);
+  assert.equal(STATUS_V1_REQUEST_BUDGET_PER_CYCLE, 23);
+  assert.deepEqual(v1Snapshot.lines.map((line) => line.id), STATUS_LINES.slice(0, 11).map((line) => line.id));
+  assert.deepEqual(Object.keys(v1Snapshot).sort(), v1Schema.required.sort());
+
+  assert.equal(v2Schema['x-tubeboard-contract-version'], STATUS_SCHEMA_VERSION);
+  assert.equal(v2Snapshot.schemaVersion, STATUS_SCHEMA_VERSION);
+  assert.deepEqual(Object.keys(v2Snapshot).sort(), v2Schema.required.sort());
+  assert.deepEqual(Object.keys(v2Snapshot.checker).sort(), v2Schema.properties.checker.required.sort());
+  assert.equal(v2Snapshot.lines.length, 17);
+  assert.deepEqual(Object.keys(v2Snapshot.lines[0]).sort(), v2Schema.$defs.line.required.sort());
+  assert.deepEqual(Object.keys(v2Snapshot.lines[0].official).sort(), v2Schema.$defs.official.required.sort());
+  assert.deepEqual(Object.keys(v2Snapshot.lines[0].tubeBoard).sort(), v2Schema.$defs.tubeBoard.required.sort());
+});
+
+test('v1 projection recomputes top-level truth from Underground lines only', () => {
+  const snapshot = makeMonitor().getSnapshot();
+  snapshot.state = 'degraded';
+  snapshot.summary = 'One or more supported lines may be unavailable.';
+  snapshot.lines.find((line) => line.id === 'windrush').tubeBoard.state = 'degraded';
+
+  const v1Snapshot = statusSnapshotForVersion(snapshot, 1);
+
+  assert.equal(v1Snapshot.state, 'unknown');
+  assert.equal(v1Snapshot.summary, 'TubeBoard does not currently have enough fresh evidence to classify every line.');
+  assert.ok(!v1Snapshot.lines.some((line) => line.id === 'windrush'));
 });
 
 test('one bounded cycle reports operational data separately from TfL status', async () => {
@@ -164,7 +191,7 @@ test('a current snapshot becomes unknown after fifteen minutes', async () => {
 
   current = new Date(midday.getTime() + 16 * 60 * 1000);
   const stale = monitor.getSnapshot();
-  const schema = JSON.parse(await fs.readFile(schemaPath, 'utf8'));
+  const schema = JSON.parse(await fs.readFile(v2SchemaPath, 'utf8'));
   assert.equal(stale.state, 'unknown');
   assert.equal(stale.checker.state, 'stale');
   assert.deepEqual(Object.keys(stale).sort(), schema.required.sort());

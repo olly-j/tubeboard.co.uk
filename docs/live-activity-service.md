@@ -28,6 +28,7 @@ The service listens on `http://localhost:4173` locally by default. On Fly.io, `f
 - `GET /healthz`
 - `GET /status`
 - `GET /api/status/v1`
+- `GET /api/status/v2`
 
 The token endpoint stores records in `data/live-activities.json` locally and
 `/data/live-activities.json` on Fly.io. Push tokens are never returned by the
@@ -86,9 +87,10 @@ dependencies, fixtures and certificates are not public routes.
 - deployed source revision.
 
 `GET /status` is a server-rendered, no-sign-in support page. Its versioned JSON
-source, `GET /api/status/v1`, follows
-`contracts/tubeboard-status-v1.schema.json` and separates official TfL disruption from
-TubeBoard representative arrival-data health. The monitor runs only when
+sources preserve v1's 11-line/23-request projection at `GET /api/status/v1`
+and add the 17-line/35-request response at `GET /api/status/v2`; each follows
+its matching `contracts/tubeboard-status-vN.schema.json` and separates official
+TfL disruption from TubeBoard representative arrival-data health. The monitor runs only when
 `TUBEBOARD_STATUS_MONITOR_ENABLED=true`; Fly uses a five-minute cycle, at most
 35 sequential TfL requests per cycle (one combined status request plus two
 representative arrival probes for each of 17 lines), three unhealthy windows
@@ -99,8 +101,8 @@ Any TfL `429` response aborts the remaining station sweep immediately and
 honours the bounded retry delay so the shared app key is not amplified.
 When TfL returns more than one valid official status for a line, a disruption
 takes precedence over Good Service. Once a snapshot is stale, both official
-and TubeBoard per-line truth become unknown, and the response retains exactly
-the published status schema v1 shape.
+and TubeBoard per-line truth become unknown, and each response retains exactly
+its published versioned schema shape.
 No raw TfL payload, status-page query, station, device or user data is stored.
 Set `TUBEBOARD_STATUS_NOTICE` to a bounded public incident message or disable
 the monitor to return checker state to unknown without affecting Live

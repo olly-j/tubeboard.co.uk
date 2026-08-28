@@ -1,4 +1,5 @@
-export const STATUS_SCHEMA_VERSION = 1;
+export const STATUS_SCHEMA_VERSION = 2;
+export const STATUS_V1_SCHEMA_VERSION = 1;
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_STALE_AFTER_MS = 15 * 60 * 1000;
 const DEFAULT_REQUEST_SPACING_MS = 2_000;
@@ -34,6 +35,31 @@ export const STATUS_REQUEST_BUDGET_PER_CYCLE = 1 + STATUS_LINES.reduce(
   (total, line) => total + line.stations.length,
   0
 );
+export const STATUS_V1_REQUEST_BUDGET_PER_CYCLE = 23;
+const STATUS_V1_LINE_IDS = new Set(STATUS_LINES.slice(0, 11).map((line) => line.id));
+
+export function statusSnapshotForVersion(snapshot, version) {
+  if (version === STATUS_SCHEMA_VERSION) {
+    return structuredClone(snapshot);
+  }
+  if (version !== STATUS_V1_SCHEMA_VERSION) {
+    throw new RangeError(`Unsupported status contract version ${version}`);
+  }
+
+  const lines = snapshot.lines.filter((line) => STATUS_V1_LINE_IDS.has(line.id));
+  const state = overallState(lines);
+  return {
+    ...structuredClone(snapshot),
+    schemaVersion: STATUS_V1_SCHEMA_VERSION,
+    state,
+    summary: overallSummary(state),
+    checker: {
+      ...structuredClone(snapshot.checker),
+      requestBudgetPerCycle: STATUS_V1_REQUEST_BUDGET_PER_CYCLE
+    },
+    lines
+  };
+}
 
 export function loadStatusConfig(env = process.env) {
   return {

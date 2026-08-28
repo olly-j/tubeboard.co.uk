@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://tubeboard.co.uk/contracts/tubeboard-status-v1.schema.json",
-  "title": "TubeBoard public data status v1",
+  "$id": "https://tubeboard.co.uk/contracts/tubeboard-status-v2.schema.json",
+  "title": "TubeBoard public data status v2",
   "type": "object",
   "additionalProperties": false,
-  "x-tubeboard-contract-version": 1,
+  "x-tubeboard-contract-version": 2,
   "required": [
     "schemaVersion",
     "state",
@@ -16,7 +16,7 @@
     "lines"
   ],
   "properties": {
-    "schemaVersion": {"const": 1},
+    "schemaVersion": {"const": 2},
     "state": {"enum": ["operational", "degraded", "unknown"]},
     "summary": {"type": "string", "minLength": 1, "maxLength": 500},
     "checkedAt": {"type": ["string", "null"], "format": "date-time"},
@@ -29,14 +29,14 @@
       "properties": {
         "state": {"enum": ["starting", "current", "stale", "disabled"]},
         "intervalSeconds": {"type": "integer", "minimum": 300, "maximum": 3600},
-        "requestBudgetPerCycle": {"type": "integer", "minimum": 0, "maximum": 23},
+        "requestBudgetPerCycle": {"type": "integer", "minimum": 0, "maximum": 35},
         "scheduledFullSweep": {"const": false}
       }
     },
     "lines": {
       "type": "array",
-      "minItems": 11,
-      "maxItems": 11,
+      "minItems": 17,
+      "maxItems": 17,
       "items": {"$ref": "#/$defs/line"}
     }
   },
@@ -79,7 +79,13 @@
             "northern",
             "piccadilly",
             "victoria",
-            "waterloo-city"
+            "waterloo-city",
+            "liberty",
+            "lioness",
+            "mildmay",
+            "suffragette",
+            "weaver",
+            "windrush"
           ]
         },
         "name": {"type": "string", "minLength": 1, "maxLength": 80},
