@@ -337,19 +337,24 @@ export class LiveActivityStore {
 }
 
 export class TokenRateLimiter {
-  constructor({ limit, windowMs, keySecret = crypto.randomBytes(32) }) {
+  constructor({
+    limit,
+    windowMs,
+    keySecret = crypto.randomBytes(32),
+    now = Date.now,
+    schedule = setTimeout
+  }) {
     this.limit = limit;
     this.windowMs = windowMs;
     this.keySecret = Buffer.from(keySecret);
+    this.now = now;
+    this.schedule = schedule;
     this.buckets = new Map();
-    this.nextSweepAt = 0;
+    this.sweepTimer = null;
   }
 
-  check(key, now = Date.now()) {
-    if (now >= this.nextSweepAt) {
-      this.sweepExpired(now);
-      this.nextSweepAt = now + this.windowMs;
-    }
+  check(key, now = this.now()) {
+    this.sweepExpired(now);
 
     const bucketKey = crypto
       .createHmac('sha256', this.keySecret)
@@ -359,6 +364,7 @@ export class TokenRateLimiter {
     const fresh = bucket.filter((timestamp) => now - timestamp < this.windowMs);
     fresh.push(now);
     this.buckets.set(bucketKey, fresh);
+    this.scheduleExpirySweep(now);
     return fresh.length <= this.limit;
   }
 
@@ -371,6 +377,27 @@ export class TokenRateLimiter {
         this.buckets.set(bucketKey, fresh);
       }
     }
+  }
+
+  scheduleExpirySweep(now) {
+    if (this.sweepTimer !== null || this.buckets.size === 0) {
+      return;
+    }
+
+    let nextExpiryAt = Number.POSITIVE_INFINITY;
+    for (const timestamps of this.buckets.values()) {
+      for (const timestamp of timestamps) {
+        nextExpiryAt = Math.min(nextExpiryAt, timestamp + this.windowMs);
+      }
+    }
+    const delay = Math.max(0, nextExpiryAt - now);
+    this.sweepTimer = this.schedule(() => {
+      this.sweepTimer = null;
+      const sweepNow = this.now();
+      this.sweepExpired(sweepNow);
+      this.scheduleExpirySweep(sweepNow);
+    }, delay);
+    this.sweepTimer?.unref?.();
   }
 }
 

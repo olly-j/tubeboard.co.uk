@@ -41,22 +41,36 @@ const platformTokenPayload = {
 };
 
 test('rate limits with pseudonymous short-lived buckets', () => {
+  let currentTime = 0;
+  const scheduledSweeps = [];
   const limiter = new TokenRateLimiter({
     limit: 2,
     windowMs: 1_000,
-    keySecret: Buffer.alloc(32, 7)
+    keySecret: Buffer.alloc(32, 7),
+    now: () => currentTime,
+    schedule: (callback, delay) => {
+      scheduledSweeps.push({ callback, delay });
+      return { unref() {} };
+    }
   });
   const rawKey = `${validTokenPayload.installID}:203.0.113.42`;
 
-  assert.equal(limiter.check(rawKey, 0), true);
-  assert.equal(limiter.check(rawKey, 100), true);
-  assert.equal(limiter.check(rawKey, 200), false);
+  assert.equal(limiter.check(rawKey), true);
+  currentTime = 100;
+  assert.equal(limiter.check(rawKey), true);
+  currentTime = 200;
+  assert.equal(limiter.check(rawKey), false);
   assert.equal(limiter.buckets.size, 1);
   assert.equal([...limiter.buckets.keys()].some((key) => key.includes(rawKey)), false);
+  assert.equal(scheduledSweeps[0].delay, 1_000);
 
-  assert.equal(limiter.check('different-install:198.51.100.7', 1_201), true);
+  currentTime = 1_201;
+  scheduledSweeps.shift().callback();
+  assert.equal(limiter.buckets.size, 0);
+  assert.equal(limiter.check('different-install:198.51.100.7'), true);
   assert.equal(limiter.buckets.size, 1);
-  assert.equal(limiter.check(rawKey, 1_202), true);
+  currentTime = 1_202;
+  assert.equal(limiter.check(rawKey), true);
 });
 
 test('validates token registration payloads', () => {
