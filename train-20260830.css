@@ -15,6 +15,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body {
   margin: 0;
   background: var(--paper);
@@ -37,7 +38,7 @@ a:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
 .train-header,
 .train-footer,
 .train-main {
-  width: min(100% - 2rem, 72rem);
+  width: min(100% - 2rem, 48rem);
   margin-inline: auto;
 }
 .train-header { padding-block: 1.25rem; }
@@ -49,14 +50,9 @@ a:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
   text-decoration: none;
 }
 .train-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(17rem, .85fr);
-  gap: clamp(1rem, 4vw, 3rem);
-  align-items: stretch;
   padding-block: clamp(2rem, 7vw, 6rem);
 }
-.train-card,
-.train-explainer {
+.train-card {
   border: 1px solid #d9d6cf;
   border-radius: 1.5rem;
   background: var(--panel);
@@ -78,21 +74,14 @@ h2 {
   line-height: 1.05;
   text-wrap: balance;
 }
-h1 { font-size: clamp(2.35rem, 7vw, 5.4rem); }
+h1 { max-width: 13ch; font-size: clamp(2.2rem, 7vw, 3.8rem); }
 h2 { font-size: clamp(1.8rem, 4vw, 3.1rem); }
-.train-symbol {
-  width: 4.4rem;
-  height: 4.4rem;
+.train-app-icon {
+  display: block;
+  width: 5.5rem;
+  height: 5.5rem;
   margin-bottom: 1.4rem;
-  border: .55rem solid #df251b;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-}
-.train-symbol span {
-  width: 5.6rem;
-  height: 1.1rem;
-  background: #0019a8;
+  border-radius: 1.25rem;
 }
 .train-status {
   margin: 1.5rem 0 .5rem;
@@ -100,9 +89,17 @@ h2 { font-size: clamp(1.8rem, 4vw, 3.1rem); }
   font-weight: 750;
 }
 .train-detail,
-.train-explainer p,
+.train-device-detail,
+.train-privacy,
 .train-footer { color: var(--muted); }
 .train-detail { max-width: 42rem; }
+.train-device-detail { margin: 1.25rem 0 0; }
+.train-privacy {
+  margin: 1.5rem 0 0;
+  padding-top: 1.25rem;
+  border-top: 1px solid #e5e2dc;
+  font-size: .92rem;
+}
 .train-actions {
   display: flex;
   flex-wrap: wrap;
@@ -123,7 +120,6 @@ h2 { font-size: clamp(1.8rem, 4vw, 3.1rem); }
 }
 .text-link { font-weight: 700; text-underline-offset: .2em; }
 .train-note { padding: 1rem; background: #fff4d6; border-radius: .8rem; }
-.train-explainer p:last-child { margin-bottom: 0; }
 code { overflow-wrap: anywhere; }
 .train-footer {
   border-top: 1px solid #d9d6cf;
@@ -133,7 +129,7 @@ code { overflow-wrap: anywhere; }
 .train-footer nav { display: flex; flex-wrap: wrap; gap: 1.2rem; }
 
 @media (max-width: 48rem) {
-  .train-main { grid-template-columns: 1fr; padding-block: 1rem 3rem; }
+  .train-main { padding-block: 1rem 3rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {
