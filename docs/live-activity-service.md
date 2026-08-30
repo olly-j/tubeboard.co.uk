@@ -56,6 +56,16 @@ Live Activity identifier. Its line allowlist includes the 11 Underground and
 six named London Overground lines. The pre-existing Elizabeth registration gap
 is unchanged and remains owned by the app's separate contract-correction work.
 
+The public `/train/v1` uninstalled-recipient fallback validates the existing
+version 1 and version 2 shared-train fragments entirely in the browser; it
+rejects unknown versions and fields and never sends the fragment to the
+service. Its App Store handoff is shown for iPhone, conventional iPad user
+agents, and iPadOS Safari's desktop user agent only when touch capability
+confirms an iPad. Non-touch desktop browsers retain the browser-only message.
+When JavaScript is unavailable, the static page cannot validate the fragment
+but provides a clearly scoped iPhone/iPad App Store next step. No cookie,
+analytics, account, recipient-tracking or server-side journey state is added.
+
 When an app-selected duration elapses, the worker completes the existing
 pause-then-end transition before generic maximum-lifetime expiry, including
 when the ten-minute pause grace crosses the eight-hour ceiling. Existing APNs
