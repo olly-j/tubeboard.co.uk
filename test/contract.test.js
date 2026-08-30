@@ -7,7 +7,7 @@ import {
 } from '../server/disruption-alerts.js';
 import { validateTokenPayload } from '../server/live-activity.js';
 import { LIVE_ACTIVITY_CONTRACT_VERSION } from '../server/version.js';
-import { decodeTrainSelection } from '../train-20260828.js';
+import { decodeTrainSelection } from '../train-20260830.js';
 
 const schemaPath = new URL('../contracts/live-activity-registration-v1.schema.json', import.meta.url);
 const fixturePath = new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url);
@@ -19,6 +19,7 @@ const homePagePath = new URL('../index.html', import.meta.url);
 const privacyPagePath = new URL('../privacy.html', import.meta.url);
 const supportPagePath = new URL('../support.html', import.meta.url);
 const trainPagePath = new URL('../train-v1.html', import.meta.url);
+const trainScriptPath = new URL('../train-20260830.js', import.meta.url);
 const aasaPath = new URL('../.well-known/apple-app-site-association', import.meta.url);
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
@@ -158,6 +159,7 @@ test('privacy scope describes the supported London rail service without changing
 test('Follow a Train universal-link surface is app-associated, private by construction and honest when the app is absent', async () => {
   const association = JSON.parse(await fs.readFile(aasaPath, 'utf8'));
   const html = await fs.readFile(trainPagePath, 'utf8');
+  const script = await fs.readFile(trainScriptPath, 'utf8');
 
   assert.deepEqual(association.applinks.details.map((detail) => detail.appIDs), [
     ['5B8YD7QXWZ.OllyJ.My-Train-Times']
@@ -166,9 +168,14 @@ test('Follow a Train universal-link surface is app-associated, private by constr
     association.applinks.details.flatMap((detail) => detail.components.map((component) => component['/'])),
     ['/train/v1']
   );
-  assert.match(html, /short-lived shared train/i);
-  assert.match(html, /do not send that fragment to the TubeBoard server/i);
+  assert.match(html, /Someone shared their train with you/i);
+  assert.match(html, /are not sent to TubeBoard’s server/i);
+  assert.match(html, /tubeboard-icon-v3-180\.png/);
+  assert.doesNotMatch(html, /invitation to re-check/i);
   assert.match(html, new RegExp(appStoreURL.replaceAll('.', '\\.')));
+  assert.match(html, /id="train-app-store-link"[^>]*hidden/);
+  assert.match(script, /\/iPhone\/i/);
+  assert.match(script, /Browser tracking is not available yet/);
   assert.match(html, /<noscript>/);
   assert.doesNotMatch(html, /analytics|tracking pixel|account sign-in/i);
 });
@@ -199,8 +206,34 @@ test('Follow a Train fallback validates the public payload deterministically and
     state: 'expired',
     expiresAtSeconds: nowSeconds + 600
   });
+  const versionTwo = {
+    ...selection,
+    version: 2,
+    journeyAnchorStationID: '940GZZLULVT'
+  };
+  assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify(versionTwo)).toString('base64url'), nowSeconds),
+    {
+      state: 'valid',
+      lineID: 'victoria',
+      lineName: 'Victoria',
+      expiresAtSeconds: nowSeconds + 600
+    }
+  );
   assert.deepEqual(
     decodeTrainSelection(Buffer.from(JSON.stringify({ ...selection, version: 2 })).toString('base64url'), nowSeconds),
+    { state: 'invalid' }
+  );
+  assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify({ ...selection, journeyAnchorStationID: '940GZZLULVT' })).toString('base64url'), nowSeconds),
+    { state: 'invalid' }
+  );
+  assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify({ ...versionTwo, unexpected: true })).toString('base64url'), nowSeconds),
+    { state: 'invalid' }
+  );
+  assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify({ ...versionTwo, vehicleID: '000' })).toString('base64url'), nowSeconds),
     { state: 'invalid' }
   );
   assert.deepEqual(

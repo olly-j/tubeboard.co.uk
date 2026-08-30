@@ -28,8 +28,8 @@ required=(
   server/status-monitor.js
   .well-known/apple-app-site-association
   train-v1.html
-  train-20260828.css
-  train-20260828.js
+  train-20260830.css
+  train-20260830.js
 )
 
 for path in "${required[@]}"; do
