@@ -155,7 +155,7 @@ export function appStoreFallbackPresentation(navigatorLike = {}) {
     shouldShowAppStoreCTA,
     deviceDetail: shouldShowAppStoreCTA
       ? 'Don\'t have TubeBoard yet? Download it on your iPhone or iPad, then open this shared link again.'
-      : 'This shared live view currently opens in TubeBoard on iPhone. Browser tracking is not available yet.'
+      : 'This shared live view currently opens in TubeBoard on iPhone or iPad. Browser tracking is not available yet.'
   };
 }
 

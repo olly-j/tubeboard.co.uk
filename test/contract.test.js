@@ -178,6 +178,7 @@ test('Follow a Train universal-link surface is app-associated, private by constr
   assert.doesNotMatch(html, /invitation to re-check/i);
   assert.match(html, new RegExp(appStoreURL.replaceAll('.', '\\.')));
   assert.match(html, /id="train-app-store-link"[^>]*hidden/);
+  assert.match(html, /shared live view opens in TubeBoard on iPhone or iPad/i);
   assert.match(script, /iPhone\|iPad/i);
   assert.match(script, /maxTouchPoints/);
   assert.match(script, /Browser tracking is not available yet/);
@@ -227,7 +228,7 @@ test('Follow a Train fallback keeps the App Store action hidden on non-touch des
   assert.equal(presentation.shouldShowAppStoreCTA, false);
   assert.equal(
     presentation.deviceDetail,
-    'This shared live view currently opens in TubeBoard on iPhone. Browser tracking is not available yet.'
+    'This shared live view currently opens in TubeBoard on iPhone or iPad. Browser tracking is not available yet.'
   );
   const { documentLike, elements } = trainFallbackDocument();
   renderTrainFallback(
