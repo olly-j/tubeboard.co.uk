@@ -19,7 +19,7 @@ COPY assets/fonts ./assets/fonts
 COPY assets/product ./assets/product
 COPY assets/tubeboard-icon-v3-32.png assets/tubeboard-icon-v3-180.png assets/tubeboard-icon-v3-512.png assets/tubeboard-og-20260724.png assets/tubeboard-og-v1-1-20260825.png ./assets/
 COPY .well-known ./.well-known
-COPY index.html privacy.html support.html train-v1.html 404.html styles-20260820.css site-20260724.js train-20260830.css train-20260830.js robots.txt sitemap.xml .nojekyll ./
+COPY index.html privacy.html support.html train-v1.html 404.html styles-20260820.css site-20260724.js train-20260830-v2.css train-20260830-v2.js robots.txt sitemap.xml .nojekyll ./
 
 EXPOSE 8080
 

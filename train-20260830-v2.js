@@ -136,18 +136,39 @@ function validTimestamp(value) {
     && !Number.isNaN(Date.parse(value));
 }
 
-if (typeof document !== 'undefined') {
-  const status = document.getElementById('train-status');
-  const detail = document.getElementById('train-detail');
-  const deviceDetail = document.getElementById('train-device-detail');
-  const appStoreLink = document.getElementById('train-app-store-link');
-  const result = decodeTrainSelection(window.location.hash.slice(1));
-  const isIPhone = /iPhone/i.test(window.navigator.userAgent);
+export function appStoreFallbackPresentation(navigatorLike = {}) {
+  const userAgent = typeof navigatorLike.userAgent === 'string'
+    ? navigatorLike.userAgent
+    : '';
+  const platform = typeof navigatorLike.platform === 'string'
+    ? navigatorLike.platform
+    : '';
+  const maximumTouchPoints = Number.isFinite(navigatorLike.maxTouchPoints)
+    ? navigatorLike.maxTouchPoints
+    : 0;
+  const isConventionalIOSDevice = /iPhone|iPad/i.test(userAgent);
+  const isDesktopModeIPad = maximumTouchPoints > 1
+    && (/Macintosh/i.test(userAgent) || /MacIntel/i.test(platform));
+  const shouldShowAppStoreCTA = isConventionalIOSDevice || isDesktopModeIPad;
 
-  appStoreLink.hidden = !isIPhone;
-  deviceDetail.textContent = isIPhone
-    ? 'Don\'t have TubeBoard yet? Download it, then open this shared link again.'
-    : 'This shared live view currently opens in TubeBoard on iPhone. Browser tracking is not available yet.';
+  return {
+    shouldShowAppStoreCTA,
+    deviceDetail: shouldShowAppStoreCTA
+      ? 'Don\'t have TubeBoard yet? Download it on your iPhone or iPad, then open this shared link again.'
+      : 'This shared live view currently opens in TubeBoard on iPhone. Browser tracking is not available yet.'
+  };
+}
+
+export function renderTrainFallback(documentLike, locationLike, navigatorLike, nowSeconds) {
+  const status = documentLike.getElementById('train-status');
+  const detail = documentLike.getElementById('train-detail');
+  const deviceDetail = documentLike.getElementById('train-device-detail');
+  const appStoreLink = documentLike.getElementById('train-app-store-link');
+  const result = decodeTrainSelection(locationLike.hash.slice(1), nowSeconds);
+  const fallbackPresentation = appStoreFallbackPresentation(navigatorLike);
+
+  appStoreLink.hidden = !fallbackPresentation.shouldShowAppStoreCTA;
+  deviceDetail.textContent = fallbackPresentation.deviceDetail;
 
   if (result.state === 'valid') {
     status.textContent = `Someone shared a ${result.lineName} line train with you.`;
@@ -159,4 +180,8 @@ if (typeof document !== 'undefined') {
     status.textContent = 'This shared train link cannot be opened.';
     detail.textContent = 'Ask the sender to share the train again from a current TubeBoard departure board.';
   }
+}
+
+if (typeof document !== 'undefined') {
+  renderTrainFallback(document, window.location, window.navigator);
 }

@@ -7,7 +7,11 @@ import {
 } from '../server/disruption-alerts.js';
 import { validateTokenPayload } from '../server/live-activity.js';
 import { LIVE_ACTIVITY_CONTRACT_VERSION } from '../server/version.js';
-import { decodeTrainSelection } from '../train-20260830.js';
+import {
+  appStoreFallbackPresentation,
+  decodeTrainSelection,
+  renderTrainFallback
+} from '../train-20260830-v2.js';
 
 const schemaPath = new URL('../contracts/live-activity-registration-v1.schema.json', import.meta.url);
 const fixturePath = new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url);
@@ -19,7 +23,7 @@ const homePagePath = new URL('../index.html', import.meta.url);
 const privacyPagePath = new URL('../privacy.html', import.meta.url);
 const supportPagePath = new URL('../support.html', import.meta.url);
 const trainPagePath = new URL('../train-v1.html', import.meta.url);
-const trainScriptPath = new URL('../train-20260830.js', import.meta.url);
+const trainScriptPath = new URL('../train-20260830-v2.js', import.meta.url);
 const aasaPath = new URL('../.well-known/apple-app-site-association', import.meta.url);
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
@@ -174,10 +178,83 @@ test('Follow a Train universal-link surface is app-associated, private by constr
   assert.doesNotMatch(html, /invitation to re-check/i);
   assert.match(html, new RegExp(appStoreURL.replaceAll('.', '\\.')));
   assert.match(html, /id="train-app-store-link"[^>]*hidden/);
-  assert.match(script, /\/iPhone\/i/);
+  assert.match(script, /iPhone\|iPad/i);
+  assert.match(script, /maxTouchPoints/);
   assert.match(script, /Browser tracking is not available yet/);
   assert.match(html, /<noscript>/);
   assert.doesNotMatch(html, /analytics|tracking pixel|account sign-in/i);
+});
+
+test('Follow a Train fallback offers the App Store on iPhone and both iPad user-agent modes', () => {
+  const devices = [
+    {
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+      platform: 'iPhone',
+      maxTouchPoints: 5
+    },
+    {
+      userAgent: 'Mozilla/5.0 (iPad; CPU OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+      platform: 'iPad',
+      maxTouchPoints: 5
+    },
+    {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15',
+      platform: 'MacIntel',
+      maxTouchPoints: 5
+    }
+  ];
+
+  for (const device of devices) {
+    const presentation = appStoreFallbackPresentation(device);
+    const { documentLike, elements } = trainFallbackDocument();
+    renderTrainFallback(documentLike, { hash: '#invalid' }, device, 1_787_925_000);
+
+    assert.equal(presentation.shouldShowAppStoreCTA, true);
+    assert.match(presentation.deviceDetail, /iPhone or iPad/i);
+    assert.match(presentation.deviceDetail, /open this shared link again/i);
+    assert.equal(elements.appStoreLink.hidden, false);
+    assert.equal(elements.deviceDetail.textContent, presentation.deviceDetail);
+  }
+});
+
+test('Follow a Train fallback keeps the App Store action hidden on non-touch desktop', () => {
+  const presentation = appStoreFallbackPresentation({
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15',
+    platform: 'MacIntel',
+    maxTouchPoints: 0
+  });
+
+  assert.equal(presentation.shouldShowAppStoreCTA, false);
+  assert.equal(
+    presentation.deviceDetail,
+    'This shared live view currently opens in TubeBoard on iPhone. Browser tracking is not available yet.'
+  );
+  const { documentLike, elements } = trainFallbackDocument();
+  renderTrainFallback(
+    documentLike,
+    { hash: '#invalid' },
+    {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15',
+      platform: 'MacIntel',
+      maxTouchPoints: 0
+    },
+    1_787_925_000
+  );
+  assert.equal(elements.appStoreLink.hidden, true);
+  assert.equal(elements.deviceDetail.textContent, presentation.deviceDetail);
+});
+
+test('Follow a Train fallback gives JavaScript-disabled iPhone and iPad users an App Store next step', async () => {
+  const html = await fs.readFile(trainPagePath, 'utf8');
+  const noscript = html.match(/<noscript>([\s\S]*?)<\/noscript>/i)?.[1];
+
+  assert.ok(noscript);
+  assert.match(noscript, /JavaScript is off/i);
+  assert.match(noscript, /If you’re on iPhone or iPad/i);
+  assert.match(noscript, /open this shared link again/i);
+  assert.match(noscript, new RegExp(appStoreURL.replaceAll('.', '\\.')));
+  assert.match(noscript, />Get TubeBoard on the App Store<\/a>/);
+  assert.doesNotMatch(noscript, /hidden/);
 });
 
 test('Follow a Train fallback validates the public payload deterministically and fails closed', () => {
@@ -233,6 +310,10 @@ test('Follow a Train fallback validates the public payload deterministically and
     { state: 'invalid' }
   );
   assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify({ ...versionTwo, version: 3 })).toString('base64url'), nowSeconds),
+    { state: 'invalid' }
+  );
+  assert.deepEqual(
     decodeTrainSelection(Buffer.from(JSON.stringify({ ...versionTwo, vehicleID: '000' })).toString('base64url'), nowSeconds),
     { state: 'invalid' }
   );
@@ -264,4 +345,27 @@ function contrastRatio(first, second) {
   }).sort((left, right) => right - left);
 
   return (luminances[0] + 0.05) / (luminances[1] + 0.05);
+}
+
+function trainFallbackDocument() {
+  const elements = {
+    status: { textContent: '' },
+    detail: { textContent: '' },
+    deviceDetail: { textContent: '' },
+    appStoreLink: { hidden: true }
+  };
+  const elementsByID = new Map([
+    ['train-status', elements.status],
+    ['train-detail', elements.detail],
+    ['train-device-detail', elements.deviceDetail],
+    ['train-app-store-link', elements.appStoreLink]
+  ]);
+  return {
+    documentLike: {
+      getElementById(identifier) {
+        return elementsByID.get(identifier);
+      }
+    },
+    elements
+  };
 }
