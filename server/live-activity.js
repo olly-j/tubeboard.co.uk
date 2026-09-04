@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import http2 from 'node:http2';
 import path from 'node:path';
+import { TransactionalJsonStore } from './transactional-json-store.js';
 
 export const TUBE_LINES = new Map([
   ['bakerloo', 'Bakerloo'],
@@ -62,139 +63,109 @@ export function loadConfig(env = process.env) {
   };
 }
 
-export class LiveActivityStore {
+export class LiveActivityStore extends TransactionalJsonStore {
   constructor(filePath) {
-    this.filePath = filePath;
-    this.state = { records: [] };
-    this.loaded = false;
-    this.writeQueue = Promise.resolve();
-  }
-
-  async load() {
-    if (this.loaded) {
-      return;
-    }
-
-    try {
-      const raw = await fs.readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw);
-      this.state.records = Array.isArray(parsed.records) ? parsed.records : [];
-    } catch (error) {
-      if (error.code !== 'ENOENT') {
-        throw error;
-      }
-    }
-
-    this.loaded = true;
-  }
-
-  async save() {
-    await this.load();
-    this.writeQueue = this.writeQueue.then(async () => {
-      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      const tmpFile = `${this.filePath}.${process.pid}.tmp`;
-      await fs.writeFile(tmpFile, `${JSON.stringify(this.state, null, 2)}\n`);
-      await fs.rename(tmpFile, this.filePath);
-    });
-    return this.writeQueue;
+    super(filePath, { records: [] }, (parsed) => ({
+      records: Array.isArray(parsed.records) ? parsed.records : []
+    }));
   }
 
   async upsertToken(payload, now = new Date()) {
-    await this.load();
-    const nowIso = now.toISOString();
-    const matchIndex = this.state.records.findIndex((record) => {
-      return record.environment === payload.environment
-        && record.activityID === payload.activityID;
+    return this.transaction((state) => {
+      const nowIso = now.toISOString();
+      const matchIndex = state.records.findIndex((record) => {
+        return record.environment === payload.environment
+          && record.activityID === payload.activityID;
+      });
+
+      const previous = matchIndex >= 0 ? state.records[matchIndex] : {};
+      const isSameActivity = previous.activityID === payload.activityID;
+      const record = {
+        ...previous,
+        installID: payload.installID,
+        activityID: payload.activityID,
+        stationID: payload.stationID,
+        lineID: payload.lineID,
+        selectionMode: payload.selectionMode,
+        platformID: payload.platformID,
+        platformHeading: payload.platformHeading,
+        platformLabel: payload.platformLabel,
+        platformDirection: payload.platformDirection,
+        activityStartedAt: payload.activityStartedAt,
+        activityEndsAt: payload.activityEndsAt,
+        pushTokenHex: payload.pushTokenHex,
+        tokenUpdatedAt: payload.tokenUpdatedAt,
+        appBundleID: payload.appBundleID,
+        appVersion: payload.appVersion,
+        buildNumber: payload.buildNumber,
+        environment: payload.environment,
+        active: true,
+        createdAt: isSameActivity && previous.createdAt ? previous.createdAt : nowIso,
+        updatedAt: nowIso,
+        endedAt: null,
+        endReason: null,
+        apnsFailureReason: null,
+        lastPushAt: isSameActivity ? previous.lastPushAt : null,
+        lastSuccessAt: isSameActivity ? previous.lastSuccessAt : null,
+        consecutiveEmptyCycles: isSameActivity ? previous.consecutiveEmptyCycles || 0 : 0,
+        pausedAt: isSameActivity && previous.activityEndsAt === payload.activityEndsAt
+          ? previous.pausedAt || null
+          : null,
+        backoffUntil: null,
+        backoffReason: null
+      };
+
+      if (matchIndex >= 0) {
+        state.records[matchIndex] = record;
+      } else {
+        state.records.push(record);
+      }
+
+      for (const olderRecord of state.records) {
+        if (olderRecord === record || olderRecord.active === false) {
+          continue;
+        }
+
+        if (olderRecord.environment === payload.environment
+          && olderRecord.installID === payload.installID
+          && olderRecord.stationID === payload.stationID
+          && olderRecord.lineID === payload.lineID
+          && olderRecord.activityID !== payload.activityID) {
+          olderRecord.active = false;
+          olderRecord.endedAt = nowIso;
+          olderRecord.endReason = 'replacedByNewActivity';
+          olderRecord.updatedAt = nowIso;
+        }
+      }
+
+      return { value: redactRecord(record) };
     });
-
-    const previous = matchIndex >= 0 ? this.state.records[matchIndex] : {};
-    const isSameActivity = previous.activityID === payload.activityID;
-    const record = {
-      ...previous,
-      installID: payload.installID,
-      activityID: payload.activityID,
-      stationID: payload.stationID,
-      lineID: payload.lineID,
-      selectionMode: payload.selectionMode,
-      platformID: payload.platformID,
-      platformHeading: payload.platformHeading,
-      platformLabel: payload.platformLabel,
-      platformDirection: payload.platformDirection,
-      activityStartedAt: payload.activityStartedAt,
-      activityEndsAt: payload.activityEndsAt,
-      pushTokenHex: payload.pushTokenHex,
-      tokenUpdatedAt: payload.tokenUpdatedAt,
-      appBundleID: payload.appBundleID,
-      appVersion: payload.appVersion,
-      buildNumber: payload.buildNumber,
-      environment: payload.environment,
-      active: true,
-      createdAt: isSameActivity && previous.createdAt ? previous.createdAt : nowIso,
-      updatedAt: nowIso,
-      endedAt: null,
-      endReason: null,
-      apnsFailureReason: null,
-      lastPushAt: isSameActivity ? previous.lastPushAt : null,
-      lastSuccessAt: isSameActivity ? previous.lastSuccessAt : null,
-      consecutiveEmptyCycles: isSameActivity ? previous.consecutiveEmptyCycles || 0 : 0,
-      pausedAt: isSameActivity && previous.activityEndsAt === payload.activityEndsAt
-        ? previous.pausedAt || null
-        : null,
-      backoffUntil: null,
-      backoffReason: null
-    };
-
-    if (matchIndex >= 0) {
-      this.state.records[matchIndex] = record;
-    } else {
-      this.state.records.push(record);
-    }
-
-    for (const olderRecord of this.state.records) {
-      if (olderRecord === record || olderRecord.active === false) {
-        continue;
-      }
-
-      if (olderRecord.environment === payload.environment
-        && olderRecord.installID === payload.installID
-        && olderRecord.stationID === payload.stationID
-        && olderRecord.lineID === payload.lineID
-        && olderRecord.activityID !== payload.activityID) {
-        olderRecord.active = false;
-        olderRecord.endedAt = nowIso;
-        olderRecord.endReason = 'replacedByNewActivity';
-        olderRecord.updatedAt = nowIso;
-      }
-    }
-
-    await this.save();
-    return redactRecord(record);
   }
 
   async endActivity(payload, now = new Date()) {
-    await this.load();
-    const record = this.state.records.find((candidate) => {
-      return candidate.activityID === payload.activityID
-        && candidate.installID === payload.installID
-        && candidate.active !== false;
+    return this.transaction((state) => {
+      const record = state.records.find((candidate) => {
+        return candidate.activityID === payload.activityID
+          && candidate.installID === payload.installID
+          && candidate.active !== false;
+      });
+
+      if (!record) {
+        return { changed: false, value: false };
+      }
+
+      record.active = false;
+      record.endedAt = payload.endedAt || now.toISOString();
+      record.endReason = payload.reason || 'unknown';
+      record.updatedAt = now.toISOString();
+      return { value: true };
     });
-
-    if (!record) {
-      return false;
-    }
-
-    record.active = false;
-    record.endedAt = payload.endedAt || now.toISOString();
-    record.endReason = payload.reason || 'unknown';
-    record.updatedAt = now.toISOString();
-    await this.save();
-    return true;
   }
 
   async listActive(now = new Date(), config = loadConfig()) {
     await this.load();
     const nowMs = now.getTime();
-    return this.state.records.filter((record) => {
+    return this.snapshot((state) => state.records.filter((record) => {
       if (record.active === false) {
         return false;
       }
@@ -209,142 +180,141 @@ export class LiveActivityStore {
 
       const backoffUntil = Date.parse(record.backoffUntil || '');
       return !Number.isFinite(backoffUntil) || backoffUntil <= nowMs;
-    });
+    }));
   }
 
   async markPushed(activityID, environment, info, now = new Date()) {
-    await this.load();
-    const record = this.findByActivity(activityID, environment);
-    if (!record) {
-      return;
-    }
+    return this.transaction((state) => {
+      const record = this.findByActivity(activityID, environment, state);
+      if (!record) {
+        return { changed: false };
+      }
 
-    record.lastPushAt = now.toISOString();
-    record.lastSuccessAt = now.toISOString();
-    record.updatedAt = now.toISOString();
-    record.consecutiveEmptyCycles = info.emptyArrivals ? (record.consecutiveEmptyCycles || 0) + 1 : 0;
-    if (info.contentState) {
-      record.lastStationName = info.contentState.stationName;
-      record.lastLineName = info.contentState.lineName;
-      record.lastPlatform = info.contentState.platform;
-    }
-    record.backoffUntil = null;
-    await this.save();
+      record.lastPushAt = now.toISOString();
+      record.lastSuccessAt = now.toISOString();
+      record.updatedAt = now.toISOString();
+      record.consecutiveEmptyCycles = info.emptyArrivals ? (record.consecutiveEmptyCycles || 0) + 1 : 0;
+      if (info.contentState) {
+        record.lastStationName = info.contentState.stationName;
+        record.lastLineName = info.contentState.lineName;
+        record.lastPlatform = info.contentState.platform;
+      }
+      record.backoffUntil = null;
+    });
   }
 
   async markBackoff(activityID, environment, delayMs, reason, now = new Date()) {
-    await this.load();
-    const record = this.findByActivity(activityID, environment);
-    if (!record) {
-      return;
-    }
+    return this.transaction((state) => {
+      const record = this.findByActivity(activityID, environment, state);
+      if (!record) {
+        return { changed: false };
+      }
 
-    record.backoffUntil = new Date(now.getTime() + delayMs).toISOString();
-    record.backoffReason = reason;
-    record.updatedAt = now.toISOString();
-    await this.save();
+      record.backoffUntil = new Date(now.getTime() + delayMs).toISOString();
+      record.backoffReason = reason;
+      record.updatedAt = now.toISOString();
+    });
   }
 
   async markPaused(activityID, environment, now = new Date()) {
-    await this.load();
-    const record = this.findByActivity(activityID, environment);
-    if (!record) {
-      return;
-    }
+    return this.transaction((state) => {
+      const record = this.findByActivity(activityID, environment, state);
+      if (!record) {
+        return { changed: false };
+      }
 
-    record.pausedAt = now.toISOString();
-    record.lastPushAt = now.toISOString();
-    record.lastSuccessAt = now.toISOString();
-    record.updatedAt = now.toISOString();
-    record.backoffUntil = null;
-    record.backoffReason = null;
-    await this.save();
+      record.pausedAt = now.toISOString();
+      record.lastPushAt = now.toISOString();
+      record.lastSuccessAt = now.toISOString();
+      record.updatedAt = now.toISOString();
+      record.backoffUntil = null;
+      record.backoffReason = null;
+    });
   }
 
   async markDurationEnded(activityID, environment, now = new Date()) {
-    await this.load();
-    const record = this.findByActivity(activityID, environment);
-    if (!record) {
-      return;
-    }
+    return this.transaction((state) => {
+      const record = this.findByActivity(activityID, environment, state);
+      if (!record) {
+        return { changed: false };
+      }
 
-    record.active = false;
-    record.endedAt = now.toISOString();
-    record.endReason = 'activityDurationEnded';
-    record.updatedAt = now.toISOString();
-    await this.save();
+      record.active = false;
+      record.endedAt = now.toISOString();
+      record.endReason = 'activityDurationEnded';
+      record.updatedAt = now.toISOString();
+    });
   }
 
   async deactivate(activityID, environment, reason, now = new Date()) {
-    await this.load();
-    const record = this.findByActivity(activityID, environment);
-    if (!record) {
-      return;
-    }
+    return this.transaction((state) => {
+      const record = this.findByActivity(activityID, environment, state);
+      if (!record) {
+        return { changed: false };
+      }
 
-    record.active = false;
-    record.endedAt = now.toISOString();
-    record.apnsFailureReason = reason;
-    record.updatedAt = now.toISOString();
-    await this.save();
+      record.active = false;
+      record.endedAt = now.toISOString();
+      record.apnsFailureReason = reason;
+      record.updatedAt = now.toISOString();
+    });
   }
 
   async expireOld(now = new Date(), config = loadConfig()) {
-    await this.load();
-    const nowMs = now.getTime();
-    let changed = false;
+    return this.transaction((state) => {
+      const nowMs = now.getTime();
+      let changed = false;
 
-    for (const record of this.state.records) {
-      if (record.active === false) {
-        continue;
+      for (const record of state.records) {
+        if (record.active === false) {
+          continue;
+        }
+
+        const createdAt = Date.parse(record.createdAt || record.tokenUpdatedAt || record.updatedAt);
+        const lastSuccessAt = Date.parse(record.lastSuccessAt || record.updatedAt || record.tokenUpdatedAt);
+        // A selected duration owns its pause/end transition once it has elapsed.
+        // Generic maximum-lifetime expiry must not remove it before APNs receives
+        // that end event; the existing retention ceiling still bounds retries.
+        const durationTransitionPending = selectedDurationHasElapsed(record, nowMs);
+        const tooOld = !durationTransitionPending
+          && (!Number.isFinite(createdAt) || nowMs - createdAt > config.maxActiveMs);
+        const tooStale = Number.isFinite(lastSuccessAt) && nowMs - lastSuccessAt > config.retentionMs;
+
+        if (tooOld || tooStale) {
+          record.active = false;
+          record.endedAt = now.toISOString();
+          record.endReason = tooOld ? 'maxActivityLifetimeReached' : 'retentionExpired';
+          record.updatedAt = now.toISOString();
+          changed = true;
+        }
       }
 
-      const createdAt = Date.parse(record.createdAt || record.tokenUpdatedAt || record.updatedAt);
-      const lastSuccessAt = Date.parse(record.lastSuccessAt || record.updatedAt || record.tokenUpdatedAt);
-      // A selected duration owns its pause/end transition once it has elapsed.
-      // Generic maximum-lifetime expiry must not remove it before APNs receives
-      // that end event; the existing retention ceiling still bounds retries.
-      const durationTransitionPending = selectedDurationHasElapsed(record, nowMs);
-      const tooOld = !durationTransitionPending
-        && (!Number.isFinite(createdAt) || nowMs - createdAt > config.maxActiveMs);
-      const tooStale = Number.isFinite(lastSuccessAt) && nowMs - lastSuccessAt > config.retentionMs;
+      const retainedRecords = state.records.filter((record) => {
+        if (record.active !== false) {
+          return true;
+        }
 
-      if (tooOld || tooStale) {
-        record.active = false;
-        record.endedAt = now.toISOString();
-        record.endReason = tooOld ? 'maxActivityLifetimeReached' : 'retentionExpired';
-        record.updatedAt = now.toISOString();
-        changed = true;
-      }
-    }
+        // updatedAt is written by this service whenever a record is deactivated.
+        // Do not trust the client-supplied endedAt value as the retention clock.
+        const inactiveSince = Date.parse(record.updatedAt || '');
+        const retain = Number.isFinite(inactiveSince)
+          && nowMs - inactiveSince <= config.retentionMs;
 
-    const retainedRecords = this.state.records.filter((record) => {
-      if (record.active !== false) {
-        return true;
-      }
+        if (!retain) {
+          changed = true;
+        }
 
-      // updatedAt is written by this service whenever a record is deactivated.
-      // Do not trust the client-supplied endedAt value as the retention clock.
-      const inactiveSince = Date.parse(record.updatedAt || '');
-      const retain = Number.isFinite(inactiveSince)
-        && nowMs - inactiveSince <= config.retentionMs;
+        return retain;
+      });
 
-      if (!retain) {
-        changed = true;
-      }
+      state.records = retainedRecords;
 
-      return retain;
+      return { changed };
     });
-
-    this.state.records = retainedRecords;
-
-    if (changed) {
-      await this.save();
-    }
   }
 
-  findByActivity(activityID, environment) {
-    return this.state.records.find((record) => {
+  findByActivity(activityID, environment, state = this.state) {
+    return state.records.find((record) => {
       return record.activityID === activityID && record.environment === environment;
     });
   }
