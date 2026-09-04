@@ -1,7 +1,7 @@
 import crypto, { X509Certificate } from 'node:crypto';
 import fs from 'node:fs/promises';
-import http2 from 'node:http2';
 import path from 'node:path';
+import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
 import {
   Environment,
   SignedDataVerifier
@@ -548,7 +548,7 @@ export function buildAlertPayload(transition, contractVersion = DISRUPTION_ALERT
   };
 }
 
-export async function pushDisruptionAlert(record, token, item, config) {
+export async function pushDisruptionAlert(record, token, item, config, options = {}) {
   if (!config.apns.teamId || !config.apns.keyId || (!config.apns.authKey && !config.apns.authKeyPath)) {
     throw retryableError('APNs is not configured', 10 * 60 * 1000);
   }
@@ -556,42 +556,25 @@ export async function pushDisruptionAlert(record, token, item, config) {
   const host = record.apnsEnvironment === 'sandbox'
     ? 'api.sandbox.push.apple.com'
     : 'api.push.apple.com';
-  const client = http2.connect(`https://${host}`);
-  return new Promise((resolve, reject) => {
-    client.on('error', reject);
-    const request = client.request({
-      ':method': 'POST',
-      ':path': `/3/device/${token}`,
-      authorization: `bearer ${jwt}`,
-      'apns-push-type': 'alert',
-      'apns-topic': record.appBundleID || config.apns.bundleId,
-      'apns-priority': '10',
-      'apns-expiration': String(Math.floor(Date.parse(item.expiresAt) / 1000)),
-      'apns-collapse-id': item.collapseID,
-      'content-type': 'application/json'
-    });
-    let status = 0;
-    let body = '';
-    request.setEncoding('utf8');
-    request.on('response', (headers) => { status = Number(headers[':status'] || 0); });
-    request.on('data', (chunk) => { body += chunk; });
-    request.on('end', () => {
-      client.close();
-      if (status === 200) return resolve({ status });
-      const reason = parseApnsReason(body);
-      const error = new Error(`APNs rejected disruption alert: ${status} ${reason}`);
-      error.status = status;
-      error.reason = reason;
-      error.permanent = isPermanentApnsError(status, reason);
-      error.retryable = status === 429 || status >= 500;
-      return reject(error);
-    });
-    request.on('error', (error) => {
-      client.close();
-      reject(error);
-    });
-    request.end(JSON.stringify(item.payload));
-  });
+  const { status, body } = await sendApnsRequest(host, {
+    ':method': 'POST',
+    ':path': `/3/device/${token}`,
+    authorization: `bearer ${jwt}`,
+    'apns-push-type': 'alert',
+    'apns-topic': record.appBundleID || config.apns.bundleId,
+    'apns-priority': '10',
+    'apns-expiration': String(Math.floor(Date.parse(item.expiresAt) / 1000)),
+    'apns-collapse-id': item.collapseID,
+    'content-type': 'application/json'
+  }, item.payload, options);
+  if (status === 200) return { status };
+  const reason = parseApnsReason(body);
+  const error = new Error(`APNs rejected disruption alert: ${status} ${reason}`);
+  error.status = status;
+  error.reason = reason;
+  error.permanent = isPermanentApnsError(status, reason);
+  error.retryable = status === 429 || status >= 500;
+  throw error;
 }
 
 export async function runDisruptionAlertWorkerCycle({
@@ -600,36 +583,40 @@ export async function runDisruptionAlertWorkerCycle({
   fetchImpl = fetch,
   pushImpl = pushDisruptionAlert,
   logger = console,
-  now = new Date()
+  now = new Date(),
+  signal
 }) {
-  await processQueue({ store, config, pushImpl, logger, now });
+  signal?.throwIfAborted();
+  await processQueue({ store, config, pushImpl, logger, now, signal });
   const records = await store.activeRecords(now, config.inactivityMs);
   if (records.length === 0) return { registrations: 0, transitions: 0, queued: 0 };
 
   const url = new URL('https://api.tfl.gov.uk/Line/Mode/tube,overground/Status');
   if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
-  const response = await fetchImpl(url);
+  const response = await fetchJsonResponse(url, fetchImpl, { signal });
   if (!response.ok) throw retryableError(`TfL status request failed: ${response.status}`, 120_000);
-  const statuses = normalizeTubeStatuses(await response.json());
+  const statuses = normalizeTubeStatuses(response.value);
   const transitions = await store.observeStatuses(statuses, now);
   await store.enqueue(transitions, records, now);
   const queued = (await store.dueQueue(now)).length;
-  await processQueue({ store, config, pushImpl, logger, now });
+  await processQueue({ store, config, pushImpl, logger, now, signal });
   logger.info(`Disruption alert cycle: ${records.length} registrations, ${transitions.length} stable changes, ${queued} sends considered`);
   return { registrations: records.length, transitions: transitions.length, queued };
 }
 
-async function processQueue({ store, config, pushImpl, logger, now }) {
+async function processQueue({ store, config, pushImpl, logger, now, signal }) {
   for (const item of await store.dueQueue(now)) {
+    signal?.throwIfAborted();
     const record = store.recordForQueueItem(item);
     if (!record) {
       await store.markQueueSuccess(item.id, now);
       continue;
     }
     try {
-      await pushImpl(record, store.decryptedToken(record), item, config);
+      await pushImpl(record, store.decryptedToken(record), item, config, { signal });
       await store.markQueueSuccess(item.id, now);
     } catch (error) {
+      signal?.throwIfAborted();
       if (error.permanent) {
         await store.deleteByInstallDigest(record.installDigest);
         logger.warn(`Disruption alert registration removed after permanent APNs error: ${error.reason || 'rejected'}`);

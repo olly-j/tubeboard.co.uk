@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
-import http2 from 'node:http2';
 import path from 'node:path';
+import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
 
 export const TUBE_LINES = new Map([
   ['bakerloo', 'Bakerloo'],
@@ -604,14 +604,14 @@ export async function fetchTfLState(record, config, fetchImpl = fetch) {
   return buildContentState(record, arrivals, statuses);
 }
 
-export async function fetchTfLArrivals(stationID, config, fetchImpl = fetch) {
+export async function fetchTfLArrivals(stationID, config, fetchImpl = fetch, options = {}) {
   const arrivalsUrl = new URL(`https://api.tfl.gov.uk/StopPoint/${encodeURIComponent(stationID)}/Arrivals`);
 
   if (config.tflAppKey) {
     arrivalsUrl.searchParams.set('app_key', config.tflAppKey);
   }
 
-  const response = await fetchImpl(arrivalsUrl);
+  const response = await fetchJsonResponse(arrivalsUrl, fetchImpl, options);
 
   if (response.status === 429) {
     const error = new Error('TfL rate limited the request');
@@ -627,18 +627,18 @@ export async function fetchTfLArrivals(stationID, config, fetchImpl = fetch) {
     throw error;
   }
 
-  const arrivals = await response.json();
+  const arrivals = response.value;
   return Array.isArray(arrivals) ? arrivals : [];
 }
 
-export async function fetchTfLStatuses(config, fetchImpl = fetch) {
+export async function fetchTfLStatuses(config, fetchImpl = fetch, options = {}) {
   const statusesUrl = new URL('https://api.tfl.gov.uk/Line/Mode/tube,overground/Status');
 
   if (config.tflAppKey) {
     statusesUrl.searchParams.set('app_key', config.tflAppKey);
   }
 
-  const response = await fetchImpl(statusesUrl);
+  const response = await fetchJsonResponse(statusesUrl, fetchImpl, options);
 
   if (response.status === 429) {
     const error = new Error('TfL rate limited the request');
@@ -654,7 +654,7 @@ export async function fetchTfLStatuses(config, fetchImpl = fetch) {
     throw error;
   }
 
-  const statuses = await response.json();
+  const statuses = response.value;
   return Array.isArray(statuses) ? statuses : [];
 }
 
@@ -749,7 +749,7 @@ export function buildEndApnsPayload(record, now = new Date()) {
   };
 }
 
-export async function pushLiveActivityUpdate(record, payload, config) {
+export async function pushLiveActivityUpdate(record, payload, config, options = {}) {
   if (!config.apns.teamId || !config.apns.keyId || (!config.apns.authKey && !config.apns.authKeyPath)) {
     const error = new Error('APNs is not configured');
     error.retryable = true;
@@ -760,55 +760,29 @@ export async function pushLiveActivityUpdate(record, payload, config) {
   const jwt = await createApnsJwt(config.apns);
   const host = record.environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
   const topicBundleId = record.appBundleID || config.apns.bundleId;
-  const client = http2.connect(`https://${host}`);
+  const { status, body } = await sendApnsRequest(host, {
+    ':method': 'POST',
+    ':path': `/3/device/${record.pushTokenHex}`,
+    authorization: `bearer ${jwt}`,
+    'apns-push-type': 'liveactivity',
+    'apns-topic': `${topicBundleId}.push-type.liveactivity`,
+    'apns-priority': '10',
+    'content-type': 'application/json'
+  }, payload, options);
+  if (status === 200) return { status };
 
-  return new Promise((resolve, reject) => {
-    client.on('error', reject);
-    const request = client.request({
-      ':method': 'POST',
-      ':path': `/3/device/${record.pushTokenHex}`,
-      authorization: `bearer ${jwt}`,
-      'apns-push-type': 'liveactivity',
-      'apns-topic': `${topicBundleId}.push-type.liveactivity`,
-      'apns-priority': '10',
-      'content-type': 'application/json'
-    });
-
-    let status = 0;
-    let body = '';
-
-    request.setEncoding('utf8');
-    request.on('response', (headers) => {
-      status = Number(headers[':status'] || 0);
-    });
-    request.on('data', (chunk) => {
-      body += chunk;
-    });
-    request.on('end', () => {
-      client.close();
-      if (status === 200) {
-        resolve({ status });
-        return;
-      }
-
-      const reason = parseApnsReason(body);
-      const error = new Error(`APNs rejected Live Activity push: ${status} ${reason}`);
-      error.status = status;
-      error.reason = reason;
-      error.permanent = isPermanentApnsError(status, reason);
-      error.retryable = status === 429 || status >= 500;
-      error.backoffMs = status === 429 ? 5 * 60 * 1000 : 2 * 60 * 1000;
-      reject(error);
-    });
-    request.on('error', (error) => {
-      client.close();
-      reject(error);
-    });
-    request.end(JSON.stringify(payload));
-  });
+  const reason = parseApnsReason(body);
+  const error = new Error(`APNs rejected Live Activity push: ${status} ${reason}`);
+  error.status = status;
+  error.reason = reason;
+  error.permanent = isPermanentApnsError(status, reason);
+  error.retryable = status === 429 || status >= 500;
+  error.backoffMs = status === 429 ? 5 * 60 * 1000 : 2 * 60 * 1000;
+  throw error;
 }
 
-export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date() }) {
+export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal }) {
+  signal?.throwIfAborted();
   await store.expireOld(now, config);
   const records = await store.listActive(now, config);
   if (records.length === 0) {
@@ -817,6 +791,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
 
   const liveRecords = [];
   for (const record of records) {
+    signal?.throwIfAborted();
     const activityEndsAt = Date.parse(record.activityEndsAt || '');
     if (!Number.isFinite(activityEndsAt) || activityEndsAt > now.getTime()) {
       liveRecords.push(record);
@@ -826,18 +801,19 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
     try {
       const pausedAt = Date.parse(record.pausedAt || '');
       if (!Number.isFinite(pausedAt)) {
-        const pushResult = await pushImpl(record, buildPausedApnsPayload(record, now), config);
+        const pushResult = await pushImpl(record, buildPausedApnsPayload(record, now), config, { signal });
         await store.markPaused(record.activityID, record.environment, now);
         logger.info(`Live Activity paused after its selected duration: APNs ${pushResult?.status || 200}`);
         continue;
       }
 
       if (now.getTime() - pausedAt >= config.pauseGraceMs) {
-        const pushResult = await pushImpl(record, buildEndApnsPayload(record, now), config);
+        const pushResult = await pushImpl(record, buildEndApnsPayload(record, now), config, { signal });
         await store.markDurationEnded(record.activityID, record.environment, now);
         logger.info(`Live Activity ended after its pause grace period: APNs ${pushResult?.status || 200}`);
       }
     } catch (error) {
+      signal?.throwIfAborted();
       if (error.permanent) {
         await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
         logger.warn(`Live Activity deactivated after permanent APNs error: ${error.reason || error.message}`);
@@ -854,8 +830,9 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
 
   let statuses = [];
   try {
-    statuses = await fetchTfLStatuses(config, fetchImpl);
+    statuses = await fetchTfLStatuses(config, fetchImpl, { signal });
   } catch (error) {
+    signal?.throwIfAborted();
     for (const record of liveRecords) {
       await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
     }
@@ -866,9 +843,10 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
   const arrivalsByStation = new Map();
 
   for (const record of liveRecords) {
+    signal?.throwIfAborted();
     try {
       if (!arrivalsByStation.has(record.stationID)) {
-        arrivalsByStation.set(record.stationID, await fetchTfLArrivals(record.stationID, config, fetchImpl));
+        arrivalsByStation.set(record.stationID, await fetchTfLArrivals(record.stationID, config, fetchImpl, { signal }));
       }
 
       const contentState = buildContentState(record, arrivalsByStation.get(record.stationID), statuses);
@@ -881,13 +859,14 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       }
 
       const payload = buildApnsPayload(contentState, now);
-      const pushResult = await pushImpl(record, payload, config);
+      const pushResult = await pushImpl(record, payload, config, { signal });
       await store.markPushed(record.activityID, record.environment, { emptyArrivals, contentState }, now);
       logger.info(`Live Activity pushed: APNs ${pushResult?.status || 200}, environment ${record.environment}, selectionMode ${getRecordSelectionMode(record)}, arrivals ${contentState.arrivals.length}`);
       if (typeof scheduleRolloverPush === 'function') {
         scheduleRolloverPush(record, contentState, now, config.workerIntervalMs);
       }
     } catch (error) {
+      signal?.throwIfAborted();
       if (error.permanent) {
         await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
         logger.warn(`Live Activity deactivated after permanent APNs error: ${error.reason || error.message}`);
