@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { EventEmitter, getEventListeners } from 'node:events';
+import fs from 'node:fs/promises';
 import http2 from 'node:http2';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { SerialWorker } from '../server/worker-lifecycle.js';
 import { fetchJsonResponse, sendApnsRequest, NOTIFICATION_REQUEST_TIMEOUT_MS } from '../server/notification-transport.js';
-import { runLiveActivityWorkerCycle, loadConfig } from '../server/live-activity.js';
+import { LiveActivityStore, runLiveActivityWorkerCycle, loadConfig } from '../server/live-activity.js';
 import { runDisruptionAlertWorkerCycle } from '../server/disruption-alerts.js';
 
 test('overlapping triggers coalesce into one follow-up without concurrent cycles', async () => {
@@ -110,6 +113,62 @@ test('work arriving during a duration transition is handled without duplicate tr
   await work;
   assert.deepEqual(sends, ['synthetic-first', 'synthetic-second']);
   await worker.stop();
+});
+
+test('serialized cycles commit duration transitions through the durable store before rerunning', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-worker-persistence-'));
+  const filePath = path.join(directory, 'records.json');
+  const store = new LiveActivityStore(filePath);
+  const fixture = JSON.parse(await fs.readFile(new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url), 'utf8'));
+  const now = new Date('2026-09-05T12:00:00.000Z');
+  const firstPush = deferred();
+  const pushStarted = deferred();
+  const sends = [];
+  const failures = [];
+  const worker = new SerialWorker({
+    onError: (error) => failures.push(error),
+    run: (signal) => runLiveActivityWorkerCycle({
+      store, config: loadConfig({}), now, signal, logger: { info() {} },
+      fetchImpl: () => assert.fail('elapsed duration transitions do not fetch upstream data'),
+      pushImpl: async (record) => {
+        sends.push(record.activityID);
+        if (sends.length === 1) {
+          pushStarted.resolve();
+          await firstPush.promise;
+        }
+        return { status: 200 };
+      }
+    })
+  });
+  t.after(async () => {
+    firstPush.resolve();
+    await worker.stop();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  const register = async (index) => {
+    const identity = `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    await store.upsertToken({
+      ...fixture, installID: identity, activityID: identity,
+      activityStartedAt: new Date(now.getTime() - 120_000).toISOString(),
+      activityEndsAt: new Date(now.getTime() - 60_000).toISOString(),
+      tokenUpdatedAt: now.toISOString()
+    }, now);
+    return identity;
+  };
+  const firstID = await register(1);
+  const work = worker.trigger();
+  await pushStarted.promise;
+  const secondID = await register(2);
+  for (let index = 0; index < 30; index += 1) worker.trigger();
+  firstPush.resolve();
+  await work;
+  assert.deepEqual(failures, []);
+  assert.deepEqual(sends, [firstID, secondID]);
+  const restarted = new LiveActivityStore(filePath);
+  await restarted.load();
+  assert.deepEqual(restarted.state.records.map((record) => [record.activityID, record.pausedAt]), [
+    [firstID, now.toISOString()], [secondID, now.toISOString()]
+  ]);
 });
 
 test('TfL connection/header deadline aborts the request and a later request succeeds', async () => {

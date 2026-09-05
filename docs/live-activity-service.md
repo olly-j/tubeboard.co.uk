@@ -80,6 +80,28 @@ when the ten-minute pause grace crosses the eight-hour ceiling. Existing APNs
 backoff, permanent-error cleanup and inactive-record retention remain the
 bounded failure and cleanup policy.
 
+TB-115 in service `1.4.4` gives each notification worker one active cycle and
+at most one pending rerun. Startup, interval and Live Activity rollover triggers
+share that owner, so slow I/O cannot start a second delivery cycle for the same
+worker. The existing 90-second Live Activity and 60-second disruption-alert
+cadences remain unchanged. Each TfL/APNs request has an absolute 15-second
+deadline covering connection, headers and the complete response body; body
+progress does not extend it. APNs streams and their dedicated sessions are
+disposed on completion, failure or cancellation. Requests remain sequential
+within a cycle, so total cycle time still depends on the number of due records.
+
+`SIGTERM` and `SIGINT` cancel notification requests and owned timers immediately,
+stop the status monitor, and allow HTTP handlers and persistence to drain for
+up to five seconds. A graceful drain exits successfully; an exceeded deadline
+closes remaining HTTP connections and exits with failure. An unfinished push
+is not acknowledged or charged a retry merely because shutdown cancelled it.
+Transport deadlines retain the existing retry/backoff and permanent-error
+rules. TB-114's recoverable durable writes are included; registration formats,
+encryption, retention and APNs environment selection are unchanged. This is
+source behavior until an authorized deployment reports the exact reviewed
+revision in `/healthz`. Rollback uses the previous recorded healthy source and
+the same persistent volume, without a data migration or volume replacement.
+
 The Premium disruption-alert endpoint accepts both versioned registration
 contracts. Contract v1 remains Underground-only for installed v1.1 clients;
 contract v2 adds Liberty, Lioness, Mildmay, Suffragette, Weaver and Windrush
