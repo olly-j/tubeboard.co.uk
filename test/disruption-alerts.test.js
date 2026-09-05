@@ -147,12 +147,13 @@ test('inactive and expired registrations are removed with their pending queue', 
   const { store } = await temporaryStore();
   const payload = registrationPayload();
   await store.upsert(payload, premiumEntitlement(), now);
-  store.state.queue.push({
-    id: 'queued',
-    installDigest: store.state.records[0].installDigest,
-    expiresAt: new Date(now.getTime() + 60_000).toISOString()
+  await store.transaction((state) => {
+    state.queue.push({
+      id: 'queued',
+      installDigest: state.records[0].installDigest,
+      expiresAt: new Date(now.getTime() + 60_000).toISOString()
+    });
   });
-  await store.save();
 
   await store.purgeExpired(new Date(now.getTime() + 91 * 24 * 60 * 60 * 1000));
   assert.equal(store.state.records.length, 0);

@@ -2,6 +2,7 @@ import crypto, { X509Certificate } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
+import { TransactionalJsonStore } from './transactional-json-store.js';
 import {
   Environment,
   SignedDataVerifier
@@ -257,197 +258,186 @@ export async function loadAppleRootCertificates(certificateURLs = APPLE_ROOT_CER
   }));
 }
 
-export class DisruptionAlertStore {
+export class DisruptionAlertStore extends TransactionalJsonStore {
   constructor(filePath, encryptionKey) {
-    this.filePath = filePath;
-    this.encryptionKey = encryptionKey;
-    this.state = { records: [], lineStates: {}, queue: [] };
-    this.loaded = false;
-    this.writeQueue = Promise.resolve();
-  }
-
-  async load() {
-    if (this.loaded) return;
-    try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'));
-      this.state.records = Array.isArray(parsed.records) ? parsed.records : [];
-      this.state.lineStates = parsed.lineStates && typeof parsed.lineStates === 'object'
+    super(filePath, { records: [], lineStates: {}, queue: [] }, (parsed) => ({
+      records: Array.isArray(parsed.records) ? parsed.records : [],
+      lineStates: parsed.lineStates && typeof parsed.lineStates === 'object'
         ? parsed.lineStates
-        : {};
-      this.state.queue = Array.isArray(parsed.queue) ? parsed.queue : [];
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-    this.loaded = true;
-  }
-
-  async save() {
-    await this.load();
-    this.writeQueue = this.writeQueue.then(async () => {
-      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      const temporary = `${this.filePath}.${process.pid}.tmp`;
-      await fs.writeFile(temporary, `${JSON.stringify(this.state, null, 2)}\n`, { mode: 0o600 });
-      await fs.rename(temporary, this.filePath);
-    });
-    return this.writeQueue;
+        : {},
+      queue: Array.isArray(parsed.queue) ? parsed.queue : []
+    }));
+    this.encryptionKey = encryptionKey;
   }
 
   async upsert(payload, entitlement, now = new Date()) {
-    await this.load();
-    requireEncryptionKey(this.encryptionKey);
-    const installDigest = digest(payload.installID);
-    const tokenDigest = digest(payload.deviceTokenHex);
-    const existingIndex = this.state.records.findIndex((record) => record.installDigest === installDigest);
-    const previous = existingIndex >= 0 ? this.state.records[existingIndex] : {};
-    const record = {
-      ...previous,
-      contractVersion: payload.contractVersion,
-      installDigest,
-      tokenDigest,
-      encryptedToken: encryptToken(payload.deviceTokenHex, this.encryptionKey),
-      selectedLineIDs: payload.selectedLineIDs,
-      severity: payload.severity,
-      quietHoursEnabled: payload.quietHoursEnabled,
-      quietHoursStartMinutes: payload.quietHoursStartMinutes,
-      quietHoursEndMinutes: payload.quietHoursEndMinutes,
-      timeZone: payload.timeZone,
-      serviceResumedAlerts: payload.serviceResumedAlerts,
-      appBundleID: payload.appBundleID,
-      appVersion: payload.appVersion,
-      buildNumber: payload.buildNumber,
-      apnsEnvironment: payload.apnsEnvironment,
-      premiumProductID: entitlement.productID,
-      premiumExpiresAt: entitlement.expiresAt,
-      entitlementVerifiedAt: entitlement.verifiedAt,
-      createdAt: previous.createdAt || now.toISOString(),
-      updatedAt: now.toISOString(),
-      lastNotificationAt: previous.lastNotificationAt || null
-    };
+    return this.transaction((state) => {
+      requireEncryptionKey(this.encryptionKey);
+      const installDigest = digest(payload.installID);
+      const tokenDigest = digest(payload.deviceTokenHex);
+      const existingIndex = state.records.findIndex((record) => record.installDigest === installDigest);
+      const previous = existingIndex >= 0 ? state.records[existingIndex] : {};
+      const record = {
+        ...previous,
+        contractVersion: payload.contractVersion,
+        installDigest,
+        tokenDigest,
+        encryptedToken: encryptToken(payload.deviceTokenHex, this.encryptionKey),
+        selectedLineIDs: payload.selectedLineIDs,
+        severity: payload.severity,
+        quietHoursEnabled: payload.quietHoursEnabled,
+        quietHoursStartMinutes: payload.quietHoursStartMinutes,
+        quietHoursEndMinutes: payload.quietHoursEndMinutes,
+        timeZone: payload.timeZone,
+        serviceResumedAlerts: payload.serviceResumedAlerts,
+        appBundleID: payload.appBundleID,
+        appVersion: payload.appVersion,
+        buildNumber: payload.buildNumber,
+        apnsEnvironment: payload.apnsEnvironment,
+        premiumProductID: entitlement.productID,
+        premiumExpiresAt: entitlement.expiresAt,
+        entitlementVerifiedAt: entitlement.verifiedAt,
+        createdAt: previous.createdAt || now.toISOString(),
+        updatedAt: now.toISOString(),
+        lastNotificationAt: previous.lastNotificationAt || null
+      };
 
-    this.state.records = this.state.records.filter((candidate, index) => {
-      if (index === existingIndex) return true;
-      return candidate.tokenDigest !== tokenDigest;
+      state.records = state.records.filter((candidate, index) => {
+        if (index === existingIndex) return true;
+        return candidate.tokenDigest !== tokenDigest;
+      });
+      if (existingIndex >= 0) {
+        const replacementIndex = state.records.findIndex((candidate) => candidate.installDigest === installDigest);
+        state.records[replacementIndex] = record;
+      } else {
+        state.records.push(record);
+      }
+      return { value: { expiresAt: record.premiumExpiresAt } };
     });
-    if (existingIndex >= 0) {
-      const replacementIndex = this.state.records.findIndex((candidate) => candidate.installDigest === installDigest);
-      this.state.records[replacementIndex] = record;
-    } else {
-      this.state.records.push(record);
-    }
-    await this.save();
-    return { expiresAt: record.premiumExpiresAt };
   }
 
   async deleteByInstallID(installID) {
-    await this.load();
-    const installDigest = digest(installID);
-    const before = this.state.records.length;
-    this.state.records = this.state.records.filter((record) => record.installDigest !== installDigest);
-    this.state.queue = this.state.queue.filter((item) => item.installDigest !== installDigest);
-    if (this.state.records.length !== before) await this.save();
-    return this.state.records.length !== before;
+    return this.transaction((state) => {
+      const installDigest = digest(installID);
+      const before = state.records.length;
+      const queuedBefore = state.queue.length;
+      state.records = state.records.filter((record) => record.installDigest !== installDigest);
+      state.queue = state.queue.filter((item) => item.installDigest !== installDigest);
+      return {
+        changed: state.records.length !== before || state.queue.length !== queuedBefore,
+        value: state.records.length !== before
+      };
+    });
   }
 
   async deleteByInstallDigest(installDigest) {
-    await this.load();
-    const before = this.state.records.length;
-    this.state.records = this.state.records.filter((record) => record.installDigest !== installDigest);
-    this.state.queue = this.state.queue.filter((item) => item.installDigest !== installDigest);
-    if (this.state.records.length !== before) await this.save();
+    return this.transaction((state) => {
+      const before = state.records.length;
+      const queuedBefore = state.queue.length;
+      state.records = state.records.filter((record) => record.installDigest !== installDigest);
+      state.queue = state.queue.filter((item) => item.installDigest !== installDigest);
+      return {
+        changed: state.records.length !== before || state.queue.length !== queuedBefore
+      };
+    });
   }
 
   async activeRecords(now = new Date(), inactivityMs = DEFAULT_INACTIVITY_MS) {
     await this.purgeExpired(now, inactivityMs);
-    return this.state.records;
+    return this.snapshot((state) => state.records);
   }
 
   async purgeExpired(now = new Date(), inactivityMs = DEFAULT_INACTIVITY_MS) {
-    await this.load();
-    const nowMs = now.getTime();
-    const retained = this.state.records.filter((record) => {
-      const updatedAt = Date.parse(record.updatedAt || '');
-      const premiumExpiresAt = Date.parse(record.premiumExpiresAt || '');
-      const inactive = !Number.isFinite(updatedAt) || nowMs - updatedAt > inactivityMs;
-      const expired = Number.isFinite(premiumExpiresAt) && premiumExpiresAt <= nowMs;
-      return !inactive && !expired;
+    return this.transaction((state) => {
+      const nowMs = now.getTime();
+      const retained = state.records.filter((record) => {
+        const updatedAt = Date.parse(record.updatedAt || '');
+        const premiumExpiresAt = Date.parse(record.premiumExpiresAt || '');
+        const inactive = !Number.isFinite(updatedAt) || nowMs - updatedAt > inactivityMs;
+        const expired = Number.isFinite(premiumExpiresAt) && premiumExpiresAt <= nowMs;
+        return !inactive && !expired;
+      });
+      const retainedDigests = new Set(retained.map((record) => record.installDigest));
+      const queue = state.queue.filter((item) => {
+        return retainedDigests.has(item.installDigest) && Date.parse(item.expiresAt) > nowMs;
+      });
+      const changed = retained.length !== state.records.length || queue.length !== state.queue.length;
+      state.records = retained;
+      state.queue = queue;
+      return { changed };
     });
-    const retainedDigests = new Set(retained.map((record) => record.installDigest));
-    const queue = this.state.queue.filter((item) => {
-      return retainedDigests.has(item.installDigest) && Date.parse(item.expiresAt) > nowMs;
-    });
-    if (retained.length !== this.state.records.length || queue.length !== this.state.queue.length) {
-      this.state.records = retained;
-      this.state.queue = queue;
-      await this.save();
-    }
   }
 
   async observeStatuses(statuses, now = new Date()) {
-    await this.load();
-    const transitions = [];
-    for (const status of statuses) {
-      const fingerprint = statusFingerprint(status);
-      const previous = this.state.lineStates[status.lineID];
-      const observationCount = previous?.observedFingerprint === fingerprint
-        ? (previous.observationCount || 0) + 1
-        : 1;
-      const next = {
-        observedFingerprint: fingerprint,
-        observationCount,
-        observedStatus: status,
-        stableFingerprint: previous?.stableFingerprint || null,
-        stableStatus: previous?.stableStatus || null,
-        updatedAt: now.toISOString()
-      };
+    return this.transaction((state) => {
+      const transitions = [];
+      for (const status of statuses) {
+        const fingerprint = statusFingerprint(status);
+        const previous = state.lineStates[status.lineID];
+        const observationCount = previous?.observedFingerprint === fingerprint
+          ? (previous.observationCount || 0) + 1
+          : 1;
+        const next = {
+          observedFingerprint: fingerprint,
+          observationCount,
+          observedStatus: status,
+          stableFingerprint: previous?.stableFingerprint || null,
+          stableStatus: previous?.stableStatus || null,
+          updatedAt: now.toISOString()
+        };
 
-      if (observationCount >= 2 && next.stableFingerprint !== fingerprint) {
-        if (next.stableFingerprint !== null && next.stableStatus) {
-          transitions.push({ before: next.stableStatus, after: status, fingerprint });
+        if (observationCount >= 2 && next.stableFingerprint !== fingerprint) {
+          if (next.stableFingerprint !== null && next.stableStatus) {
+            transitions.push({ before: next.stableStatus, after: status, fingerprint });
+          }
+          next.stableFingerprint = fingerprint;
+          next.stableStatus = status;
         }
-        next.stableFingerprint = fingerprint;
-        next.stableStatus = status;
+        state.lineStates[status.lineID] = next;
       }
-      this.state.lineStates[status.lineID] = next;
-    }
-    await this.save();
-    return transitions;
+      return { value: transitions };
+    });
   }
 
   async enqueue(transitions, records, now = new Date()) {
-    await this.load();
-    const existing = new Set(this.state.queue.map((item) => item.id));
-    for (const transition of transitions) {
-      for (const record of records) {
-        if (!record.selectedLineIDs.includes(transition.after.lineID)
-            || !shouldNotify(record, transition, now)) continue;
-        const id = `${record.installDigest}:${transition.after.lineID}:${transition.fingerprint}`;
-        if (existing.has(id)) continue;
-        this.state.queue.push({
-          id,
-          installDigest: record.installDigest,
-          lineID: transition.after.lineID,
-          payload: buildAlertPayload(transition, record.contractVersion || 1),
-          collapseID: `tubeboard-${transition.after.lineID}`,
-          attempts: 0,
-          nextAttemptAt: now.toISOString(),
-          expiresAt: new Date(now.getTime() + NOTIFICATION_EXPIRY_MS).toISOString()
-        });
-        existing.add(id);
+    return this.transaction((state) => {
+      const existing = new Set(state.queue.map((item) => item.id));
+      const currentRecords = new Map(state.records.map((record) => [record.installDigest, record]));
+      for (const transition of transitions) {
+        for (const candidate of records) {
+          // A worker may have read registrations before an opt-out was committed.
+          const record = currentRecords.get(candidate.installDigest);
+          if (!record) continue;
+          if (!record.selectedLineIDs.includes(transition.after.lineID)
+              || !shouldNotify(record, transition, now)) continue;
+          const id = `${record.installDigest}:${transition.after.lineID}:${transition.fingerprint}`;
+          if (existing.has(id)) continue;
+          state.queue.push({
+            id,
+            installDigest: record.installDigest,
+            lineID: transition.after.lineID,
+            payload: buildAlertPayload(transition, record.contractVersion || 1),
+            collapseID: `tubeboard-${transition.after.lineID}`,
+            attempts: 0,
+            nextAttemptAt: now.toISOString(),
+            expiresAt: new Date(now.getTime() + NOTIFICATION_EXPIRY_MS).toISOString()
+          });
+          existing.add(id);
+        }
       }
-    }
-    await this.save();
+    });
   }
 
   async dueQueue(now = new Date()) {
     await this.load();
     const nowMs = now.getTime();
-    return this.state.queue.filter((item) => {
+    return this.snapshot((state) => state.queue.filter((item) => {
       return Date.parse(item.nextAttemptAt) <= nowMs && Date.parse(item.expiresAt) > nowMs;
-    });
+    }));
   }
 
   recordForQueueItem(item) {
-    return this.state.records.find((record) => record.installDigest === item.installDigest);
+    return this.snapshot((state) => state.records.find((record) => record.installDigest === item.installDigest));
   }
 
   decryptedToken(record) {
@@ -456,26 +446,26 @@ export class DisruptionAlertStore {
   }
 
   async markQueueSuccess(itemID, now = new Date()) {
-    await this.load();
-    const item = this.state.queue.find((candidate) => candidate.id === itemID);
-    const record = item ? this.recordForQueueItem(item) : null;
-    if (record) record.lastNotificationAt = now.toISOString();
-    this.state.queue = this.state.queue.filter((item) => item.id !== itemID);
-    await this.save();
+    return this.transaction((state) => {
+      const item = state.queue.find((candidate) => candidate.id === itemID);
+      const record = item ? state.records.find((candidate) => candidate.installDigest === item.installDigest) : null;
+      if (record) record.lastNotificationAt = now.toISOString();
+      state.queue = state.queue.filter((item) => item.id !== itemID);
+    });
   }
 
   async markQueueRetry(itemID, now = new Date()) {
-    await this.load();
-    const item = this.state.queue.find((candidate) => candidate.id === itemID);
-    if (!item) return;
-    item.attempts += 1;
-    if (item.attempts >= MAX_QUEUE_ATTEMPTS) {
-      this.state.queue = this.state.queue.filter((candidate) => candidate.id !== itemID);
-    } else {
-      const delayMs = Math.min(15 * 60 * 1000, 2 ** item.attempts * 60_000);
-      item.nextAttemptAt = new Date(now.getTime() + delayMs).toISOString();
-    }
-    await this.save();
+    return this.transaction((state) => {
+      const item = state.queue.find((candidate) => candidate.id === itemID);
+      if (!item) return { changed: false };
+      item.attempts += 1;
+      if (item.attempts >= MAX_QUEUE_ATTEMPTS) {
+        state.queue = state.queue.filter((candidate) => candidate.id !== itemID);
+      } else {
+        const delayMs = Math.min(15 * 60 * 1000, 2 ** item.attempts * 60_000);
+        item.nextAttemptAt = new Date(now.getTime() + delayMs).toISOString();
+      }
+    });
   }
 }
 
