@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SerialWorker } from './worker-lifecycle.js';
 import {
   LiveActivityStore,
   TokenRateLimiter,
@@ -203,60 +204,65 @@ server.listen(port, () => {
   statusMonitor.start();
 });
 
+const notificationWorkers = [];
 if (config.workerEnabled) {
-  const rolloverTimers = new Map();
-
-  const runCycle = () => {
-    runLiveActivityWorkerCycle({
+  const worker = new SerialWorker({
+    initialDelayMs: 2_000,
+    intervalMs: config.workerIntervalMs,
+    onError: (error) => console.error(`Live Activity worker cycle failed: ${error.message}`),
+    run: (signal) => runLiveActivityWorkerCycle({
       store,
       config,
+      signal,
       scheduleRolloverPush: (record, contentState, now, workerIntervalMs) => {
         const delayMs = getRolloverDelayMs(contentState, now, workerIntervalMs);
-        const timerKey = `${record.environment}:${record.activityID}`;
-        const existingTimer = rolloverTimers.get(timerKey);
-        if (existingTimer) {
-          clearTimeout(existingTimer);
-          rolloverTimers.delete(timerKey);
+        worker.scheduleRerun(`${record.environment}:${record.activityID}`, delayMs);
+        if (delayMs !== null) {
+          console.log(`Live Activity rollover refresh scheduled in ${Math.round(delayMs / 1000)}s`);
         }
-
-        if (delayMs === null) {
-          return;
-        }
-
-        const timer = setTimeout(() => {
-          rolloverTimers.delete(timerKey);
-          runCycle();
-        }, delayMs);
-
-        if (typeof timer.unref === 'function') {
-          timer.unref();
-        }
-
-        rolloverTimers.set(timerKey, timer);
-        console.log(`Live Activity rollover refresh scheduled in ${Math.round(delayMs / 1000)}s`);
       }
-    }).catch((error) => {
-      console.error(`Live Activity worker cycle failed: ${error.message}`);
-    });
-  };
-
-  setTimeout(runCycle, 2_000);
-  setInterval(runCycle, config.workerIntervalMs);
+    })
+  });
+  notificationWorkers.push(worker);
+  worker.start();
 }
 
 if (disruptionAlertConfig.workerEnabled) {
-  const runDisruptionAlertCycle = () => {
-    runDisruptionAlertWorkerCycle({
+  const worker = new SerialWorker({
+    initialDelayMs: 4_000,
+    intervalMs: disruptionAlertConfig.workerIntervalMs,
+    onError: (error) => console.error(`Disruption alert worker cycle failed: ${error.message}`),
+    run: (signal) => runDisruptionAlertWorkerCycle({
       store: disruptionAlertStore,
-      config: disruptionAlertConfig
-    }).catch((error) => {
-      console.error(`Disruption alert worker cycle failed: ${error.message}`);
-    });
-  };
-
-  setTimeout(runDisruptionAlertCycle, 4_000);
-  setInterval(runDisruptionAlertCycle, disruptionAlertConfig.workerIntervalMs);
+      config: disruptionAlertConfig,
+      signal
+    })
+  });
+  notificationWorkers.push(worker);
+  worker.start();
 }
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // Give in-progress persistence and HTTP handlers five seconds to settle.
+  // Notification network work is aborted immediately by each owner's stop().
+  const deadline = setTimeout(() => {
+    server.closeAllConnections();
+    process.exit(1);
+  }, 5_000);
+  deadline.unref();
+  statusMonitor.stop();
+  await Promise.all([
+    new Promise((resolve) => server.close(resolve)),
+    ...notificationWorkers.map((worker) => worker.stop())
+  ]);
+  clearTimeout(deadline);
+  process.exit(0);
+}
+process.once('SIGTERM', () => { void shutdown(); });
+process.once('SIGINT', () => { void shutdown(); });
 
 async function handleTokenRegistration(request, response) {
   const ipAddress = getClientIp(request);
