@@ -44,6 +44,14 @@ The token endpoint stores records in `data/live-activities.json` locally and
 API, and the data directory is ignored by git. The versioned request contract
 and fixture are under `contracts/`.
 
+Both registration stores serialize complete changes and publish them only after
+atomically replacing their existing JSON file. A storage failure leaves the
+last committed state intact and reports an error; later requests can retry
+after the filesystem recovers. Alert opt-out removes the registration and its
+pending queue entries in the same persisted change. Temporary replacements use
+restricted permissions and are cleaned up on failure where the filesystem
+allows it. The existing single-process, single-volume ownership still applies.
+
 Registration abuse controls combine the random install identifier and request
 IP only inside a keyed, per-process HMAC. The in-memory buckets are evicted
 after the 60-second rate-limit window by one shared, unreferenced expiry timer,
