@@ -7,7 +7,11 @@ import {
 } from '../server/disruption-alerts.js';
 import { validateTokenPayload } from '../server/live-activity.js';
 import { LIVE_ACTIVITY_CONTRACT_VERSION } from '../server/version.js';
-import { decodeTrainSelection } from '../train-20260828.js';
+import {
+  appStoreFallbackPresentation,
+  decodeTrainSelection,
+  renderTrainFallback
+} from '../train-20260830-v2.js';
 
 const schemaPath = new URL('../contracts/live-activity-registration-v1.schema.json', import.meta.url);
 const fixturePath = new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url);
@@ -19,6 +23,7 @@ const homePagePath = new URL('../index.html', import.meta.url);
 const privacyPagePath = new URL('../privacy.html', import.meta.url);
 const supportPagePath = new URL('../support.html', import.meta.url);
 const trainPagePath = new URL('../train-v1.html', import.meta.url);
+const trainScriptPath = new URL('../train-20260830-v2.js', import.meta.url);
 const aasaPath = new URL('../.well-known/apple-app-site-association', import.meta.url);
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
@@ -99,21 +104,19 @@ test('public home page links to the live App Store listing without launch placeh
   assert.equal(mobileApplication.downloadUrl, appStoreURL);
 });
 
-test('website source describes the reviewed v1.2 app release', async () => {
+test('staged v1.2 website preserves compatibility and asset provenance', async () => {
   const html = await fs.readFile(homePagePath, 'utf8');
   const structuredDataText = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)?.[1];
   const structuredData = JSON.parse(structuredDataText);
   const mobileApplication = structuredData['@graph'].find((item) => item['@type'] === 'MobileApplication');
 
   assert.match(html, /Elizabeth line/);
-  assert.match(html, /London Overground/);
-  assert.match(html, /Follow a Train/);
-  assert.match(html, /Chronological Next Departures/);
   assert.match(html, /saved station and one of its real platforms/i);
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
   assert.match(html, /Opt-in disruption alerts/i);
   assert.match(html, /selected supported lines/i);
+  assert.match(html, /London Overground/i);
   assert.match(html, /cached or offline data clear/i);
   assert.match(html, /severity, resumed-service and quiet-hour controls/i);
   assert.doesNotMatch(html, /refresh (?:their|its) Tube data throughout the day/i);
@@ -125,8 +128,9 @@ test('website source describes the reviewed v1.2 app release', async () => {
   assert.match(mobileApplication.operatingSystem, /visionOS 26\.0 or later/);
   assert.ok(mobileApplication.featureList.includes('Elizabeth line stations, arrivals and status'));
   assert.ok(mobileApplication.featureList.some((feature) => /London Overground/i.test(feature)));
-  assert.ok(mobileApplication.featureList.some((feature) => /Follow a Train/i.test(feature)));
-  assert.ok(mobileApplication.featureList.some((feature) => /chronological Next Departures/i.test(feature)));
+  assert.ok(mobileApplication.featureList.some((feature) => /Premium Follow a Train/i.test(feature)));
+  assert.ok(mobileApplication.featureList.some((feature) => /By destination/i.test(feature)));
+  assert.match(html, /Next departures within each direction/);
 
   for (const asset of v11ProductAssets) {
     assert.match(html, new RegExp(`/assets/product/${asset}\\.png`));
@@ -137,7 +141,7 @@ test('website source describes the reviewed v1.2 app release', async () => {
   await fs.access(new URL('../assets/tubeboard-og-v1-1-20260825.png', import.meta.url));
 });
 
-test('v1.2 support explains widget recovery and Follow a Train safety', async () => {
+test('v1.2 support preserves widget recovery and explains added journeys', async () => {
   const html = await fs.readFile(supportPagePath, 'utf8');
 
   assert.match(html, /choose a saved station and then choose one of its available platforms/i);
@@ -146,8 +150,10 @@ test('v1.2 support explains widget recovery and Follow a Train safety', async ()
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
   assert.match(html, /choose the lines you want under Settings/i);
-  assert.match(html, /Follow a Train/i);
-  assert.match(html, /public train context only/i);
+  assert.match(html, /named London Overground lines/i);
+  assert.match(html, /Route context and live train information are separate/);
+  assert.match(html, /Browser live tracking is not available/);
+  assert.match(html, /existing monthly, yearly or Lifetime purchase includes the new Premium features/);
   assert.match(html, /assets\/tubeboard-og-v1-1-20260825\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
 });
@@ -163,6 +169,7 @@ test('privacy scope describes the supported London rail service without changing
 test('Follow a Train universal-link surface is app-associated, private by construction and honest when the app is absent', async () => {
   const association = JSON.parse(await fs.readFile(aasaPath, 'utf8'));
   const html = await fs.readFile(trainPagePath, 'utf8');
+  const script = await fs.readFile(trainScriptPath, 'utf8');
 
   assert.deepEqual(association.applinks.details.map((detail) => detail.appIDs), [
     ['5B8YD7QXWZ.OllyJ.My-Train-Times']
@@ -171,11 +178,90 @@ test('Follow a Train universal-link surface is app-associated, private by constr
     association.applinks.details.flatMap((detail) => detail.components.map((component) => component['/'])),
     ['/train/v1']
   );
-  assert.match(html, /short-lived shared train/i);
-  assert.match(html, /do not send that fragment to the TubeBoard server/i);
+  assert.match(html, /Someone shared their train with you/i);
+  assert.match(html, /are not sent to TubeBoard’s server/i);
+  assert.match(html, /tubeboard-icon-v3-180\.png/);
+  assert.doesNotMatch(html, /invitation to re-check/i);
   assert.match(html, new RegExp(appStoreURL.replaceAll('.', '\\.')));
+  assert.match(html, /id="train-app-store-link"[^>]*hidden/);
+  assert.match(html, /shared live view opens in TubeBoard on iPhone or iPad/i);
+  assert.match(script, /iPhone\|iPad/i);
+  assert.match(script, /maxTouchPoints/);
+  assert.match(script, /Browser tracking is not available yet/);
   assert.match(html, /<noscript>/);
   assert.doesNotMatch(html, /analytics|tracking pixel|account sign-in/i);
+});
+
+test('Follow a Train fallback offers the App Store on iPhone and both iPad user-agent modes', () => {
+  const devices = [
+    {
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+      platform: 'iPhone',
+      maxTouchPoints: 5
+    },
+    {
+      userAgent: 'Mozilla/5.0 (iPad; CPU OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+      platform: 'iPad',
+      maxTouchPoints: 5
+    },
+    {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15',
+      platform: 'MacIntel',
+      maxTouchPoints: 5
+    }
+  ];
+
+  for (const device of devices) {
+    const presentation = appStoreFallbackPresentation(device);
+    const { documentLike, elements } = trainFallbackDocument();
+    renderTrainFallback(documentLike, { hash: '#invalid' }, device, 1_787_925_000);
+
+    assert.equal(presentation.shouldShowAppStoreCTA, true);
+    assert.match(presentation.deviceDetail, /iPhone or iPad/i);
+    assert.match(presentation.deviceDetail, /open this shared link again/i);
+    assert.equal(elements.appStoreLink.hidden, false);
+    assert.equal(elements.deviceDetail.textContent, presentation.deviceDetail);
+  }
+});
+
+test('Follow a Train fallback keeps the App Store action hidden on non-touch desktop', () => {
+  const presentation = appStoreFallbackPresentation({
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15',
+    platform: 'MacIntel',
+    maxTouchPoints: 0
+  });
+
+  assert.equal(presentation.shouldShowAppStoreCTA, false);
+  assert.equal(
+    presentation.deviceDetail,
+    'This shared live view currently opens in TubeBoard on iPhone or iPad. Browser tracking is not available yet.'
+  );
+  const { documentLike, elements } = trainFallbackDocument();
+  renderTrainFallback(
+    documentLike,
+    { hash: '#invalid' },
+    {
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.6 Safari/605.1.15',
+      platform: 'MacIntel',
+      maxTouchPoints: 0
+    },
+    1_787_925_000
+  );
+  assert.equal(elements.appStoreLink.hidden, true);
+  assert.equal(elements.deviceDetail.textContent, presentation.deviceDetail);
+});
+
+test('Follow a Train fallback gives JavaScript-disabled iPhone and iPad users an App Store next step', async () => {
+  const html = await fs.readFile(trainPagePath, 'utf8');
+  const noscript = html.match(/<noscript>([\s\S]*?)<\/noscript>/i)?.[1];
+
+  assert.ok(noscript);
+  assert.match(noscript, /JavaScript is off/i);
+  assert.match(noscript, /If you’re on iPhone or iPad/i);
+  assert.match(noscript, /open this shared link again/i);
+  assert.match(noscript, new RegExp(appStoreURL.replaceAll('.', '\\.')));
+  assert.match(noscript, />Get TubeBoard on the App Store<\/a>/);
+  assert.doesNotMatch(noscript, /hidden/);
 });
 
 test('Follow a Train fallback validates the public payload deterministically and fails closed', () => {
@@ -204,8 +290,38 @@ test('Follow a Train fallback validates the public payload deterministically and
     state: 'expired',
     expiresAtSeconds: nowSeconds + 600
   });
+  const versionTwo = {
+    ...selection,
+    version: 2,
+    journeyAnchorStationID: '940GZZLULVT'
+  };
+  assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify(versionTwo)).toString('base64url'), nowSeconds),
+    {
+      state: 'valid',
+      lineID: 'victoria',
+      lineName: 'Victoria',
+      expiresAtSeconds: nowSeconds + 600
+    }
+  );
   assert.deepEqual(
     decodeTrainSelection(Buffer.from(JSON.stringify({ ...selection, version: 2 })).toString('base64url'), nowSeconds),
+    { state: 'invalid' }
+  );
+  assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify({ ...selection, journeyAnchorStationID: '940GZZLULVT' })).toString('base64url'), nowSeconds),
+    { state: 'invalid' }
+  );
+  assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify({ ...versionTwo, unexpected: true })).toString('base64url'), nowSeconds),
+    { state: 'invalid' }
+  );
+  assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify({ ...versionTwo, version: 3 })).toString('base64url'), nowSeconds),
+    { state: 'invalid' }
+  );
+  assert.deepEqual(
+    decodeTrainSelection(Buffer.from(JSON.stringify({ ...versionTwo, vehicleID: '000' })).toString('base64url'), nowSeconds),
     { state: 'invalid' }
   );
   assert.deepEqual(
@@ -236,4 +352,27 @@ function contrastRatio(first, second) {
   }).sort((left, right) => right - left);
 
   return (luminances[0] + 0.05) / (luminances[1] + 0.05);
+}
+
+function trainFallbackDocument() {
+  const elements = {
+    status: { textContent: '' },
+    detail: { textContent: '' },
+    deviceDetail: { textContent: '' },
+    appStoreLink: { hidden: true }
+  };
+  const elementsByID = new Map([
+    ['train-status', elements.status],
+    ['train-detail', elements.detail],
+    ['train-device-detail', elements.deviceDetail],
+    ['train-app-store-link', elements.appStoreLink]
+  ]);
+  return {
+    documentLike: {
+      getElementById(identifier) {
+        return elementsByID.get(identifier);
+      }
+    },
+    elements
+  };
 }

@@ -44,6 +44,14 @@ The token endpoint stores records in `data/live-activities.json` locally and
 API, and the data directory is ignored by git. The versioned request contract
 and fixture are under `contracts/`.
 
+Both registration stores serialize complete changes and publish them only after
+atomically replacing their existing JSON file. A storage failure leaves the
+last committed state intact and reports an error; later requests can retry
+after the filesystem recovers. Alert opt-out removes the registration and its
+pending queue entries in the same persisted change. Temporary replacements use
+restricted permissions and are cleaned up on failure where the filesystem
+allows it. The existing single-process, single-volume ownership still applies.
+
 Registration abuse controls combine the random install identifier and request
 IP only inside a keyed, per-process HMAC. The in-memory buckets are evicted
 after the 60-second rate-limit window by one shared, unreferenced expiry timer,
@@ -56,11 +64,43 @@ Live Activity identifier. Its line allowlist includes the 11 Underground and
 six named London Overground lines. The pre-existing Elizabeth registration gap
 is unchanged and remains owned by the app's separate contract-correction work.
 
+The public `/train/v1` uninstalled-recipient fallback validates the existing
+version 1 and version 2 shared-train fragments entirely in the browser; it
+rejects unknown versions and fields and never sends the fragment to the
+service. Its App Store handoff is shown for iPhone, conventional iPad user
+agents, and iPadOS Safari's desktop user agent only when touch capability
+confirms an iPad. Non-touch desktop browsers retain the browser-only message.
+When JavaScript is unavailable, the static page cannot validate the fragment
+but provides a clearly scoped iPhone/iPad App Store next step. No cookie,
+analytics, account, recipient-tracking or server-side journey state is added.
+
 When an app-selected duration elapses, the worker completes the existing
 pause-then-end transition before generic maximum-lifetime expiry, including
 when the ten-minute pause grace crosses the eight-hour ceiling. Existing APNs
 backoff, permanent-error cleanup and inactive-record retention remain the
 bounded failure and cleanup policy.
+
+TB-115 in service `1.4.4` gives each notification worker one active cycle and
+at most one pending rerun. Startup, interval and Live Activity rollover triggers
+share that owner, so slow I/O cannot start a second delivery cycle for the same
+worker. The existing 90-second Live Activity and 60-second disruption-alert
+cadences remain unchanged. Each TfL/APNs request has an absolute 15-second
+deadline covering connection, headers and the complete response body; body
+progress does not extend it. APNs streams and their dedicated sessions are
+disposed on completion, failure or cancellation. Requests remain sequential
+within a cycle, so total cycle time still depends on the number of due records.
+
+`SIGTERM` and `SIGINT` cancel notification requests and owned timers immediately,
+stop the status monitor, and allow HTTP handlers and persistence to drain for
+up to five seconds. A graceful drain exits successfully; an exceeded deadline
+closes remaining HTTP connections and exits with failure. An unfinished push
+is not acknowledged or charged a retry merely because shutdown cancelled it.
+Transport deadlines retain the existing retry/backoff and permanent-error
+rules. TB-114's recoverable durable writes are included; registration formats,
+encryption, retention and APNs environment selection are unchanged. This is
+source behavior until an authorized deployment reports the exact reviewed
+revision in `/healthz`. Rollback uses the previous recorded healthy source and
+the same persistent volume, without a data migration or volume replacement.
 
 The Premium disruption-alert endpoint accepts both versioned registration
 contracts. Contract v1 remains Underground-only for installed v1.1 clients;

@@ -221,12 +221,13 @@ test('token refresh for same activity preserves lifecycle fields', async () => {
   const refreshedAt = new Date('2026-06-14T15:25:00Z');
 
   await store.upsertToken(validTokenPayload, createdAt);
-  store.state.records[0].lastPushAt = '2026-06-14T15:22:00.000Z';
-  store.state.records[0].lastSuccessAt = '2026-06-14T15:22:00.000Z';
-  store.state.records[0].consecutiveEmptyCycles = 2;
-  store.state.records[0].backoffUntil = '2026-06-14T15:30:00.000Z';
-  store.state.records[0].backoffReason = 'emptyArrivals';
-  await store.save();
+  await store.transaction((state) => {
+    state.records[0].lastPushAt = '2026-06-14T15:22:00.000Z';
+    state.records[0].lastSuccessAt = '2026-06-14T15:22:00.000Z';
+    state.records[0].consecutiveEmptyCycles = 2;
+    state.records[0].backoffUntil = '2026-06-14T15:30:00.000Z';
+    state.records[0].backoffReason = 'emptyArrivals';
+  });
 
   await store.upsertToken({
     ...validTokenPayload,
@@ -288,12 +289,13 @@ test('new activity ID starts a fresh record instead of reusing same board lifecy
   const newActivityID = 'F74A888B-0149-4E26-917D-5C4F0E3F94A0';
 
   await store.upsertToken(validTokenPayload, oldCreatedAt);
-  store.state.records[0].lastPushAt = '2026-06-15T18:27:00.000Z';
-  store.state.records[0].lastSuccessAt = '2026-06-15T18:27:00.000Z';
-  store.state.records[0].consecutiveEmptyCycles = 4;
-  store.state.records[0].backoffUntil = '2026-06-15T18:40:00.000Z';
-  store.state.records[0].backoffReason = 'emptyArrivals';
-  await store.save();
+  await store.transaction((state) => {
+    state.records[0].lastPushAt = '2026-06-15T18:27:00.000Z';
+    state.records[0].lastSuccessAt = '2026-06-15T18:27:00.000Z';
+    state.records[0].consecutiveEmptyCycles = 4;
+    state.records[0].backoffUntil = '2026-06-15T18:40:00.000Z';
+    state.records[0].backoffReason = 'emptyArrivals';
+  });
 
   await store.upsertToken({
     ...validTokenPayload,
@@ -354,27 +356,27 @@ test('uses server update time for inactive retention and removes malformed legac
     retentionMs: 24 * 60 * 60 * 1000
   };
 
-  store.state.records = [
-    {
-      activityID: 'recent',
-      active: false,
-      endedAt: '2000-01-01T00:00:00Z',
-      updatedAt: '2026-07-24T11:00:00Z'
-    },
-    {
-      activityID: 'old',
-      active: false,
-      endedAt: '2099-01-01T00:00:00Z',
-      updatedAt: '2026-07-22T11:00:00Z'
-    },
-    {
-      activityID: 'malformed',
-      active: false,
-      endedAt: '2099-01-01T00:00:00Z'
-    }
-  ];
-  store.loaded = true;
-  await store.save();
+  await store.transaction((state) => {
+    state.records = [
+      {
+        activityID: 'recent',
+        active: false,
+        endedAt: '2000-01-01T00:00:00Z',
+        updatedAt: '2026-07-24T11:00:00Z'
+      },
+      {
+        activityID: 'old',
+        active: false,
+        endedAt: '2099-01-01T00:00:00Z',
+        updatedAt: '2026-07-22T11:00:00Z'
+      },
+      {
+        activityID: 'malformed',
+        active: false,
+        endedAt: '2099-01-01T00:00:00Z'
+      }
+    ];
+  });
 
   await store.expireOld(now, config);
 
@@ -813,8 +815,9 @@ test('platform empty arrivals still produce heartbeat pushes', async () => {
   const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
   const now = new Date();
   await store.upsertToken(platformTokenPayload, now);
-  store.state.records[0].consecutiveEmptyCycles = 12;
-  await store.save();
+  await store.transaction((state) => {
+    state.records[0].consecutiveEmptyCycles = 12;
+  });
 
   const pushed = [];
   const fetchImpl = async (url) => {
@@ -857,8 +860,9 @@ test('allPlatforms repeated empty arrivals can still back off', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-live-activity-'));
   const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
   await store.upsertToken({ ...validTokenPayload, selectionMode: 'allPlatforms' }, new Date());
-  store.state.records[0].consecutiveEmptyCycles = 12;
-  await store.save();
+  await store.transaction((state) => {
+    state.records[0].consecutiveEmptyCycles = 12;
+  });
 
   const pushed = [];
   const fetchImpl = async (url) => {
