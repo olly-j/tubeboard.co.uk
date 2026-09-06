@@ -92,7 +92,7 @@ test('support distinguishes route context, live proof, onward workings and brows
   assert.doesNotMatch(support, /never misses|guaranteed|track every train/i);
 });
 
-test('social preview copy matches across cards while existing images retain honest filenames', () => {
+test('social preview copy and current-source assets match across cards', () => {
   const ogTitle = home.match(/property="og:title" content="([^"]+)"/)?.[1];
   const twitterTitle = home.match(/name="twitter:title" content="([^"]+)"/)?.[1];
   const ogDescription = home.match(/property="og:description" content="([^"]+)"/)?.[1];
@@ -100,8 +100,7 @@ test('social preview copy matches across cards while existing images retain hone
   assert.equal(ogTitle, twitterTitle);
   assert.equal(ogDescription, twitterDescription);
   assert.match(ogTitle, /1\.2/);
-  assert.match(home, /Retained v1\.1 imagery still needs/);
-  // Keeping the current image address is deliberate staging evidence, not
-  // a claim that the launch imagery has been recaptured or visually approved.
-  assert.match(home, /tubeboard-og-v1-1-20260825\.png/);
+  assert.match(home, /TB-088 release gate/);
+  assert.match(home, /tubeboard-og-v1-2-20260905103957\.png/);
+  assert.doesNotMatch(home, /v1-1-20260825/);
 });
