@@ -27,13 +27,14 @@ const trainScriptPath = new URL('../train-20260830-v2.js', import.meta.url);
 const aasaPath = new URL('../.well-known/apple-app-site-association', import.meta.url);
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
-const v11ProductAssets = [
-  'home-status-v1-1-20260825',
-  'live-board-v1-1-20260825',
-  'detailed-board-v1-1-20260825',
-  'widgets-v1-1-20260825',
-  'nearby-interchange-v1-1-20260825',
-  'premium-alerts-v1-1-20260825'
+const v12ProductAssets = [
+  'follow-train-v1-2-20260905103957',
+  'live-board-v1-2-20260905103957',
+  'by-destination-v1-2-20260905103957',
+  'system-board-v1-2-20260905103957',
+  'overground-v1-2-20260905103957',
+  'disruption-widget-v1-2-20260905103957',
+  'next-departures-v1-2-20260905103957'
 ];
 
 test('versioned registration fixture matches the service validator', async () => {
@@ -104,7 +105,7 @@ test('public home page links to the live App Store listing without launch placeh
   assert.equal(mobileApplication.downloadUrl, appStoreURL);
 });
 
-test('website source remains compatible with the currently public app release', async () => {
+test('staged v1.2 website preserves compatibility and asset provenance', async () => {
   const html = await fs.readFile(homePagePath, 'utf8');
   const structuredDataText = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)?.[1];
   const structuredData = JSON.parse(structuredDataText);
@@ -115,30 +116,33 @@ test('website source remains compatible with the currently public app release', 
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
   assert.match(html, /Opt-in disruption alerts/i);
-  assert.match(html, /selected Tube lines/i);
-  assert.doesNotMatch(html, /selected Tube and London Overground lines/i);
+  assert.match(html, /selected supported lines/i);
+  assert.match(html, /London Overground/i);
   assert.match(html, /cached or offline data clear/i);
   assert.match(html, /severity, resumed-service and quiet-hour controls/i);
   assert.doesNotMatch(html, /refresh (?:their|its) Tube data throughout the day/i);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
   assert.doesNotMatch(html, /assets\/product\/(?:live-board|station-picker|detailed-board|time-to-leave)-20260723/i);
-  assert.match(html, /assets\/tubeboard-og-v1-1-20260825\.png/);
+  assert.match(html, /assets\/tubeboard-og-v1-2-20260905103957\.png/);
   assert.doesNotMatch(html, /assets\/product\/elizabeth-line-v1-1/i);
   assert.match(mobileApplication.operatingSystem, /watchOS 11\.5 or later/);
   assert.match(mobileApplication.operatingSystem, /visionOS 26\.0 or later/);
   assert.ok(mobileApplication.featureList.includes('Elizabeth line stations, arrivals and status'));
-  assert.ok(!mobileApplication.featureList.some((feature) => /London Overground/i.test(feature)));
+  assert.ok(mobileApplication.featureList.some((feature) => /London Overground/i.test(feature)));
+  assert.ok(mobileApplication.featureList.some((feature) => /Premium Follow a Train/i.test(feature)));
+  assert.ok(mobileApplication.featureList.some((feature) => /By destination/i.test(feature)));
+  assert.match(html, /Next departures within each direction/);
 
-  for (const asset of v11ProductAssets) {
+  for (const asset of v12ProductAssets) {
     assert.match(html, new RegExp(`/assets/product/${asset}\\.png`));
     assert.match(html, new RegExp(`/assets/product/${asset}\\.webp`));
     await fs.access(new URL(`../assets/product/${asset}.png`, import.meta.url));
     await fs.access(new URL(`../assets/product/${asset}.webp`, import.meta.url));
   }
-  await fs.access(new URL('../assets/tubeboard-og-v1-1-20260825.png', import.meta.url));
+  await fs.access(new URL('../assets/tubeboard-og-v1-2-20260905103957.png', import.meta.url));
 });
 
-test('v1.1 support explains platform widget configuration and offline state', async () => {
+test('v1.2 support preserves widget recovery and explains added journeys', async () => {
   const html = await fs.readFile(supportPagePath, 'utf8');
 
   assert.match(html, /choose a saved station and then choose one of its available platforms/i);
@@ -147,8 +151,11 @@ test('v1.1 support explains platform widget configuration and offline state', as
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
   assert.match(html, /choose the lines you want under Settings/i);
-  assert.doesNotMatch(html, /named London Overground lines/i);
-  assert.match(html, /assets\/tubeboard-og-v1-1-20260825\.png/);
+  assert.match(html, /named London Overground lines/i);
+  assert.match(html, /Route context and live train information are separate/);
+  assert.match(html, /Browser live tracking is not available/);
+  assert.match(html, /existing monthly, yearly or Lifetime purchase includes the new Premium features/);
+  assert.match(html, /assets\/tubeboard-og-v1-2-20260905103957\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
 });
 

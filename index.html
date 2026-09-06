@@ -3,32 +3,32 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TubeBoard: Live Departures | London Tube times</title>
-  <meta name="description" content="TubeBoard shows live London departures by platform, with saved stations, configurable widgets, disruption alerts, Apple Watch and Apple Vision Pro.">
+  <title>TubeBoard: Live Departures | London Tube &amp; Overground</title>
+  <meta name="description" content="Live London Underground, Elizabeth line and Overground departures. Follow supported trains, compare station boards and use Apple Watch widgets with Premium.">
   <meta name="theme-color" content="#f6f6f3">
   <meta name="robots" content="index, follow">
   <link rel="canonical" href="https://tubeboard.co.uk/">
 
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="TubeBoard">
-  <meta property="og:title" content="TubeBoard: Live Departures">
-  <meta property="og:description" content="Your station. Your platform. Your next train. Live London departures in one glance.">
+  <meta property="og:title" content="TubeBoard 1.2: your next train and the stops ahead">
+  <meta property="og:description" content="London Overground, Follow a Train, flexible station boards and Apple Watch widgets. Free live boards, with more ways to travel with Premium.">
   <meta property="og:url" content="https://tubeboard.co.uk/">
-  <meta property="og:image" content="https://tubeboard.co.uk/assets/tubeboard-og-v1-1-20260825.png">
+  <meta property="og:image" content="https://tubeboard.co.uk/assets/tubeboard-og-v1-2-20260905103957.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="TubeBoard Home showing recents, quick actions and the compact Tube status rail.">
+  <meta property="og:image:alt" content="TubeBoard live departure board and Follow a Train route, with v1.2 feature highlights.">
   <meta property="og:locale" content="en_GB">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="TubeBoard: Live Departures">
-  <meta name="twitter:description" content="Your station. Your platform. Your next train. Live London departures in one glance.">
-  <meta name="twitter:image" content="https://tubeboard.co.uk/assets/tubeboard-og-v1-1-20260825.png">
-  <meta name="twitter:image:alt" content="TubeBoard Home showing recents, quick actions and the compact Tube status rail.">
+  <meta name="twitter:title" content="TubeBoard 1.2: your next train and the stops ahead">
+  <meta name="twitter:description" content="London Overground, Follow a Train, flexible station boards and Apple Watch widgets. Free live boards, with more ways to travel with Premium.">
+  <meta name="twitter:image" content="https://tubeboard.co.uk/assets/tubeboard-og-v1-2-20260905103957.png">
+  <meta name="twitter:image:alt" content="TubeBoard live departure board and Follow a Train route, with v1.2 feature highlights.">
 
   <link rel="icon" type="image/png" sizes="32x32" href="/assets/tubeboard-icon-v3-32.png">
   <link rel="icon" type="image/png" sizes="512x512" href="/assets/tubeboard-icon-v3-512.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/assets/tubeboard-icon-v3-180.png">
-  <link rel="preload" as="image" href="/assets/product/live-board-v1-1-20260825.webp" type="image/webp" fetchpriority="high">
+  <link rel="preload" as="image" href="/assets/product/live-board-v1-2-20260905103957.webp" type="image/webp" fetchpriority="high">
   <link rel="stylesheet" href="/styles-20260820.css">
 
   <script type="application/ld+json">
@@ -40,7 +40,7 @@
         "@id": "https://tubeboard.co.uk/#website",
         "url": "https://tubeboard.co.uk/",
         "name": "TubeBoard",
-        "description": "Live London departure boards for iPhone, iPad, Apple Watch and Apple Vision Pro.",
+        "description": "Live London Underground, Elizabeth line and Overground departure boards for iPhone and iPad.",
         "publisher": { "@id": "https://tubeboard.co.uk/#org" },
         "inLanguage": "en-GB"
       },
@@ -61,7 +61,7 @@
         "url": "https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046",
         "downloadUrl": "https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046",
         "image": "https://tubeboard.co.uk/assets/tubeboard-icon-v3-512.png",
-        "description": "Live London departures by platform with saved stations, Live Activities, configurable widgets, disruption alerts, Apple Watch and Apple Vision Pro.",
+        "description": "Live Underground, Elizabeth line and London Overground departures, with Premium Follow a Train, station layouts and Apple Watch widgets.",
         "isAccessibleForFree": true,
         "offers": {
           "@type": "Offer",
@@ -76,11 +76,15 @@
           "Saved and recent stations",
           "Nearby Station matching on device",
           "Elizabeth line stations, arrivals and status",
+          "Six named London Overground lines",
+          "Premium Follow a Train with public train-link sharing",
+          "Premium direction-grouped Next departures and By destination layouts",
           "Live Activities, Dynamic Island and StandBy",
           "Home Screen and Lock Screen station and platform widgets",
+          "Adaptive Premium disruption widget",
           "Time to Leave and foreground catchability guidance",
           "Opt-in Premium disruption alerts",
-          "Premium Apple Watch companion app",
+          "Premium Apple Watch companion app and favourite/platform widgets",
           "Native Apple Vision Pro app and spatial widgets"
         ],
         "publisher": { "@id": "https://tubeboard.co.uk/#org" }
@@ -90,6 +94,9 @@
   </script>
 </head>
 <body>
+  <!-- TB-088 release gate: deploy this launch copy only after public v1.2
+       verification. Images use the accepted v1.2 runtime. Preserve source/capture hashes in
+       the assets release manifest and retain historical image files. -->
   <a class="skip-link" href="#main">Skip to content</a>
 
   <header class="site-header">
@@ -104,7 +111,7 @@
 
     <nav id="primary-nav" aria-label="Primary">
       <a href="#board">The board</a>
-      <a href="#commute">Your commute</a>
+      <a href="#whats-new">New in 1.2</a>
       <a href="#premium">Premium</a>
       <a href="#faq">FAQ</a>
       <a href="/status">Status</a>
@@ -115,22 +122,22 @@
   <main id="main">
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero-copy">
-        <p class="product-name">TubeBoard: Live Departures</p>
-        <h1 id="hero-title">Your station.<br>Your platform.<br>Your next train.</h1>
-        <p class="hero-lead">Live London departures, grouped the way you read them at the station. Open the board, see every second count down, and get moving.</p>
+        <p class="product-name">New in TubeBoard 1.2</p>
+        <h1 id="hero-title">Your next train.<br>And the stops ahead.</h1>
+        <p class="hero-lead">Live London Underground, Elizabeth line and Overground departures in one clear board. Follow supported trains, compare departures and keep your station close.</p>
         <div class="hero-actions">
           <a class="button button-primary" href="https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046">Download on the App Store</a>
-          <a class="text-link" href="#board">Explore the live board</a>
+          <a class="text-link" href="#whats-new">Explore what’s new</a>
           <a class="text-link" href="#premium">View Premium and pricing</a>
         </div>
-        <p class="release-note">Available for iPhone and iPad, with Premium on Apple Watch and a native Apple Vision Pro experience.</p>
+        <p class="release-note">Free live boards on iPhone and iPad. Follow a Train, extra layouts and Apple Watch widgets are included with Premium.</p>
       </div>
 
       <div class="hero-product">
         <figure class="product-frame product-frame-hero">
           <picture>
-            <source srcset="/assets/product/live-board-v1-1-20260825.webp" type="image/webp">
-            <img src="/assets/product/live-board-v1-1-20260825.png" alt="TubeBoard showing Central line departures at Leyton, grouped by eastbound and westbound platforms" width="1320" height="2868" fetchpriority="high" decoding="async">
+            <source srcset="/assets/product/live-board-v1-2-20260905103957.webp" type="image/webp">
+            <img src="/assets/product/live-board-v1-2-20260905103957.png" alt="TubeBoard showing Central line departures at Leyton, grouped by eastbound and westbound platforms" width="1320" height="2868" fetchpriority="high" decoding="async">
           </picture>
         </figure>
         <p class="product-caption"><strong>Leyton</strong><span>Live board · Simple mode</span></p>
@@ -140,14 +147,14 @@
     <section class="proof-line" aria-label="TubeBoard product principles">
       <p>No account</p>
       <p>No adverts</p>
-      <p>No tracking</p>
+      <p>No advertising tracking</p>
       <p>Powered by TfL Open Data</p>
     </section>
 
     <section class="intro" id="board" aria-labelledby="board-title">
       <div class="intro-heading">
         <p class="section-context">The live board</p>
-        <h2 id="board-title">The information you look up for, without the route-planner clutter.</h2>
+        <h2 id="board-title">Your station. Your platform. Your next train.</h2>
       </div>
       <div class="intro-copy">
         <p>Choose a service and station. TubeBoard arranges the next trains by platform and direction, with destinations and countdowns kept in a single, readable view.</p>
@@ -159,11 +166,11 @@
         </div>
         <div>
           <dt>Every platform</dt>
-          <dd>Arrivals stay grouped by platform or direction using the data TfL provides.</dd>
+          <dd>Keep By platform, compare Next departures within each direction, or group services By destination. The extra layouts are included with Premium.</dd>
         </div>
         <div>
           <dt>Your level of detail</dt>
-          <dd>Simple mode stays glanceable. Detailed mode adds train IDs and current locations when available.</dd>
+          <dd>Simple mode stays glanceable. Detailed mode adds train IDs and reported locations when available. Both modes are free.</dd>
         </div>
       </dl>
     </section>
@@ -172,15 +179,15 @@
       <div class="story-media story-media-light">
         <figure class="product-frame product-frame-story">
           <picture>
-            <source srcset="/assets/product/nearby-interchange-v1-1-20260825.webp" type="image/webp">
-            <img src="/assets/product/nearby-interchange-v1-1-20260825.png" alt="TubeBoard asking which line to open at Stratford, with Central, Elizabeth and Jubilee choices" width="1320" height="2868" loading="lazy" decoding="async">
+            <source srcset="/assets/product/overground-v1-2-20260905103957.webp" type="image/webp">
+            <img src="/assets/product/overground-v1-2-20260905103957.png" alt="TubeBoard line picker showing all six named London Overground lines" width="1320" height="2868" loading="lazy" decoding="async">
           </picture>
         </figure>
       </div>
       <div class="story-copy">
         <p class="section-context">Find your stop</p>
         <h2 id="picker-title">Pick a line. Search a station. Open the board.</h2>
-        <p>TubeBoard starts with the station you care about. Search the network, choose the right service at an interchange, use Nearby Station when you are already there, or return to one of your recent stops.</p>
+        <p>TubeBoard starts with the station you care about. Choose the right service at an interchange, use Nearby Station when you are already there, or return to one of your recent stops. A new five-step introduction helps you get started.</p>
         <ul class="plain-list">
           <li>Searchable line and station lists</li>
           <li>Clear service choices at interchange stations</li>
@@ -193,15 +200,15 @@
     <section class="story story-detail" aria-labelledby="detail-title">
       <div class="story-copy">
         <p class="section-context">Read it your way</p>
-        <h2 id="detail-title">A quick glance, or the detail behind it.</h2>
-        <p>Simple mode keeps the board pared back to destinations and times. Detailed mode adds the line, train identifier and live location where TfL supplies them. Both modes are included for free.</p>
-        <p class="copy-note">Boards refresh automatically about once a minute. Pull down whenever you want to request the latest predictions.</p>
+        <h2 id="detail-title">Read your station your way.</h2>
+        <p>Keep the free By platform view, compare Premium Next departures within each direction, or group services By destination. Simple and Detailed modes remain separate free choices.</p>
+        <p class="copy-note">Boards refresh automatically about once a minute. Pull down to request the latest predictions. Countdown animation respects your Reduce Motion setting.</p>
       </div>
       <div class="story-media story-media-dark">
         <figure class="product-frame product-frame-story">
           <picture>
-            <source srcset="/assets/product/detailed-board-v1-1-20260825.webp" type="image/webp">
-            <img src="/assets/product/detailed-board-v1-1-20260825.png" alt="TubeBoard Detailed mode showing train identifiers and reported locations for Central line departures" width="1320" height="2868" loading="lazy" decoding="async">
+            <source srcset="/assets/product/by-destination-v1-2-20260905103957.webp" type="image/webp">
+            <img src="/assets/product/by-destination-v1-2-20260905103957.png" alt="TubeBoard By destination layout at Leyton, showing destinations, platforms and countdowns" width="1320" height="2868" loading="lazy" decoding="async">
           </picture>
         </figure>
       </div>
@@ -209,32 +216,62 @@
 
     <section class="commute" id="commute" aria-labelledby="commute-title">
       <div class="commute-copy">
-        <p class="section-context">Home at a glance</p>
-        <h2 id="commute-title">The network status and your next board, together.</h2>
-        <p>Home keeps the compact Tube status rail, recent stations and the fastest ways into a live board in one place. Nearby matching remains private and runs on your device.</p>
+        <p class="section-context">Follow a Train</p>
+        <h2 id="commute-title">Your train and the route ahead.</h2>
+        <p>Open a supported departure with Premium to see its route and available live progress. Route context remains useful during live-data gaps, with no invented train position or countdown.</p>
         <dl class="fact-list">
-          <div><dt>Status</dt><dd>One compact severity rail</dd></div>
-          <div><dt>Recents</dt><dd>Your three latest stations</dd></div>
-          <div><dt>Private</dt><dd>Nearby matching stays on device</dd></div>
+          <div><dt>Route</dt><dd>Useful station context</dd></div>
+          <div><dt>Progress</dt><dd>Reliable live data where available</dd></div>
+          <div><dt>Share</dt><dd>A train link, with no personal location</dd></div>
         </dl>
       </div>
       <div class="commute-media">
         <figure class="product-frame product-frame-commute">
           <picture>
-            <source srcset="/assets/product/home-status-v1-1-20260825.webp" type="image/webp">
-            <img src="/assets/product/home-status-v1-1-20260825.png" alt="TubeBoard Home showing the Tube status rail, recent stations and quick actions" width="1320" height="2868" loading="lazy" decoding="async">
+            <source srcset="/assets/product/follow-train-v1-2-20260905103957.webp" type="image/webp">
+            <img src="/assets/product/follow-train-v1-2-20260905103957.png" alt="TubeBoard Follow a Train showing route context, a train marker and available countdowns" width="1320" height="2868" loading="lazy" decoding="async">
           </picture>
         </figure>
       </div>
     </section>
 
-    <section class="release-highlights" aria-labelledby="release-highlights-title">
+    <section class="release-highlights" id="whats-new" aria-labelledby="release-highlights-title">
       <div class="release-highlights-heading">
-        <p class="section-context">New in version 1.1</p>
-        <h2 id="release-highlights-title">Your board, in more of the places you need it.</h2>
-        <p>Configure a widget for a real platform, choose the right line at an interchange, and opt in to only the disruption alerts that matter to you.</p>
+        <p class="section-context">New in version 1.2</p>
+        <h2 id="release-highlights-title">More of London. A clearer route ahead.</h2>
+        <p>London Overground joins the free live board. Premium adds Follow a Train, flexible station layouts and new Apple Watch widgets.</p>
       </div>
       <div class="highlight-grid">
+        <article class="highlight-card">
+          <div>
+            <h3>Follow your train</h3>
+            <p>See a supported train’s route and follow its progress when reliable live information is available. Route context remains visible during live-data gaps. Share a link to the train without sharing your location or saved stations. Included with Premium.</p>
+          </div>
+        </article>
+        <article class="highlight-card">
+          <div>
+            <h3>More of London, on your board</h3>
+            <p>Lioness, Mildmay, Windrush, Weaver, Suffragette and Liberty join the Underground and Elizabeth line. Open a named London Overground line in the same familiar departure-board view. Basic departures are free.</p>
+          </div>
+        </article>
+        <article class="highlight-card">
+          <div>
+            <h3>Choose the view that helps you</h3>
+            <p>Read departures By platform, compare Next departures within each direction, or group services By destination. The extra layouts are included with Premium.</p>
+          </div>
+          <figure class="product-frame product-frame-highlight">
+            <picture>
+              <source srcset="/assets/product/next-departures-v1-2-20260905103957.webp" type="image/webp">
+              <img src="/assets/product/next-departures-v1-2-20260905103957.png" alt="TubeBoard Next departures at Leyton, ordered within each direction with platform labels" width="1320" height="2868" loading="lazy" decoding="async">
+            </picture>
+          </figure>
+        </article>
+        <article class="highlight-card">
+          <div>
+            <h3>Clearer service information</h3>
+            <p>The redesigned Premium disruption widget adapts to its size and distinguishes fresh, partial, stale and offline information. Check the update state before relying on a prediction.</p>
+          </div>
+        </article>
         <article class="highlight-card">
           <div>
             <h3>Station and platform widgets</h3>
@@ -242,20 +279,20 @@
           </div>
           <figure class="product-frame product-frame-highlight">
             <picture>
-              <source srcset="/assets/product/widgets-v1-1-20260825.webp" type="image/webp">
-              <img src="/assets/product/widgets-v1-1-20260825.png" alt="The iPhone widget gallery previewing a Favourite Tube Board widget for Leyton eastbound platform 2" width="1320" height="2868" loading="lazy" decoding="async">
+              <source srcset="/assets/product/system-board-v1-2-20260905103957.webp" type="image/webp">
+              <img src="/assets/product/system-board-v1-2-20260905103957.png" alt="The iPhone widget gallery previewing a Favourite Tube Board widget for Leyton eastbound platform 2" width="1320" height="2868" loading="lazy" decoding="async">
             </picture>
           </figure>
         </article>
         <article class="highlight-card">
           <div>
-            <h3>Alerts for the lines you choose</h3>
-            <p>Premium disruption alerts are opt in, with selected-line, severity, resumed-service and quiet-hour controls.</p>
+            <h3>Service changes at a glance</h3>
+            <p>The Premium disruption widget shows service information and its update state. Opt-in disruption alerts retain selected-line, severity, resumed-service and quiet-hour controls for the supported lines you choose.</p>
           </div>
           <figure class="product-frame product-frame-highlight">
             <picture>
-              <source srcset="/assets/product/premium-alerts-v1-1-20260825.webp" type="image/webp">
-              <img src="/assets/product/premium-alerts-v1-1-20260825.png" alt="TubeBoard disruption alert settings with the Central line selected" width="1320" height="2868" loading="lazy" decoding="async">
+              <source srcset="/assets/product/disruption-widget-v1-2-20260905103957.webp" type="image/webp">
+              <img src="/assets/product/disruption-widget-v1-2-20260905103957.png" alt="The native iPhone WidgetKit gallery showing TubeBoard line status and freshness" width="1320" height="2868" loading="lazy" decoding="async">
             </picture>
           </figure>
         </article>
@@ -286,11 +323,11 @@
         </article>
         <article>
           <h3>Apple Watch</h3>
-          <p>Premium brings synced favourites, on-device Nearby matching and grouped departures to the companion Watch app.</p>
+          <p>Premium brings synced favourites, on-device Nearby matching and grouped departures to the companion Watch app. Choose a favourite and platform for the new widget in the Smart Stack or on a compatible watch face.</p>
         </article>
         <article>
           <h3>Apple Vision Pro</h3>
-          <p>Place native board and map windows in your space, or keep departures visible in a spatial widget.</p>
+          <p>The native app supports placeable board and map windows, with spatial widgets. Check the App Store for the available platform version.</p>
         </article>
       </div>
       <p class="surface-note">Every user gets three complimentary Live Activity sessions. Premium makes Live Activities unlimited and unlocks widgets.</p>
@@ -300,20 +337,23 @@
       <div class="premium-intro">
         <p class="section-context">TubeBoard Premium</p>
         <h2 id="premium-title">More of the board, wherever you need it.</h2>
-        <p>Premium adds the commute tools with an ongoing service cost, while keeping the essential live board genuinely useful for free.</p>
+        <p>Follow trains, choose useful board layouts and keep your favourite departures on more screens. The essential live board stays free.</p>
       </div>
 
       <div class="premium-features">
+        <p>Follow a Train and public train-link sharing</p>
+        <p>Next departures and By destination station layouts</p>
         <p>Unlimited favourite stations</p>
         <p>Unlimited Live Activities, Dynamic Island and StandBy</p>
-        <p>Saved-station and platform widgets</p>
+        <p>Saved-station, disruption and Apple Watch widgets</p>
         <p>Time to Leave for every favourite</p>
         <p>Foreground Apple Maps catchability guidance</p>
-        <p>Platform headers coloured by Tube line</p>
-        <p>Opt-in disruption alerts for selected Tube lines</p>
+        <p>Platform headers coloured by line</p>
+        <p>Opt-in disruption alerts for selected supported lines</p>
         <p>Apple Watch companion app</p>
         <p>Family Sharing on yearly and lifetime plans</p>
       </div>
+      <p>Already have Premium? Your existing monthly, yearly or Lifetime purchase includes the new Premium features. Restore Purchases is available when needed.</p>
 
       <ol class="price-list" aria-label="TubeBoard Premium pricing">
         <li class="price-row">
@@ -349,15 +389,18 @@
           </thead>
           <tbody>
             <tr><th scope="row">Live departures and station search</th><td>Included</td><td>Included</td></tr>
+            <tr><th scope="row">London Overground departures</th><td>Included</td><td>Included</td></tr>
             <tr><th scope="row">Automatic refresh and both board modes</th><td>Included</td><td>Included</td></tr>
             <tr><th scope="row">Favourite stations</th><td>One</td><td>Unlimited</td></tr>
             <tr><th scope="row">Live Activities</th><td>Three sessions</td><td>Unlimited</td></tr>
-            <tr><th scope="row">Widgets</th><td>—</td><td>Included</td></tr>
-            <tr><th scope="row">Time to Leave</th><td>—</td><td>Included</td></tr>
-            <tr><th scope="row">Apple Maps catchability guidance</th><td>—</td><td>Included</td></tr>
-            <tr><th scope="row">Selected-line disruption alerts</th><td>—</td><td>Included</td></tr>
-            <tr><th scope="row">Apple Watch app</th><td>—</td><td>Included</td></tr>
-            <tr><th scope="row">Line-colour platform headers</th><td>—</td><td>Included</td></tr>
+            <tr><th scope="row">Follow a Train</th><td>Not included</td><td>Included</td></tr>
+            <tr><th scope="row">Next departures and By destination layouts</th><td>Not included</td><td>Included</td></tr>
+            <tr><th scope="row">Widgets</th><td>Not included</td><td>Included</td></tr>
+            <tr><th scope="row">Time to Leave</th><td>Not included</td><td>Included</td></tr>
+            <tr><th scope="row">Apple Maps catchability guidance</th><td>Not included</td><td>Included</td></tr>
+            <tr><th scope="row">Selected-line disruption alerts</th><td>Not included</td><td>Included</td></tr>
+            <tr><th scope="row">Apple Watch app and widgets</th><td>Not included</td><td>Included</td></tr>
+            <tr><th scope="row">Line-colour platform headers</th><td>Not included</td><td>Included</td></tr>
           </tbody>
         </table>
       </div>
@@ -370,7 +413,7 @@
       </div>
       <div class="trust-copy">
         <p>TubeBoard needs no account and contains no advertising, analytics or cross-app tracking. Favourite stations, recent stations, display choices and Nearby Station matching stay on your device.</p>
-        <p>Live Activities use a short-lived registration so the TubeBoard service can send the selected board through Apple Push Notification service. Inactive registrations are removed automatically.</p>
+        <p>Live Activities and opt-in disruption alerts use the routing and service information needed to deliver them. Shared train links contain public train context, not your location or saved stations. The Privacy Policy explains each optional service and its controls.</p>
         <div class="trust-links">
           <a class="text-link" href="/status">Check TubeBoard data status</a>
           <a class="text-link" href="/privacy">Read the privacy policy</a>
@@ -395,11 +438,19 @@
         </details>
         <details>
           <summary>What can I use for free?</summary>
-          <p>The live board, station search, automatic refresh, Simple and Detailed modes, five successful Nearby Station activations, Recents, one favourite and three Live Activity sessions are free.</p>
+          <p>The live board, including London Overground departures, station search, automatic refresh, Simple and Detailed modes, five successful Nearby Station activations, Recents, one favourite and three Live Activity sessions are free.</p>
         </details>
         <details>
           <summary>What does Premium add?</summary>
-          <p>Premium unlocks unlimited favourites, Nearby and Live Activities; saved-station and platform widgets; Time to Leave and catchability guidance; selected-line disruption alerts; the Apple Watch app; and platform headers coloured by Tube line.</p>
+          <p>Premium unlocks Follow a Train, Next departures and By destination layouts, unlimited favourites, Nearby and Live Activities, station/disruption widgets, Time to Leave and catchability guidance, selected-line disruption alerts, the Apple Watch app and widgets, and colour-by-line boards. Existing purchases include the new Premium features.</p>
+        </details>
+        <details>
+          <summary>Why can a route be visible without a train marker?</summary>
+          <p>Route context and live train information are separate. When TfL does not provide a reliable match, TubeBoard keeps the useful route and pauses unavailable live details. It does not invent a position or countdown.</p>
+        </details>
+        <details>
+          <summary>Does sharing a train share my location?</summary>
+          <p>No. The short-lived link carries public train context, not your precise location or saved stations. A compatible app opens the shared context; the web fallback explains the next step. Browser live tracking is not available.</p>
         </details>
         <details>
           <summary>Does it plan journeys?</summary>
@@ -416,7 +467,7 @@
       <img src="/assets/tubeboard-icon-v3-180.png" alt="" width="96" height="96" loading="lazy">
       <div>
         <h2 id="final-title">Live departures, ready when you are.</h2>
-        <p>TubeBoard is available now on the App Store for iPhone and iPad.</p>
+        <p>TubeBoard is available on the App Store for iPhone and iPad.</p>
       </div>
       <a class="button button-primary" href="https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046">Download on the App Store</a>
     </section>
