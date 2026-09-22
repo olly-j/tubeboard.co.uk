@@ -20,10 +20,12 @@ APP = 'tubeboard-co-uk'
 HOST = 'https://tubeboard.co.uk'
 PAGES = ('index.html', 'support.html')
 OLD_PRICE = '<p class="price"><strong>£24.99</strong><span>one-off</span></p>'
-NEW_PRICE = ('<p class="price"><strong>£31.99</strong><span>one-off from 25 September 2026</span></p>'
+SCHEDULED_PRICE = ('<p class="price"><strong>£31.99</strong><span>one-off from 25 September 2026</span></p>'
              '\n          <p class="pricing-note">£24.99 until 24 September 2026.</p>')
-OLD_SUPPORT = 'lifetime is £24.99 at UK launch;'
-NEW_SUPPORT = 'lifetime is £31.99 from 25 September 2026 (£24.99 until 24 September 2026);'
+OLD_SUPPORT = 'lifetime is £24.99 at UK launch; App Store prices can vary by region.'
+SCHEDULED_SUPPORT = 'lifetime is £31.99 from 25 September 2026 (£24.99 until 24 September 2026); App Store prices can vary by region.'
+NEW_PRICE = '<p class="price"><strong>£31.99</strong><span>one-off</span></p>'
+NEW_SUPPORT = 'lifetime is £31.99.'
 
 
 def digest(value: bytes) -> str:
@@ -38,6 +40,21 @@ def price_page(name: str, source: bytes) -> bytes:
     if text.count(old) != 1 or text.count('£24.99') != 1:
         raise ValueError('The reviewed prior pricing no longer matches; re-plan')
     return text.replace(old, new, 1).encode('utf-8')
+
+
+def verified_price_page(name: str, prior: bytes, live: bytes) -> bytes:
+    """Accept only exact original HTML or the previously reviewed price overlay.
+
+    The backend source stays fixed. Every byte outside its known price block
+    must still match, so a concurrent content change cannot be overwritten.
+    """
+    updated = price_page(name, prior)  # validates page and exact original price
+    old, scheduled = ((OLD_PRICE, SCHEDULED_PRICE) if name == 'index.html'
+                      else (OLD_SUPPORT, SCHEDULED_SUPPORT))
+    previous_overlay = prior.decode('utf-8').replace(old, scheduled, 1).encode('utf-8')
+    if live not in (prior, previous_overlay):
+        raise ValueError(f'Live {name} differs from both reviewed source states; re-plan')
+    return updated
 
 
 def overlay_dockerfile(image: str, source: str) -> str:
@@ -149,9 +166,7 @@ def main() -> int:
     for name in PAGES:
         prior = subprocess.check_output(['git', 'show', f'{args.expected_backend_revision}:{name}'], cwd=root)
         live = fetch('/' if name == 'index.html' else '/support')
-        if live != prior:
-            raise ValueError(f'Live {name} does not match the retained deployed source')
-        pages[name] = price_page(name, prior)
+        pages[name] = verified_price_page(name, prior, live)
         current = (root / name).read_bytes()
         replacement = NEW_PRICE if name == 'index.html' else NEW_SUPPORT
         if current.decode().count(replacement) != 1:

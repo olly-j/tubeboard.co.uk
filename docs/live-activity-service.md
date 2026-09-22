@@ -250,9 +250,11 @@ It never reads user records, changes secrets, publishes service 1.4.4, or
 changes worker/retention configuration. The private receipt retains the old
 immutable image for rollback and the distinct website source revision.
 
-The page states GBP 31.99 **from 25 September 2026**, with GBP 24.99 until
-24 September. StoreKit remains authoritative for the current regional price.
-Do not call the future price effective early or change the Apple schedule.
+The owner subsequently requested concise public copy: **£31.99 one-off** on
+Home and **lifetime is £31.99** on Support, without old prices or dates.
+The existing Apple price schedule remains unchanged. The guarded deployment
+also accepts the exact earlier scheduled-price overlay, and refuses any
+unrelated live-content change. Website copy is distinct from StoreKit pricing.
 The original full-service deployment procedure and its separate approval
 remain unchanged.
 
