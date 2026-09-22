@@ -255,3 +255,12 @@ The page states GBP 31.99 **from 25 September 2026**, with GBP 24.99 until
 Do not call the future price effective early or change the Apple schedule.
 The original full-service deployment procedure and its separate approval
 remain unchanged.
+
+The first publication exposed a flyctl image-parser defect: a digest-pinned
+image was expanded into a double-digest identifier and rejected before any
+machine update. The already-built image was safely applied through Fly's
+Machines API with the exact current instance version and full unchanged
+configuration except image. The permanent adapter follows that successful
+path; it never rebuilds or silently retries an ambiguous update. Production
+readback on 22 September confirmed both pricing HTML hashes, unchanged backend
+1.4.2 and identical environment, services, machine sizing and encrypted volume.

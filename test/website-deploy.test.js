@@ -41,3 +41,23 @@ test('current homepage and support disclose both scheduled Lifetime price and ef
     assert.ok(html.includes('£1.99') && html.includes('£9.99'));
   }
 });
+test('image update sends only changed image with optimistic version and never logs credentials', () => {
+ verify(`from unittest.mock import patch
+import io,json
+before={'id':'abc123','instance_id':'version1','config':{'image':'old','env':{'WORKER':'true'},'mounts':[{'path':'/data'}]}}
+requests=[]
+def fake(req,**kwargs):
+ requests.append(req)
+ return io.BytesIO(json.dumps({'id':'abc123','instance_id':'version2'} if req.get_method()=='POST' else {'ok':True}).encode())
+with patch.object(m,'checked',return_value='private-test-token') as auth,patch.object(m.urllib.request,'urlopen',side_effect=fake):
+ result=m.update_image(before,'registry.fly.io/tubeboard-co-uk@sha256:'+'a'*64)
+ assert auth.call_args.args[0]==['flyctl','auth','token']
+body=json.loads(requests[0].data);assert body['current_version']=='version1';assert body['config']['env']==before['config']['env'];assert body['config']['mounts']==before['config']['mounts'];assert before['config']['image']=='old';assert body['config']['image'].count('@')==1;assert len(requests)==2;assert 'instance_id=version2' in requests[1].full_url;assert 'private-test-token' not in json.dumps(result)`);
+});
+test('image update refuses missing concurrency version before requesting credentials or mutation', () => {
+ verify(`from unittest.mock import patch
+with patch.object(m,'checked',side_effect=AssertionError('credential call')):
+ try: m.update_image({'id':'abc123','config':{}},'registry.fly.io/tubeboard-co-uk@sha256:'+'a'*64)
+ except ValueError: pass
+ else: raise AssertionError('missing version accepted')`);
+});
