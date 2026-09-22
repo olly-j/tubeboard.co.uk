@@ -230,3 +230,28 @@ Set `DisruptionAlertRegistrationEndpointURL` to:
 ```text
 https://tubeboard.co.uk/api/disruption-alerts/registrations
 ```
+
+## Website-only scheduled price publication (TB-016, 22 September 2026)
+
+The owner authorized immediate publication of the Lifetime price schedule,
+not deployment of the separately held service 1.4.4 changes. The guarded
+`scripts/deploy-website-only.py` route therefore overlays **only** `index.html`
+and `support.html` on the exact existing production image. It derives those
+pages from the verified deployed source and applies only the reviewed price
+replacement, preserving any other newer website/assets work on main.
+
+Before mutation it requires clean, reviewed current-main source, matching live
+HTML and backend revision, the exact image digest and single machine, the
+existing encrypted volume, passing repository tests, and an unchanged machine
+configuration after image construction. The build is build-only first. Actual
+publication requires `--confirm-production`; only the image changes. Full
+configuration, live page hashes and backend health must match after update.
+It never reads user records, changes secrets, publishes service 1.4.4, or
+changes worker/retention configuration. The private receipt retains the old
+immutable image for rollback and the distinct website source revision.
+
+The page states GBP 31.99 **from 25 September 2026**, with GBP 24.99 until
+24 September. StoreKit remains authoritative for the current regional price.
+Do not call the future price effective early or change the Apple schedule.
+The original full-service deployment procedure and its separate approval
+remain unchanged.
