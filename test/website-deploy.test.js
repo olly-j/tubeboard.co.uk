@@ -40,7 +40,7 @@ test('current homepage and support show only the selected Lifetime price', () =>
     assert.ok(!html.includes('24 September 2026'));
     assert.ok(!html.includes('£24.99'));
     if (name === 'index.html') assert.ok(html.includes('<strong>£31.99</strong><span>one-off</span>'));
-    else assert.ok(html.includes('lifetime is £31.99;'));
+    else assert.ok(html.includes('lifetime is £31.99.'));
     assert.ok(html.includes('£1.99') && html.includes('£9.99'));
   }
 });

@@ -22,10 +22,10 @@ PAGES = ('index.html', 'support.html')
 OLD_PRICE = '<p class="price"><strong>£24.99</strong><span>one-off</span></p>'
 SCHEDULED_PRICE = ('<p class="price"><strong>£31.99</strong><span>one-off from 25 September 2026</span></p>'
              '\n          <p class="pricing-note">£24.99 until 24 September 2026.</p>')
-OLD_SUPPORT = 'lifetime is £24.99 at UK launch;'
-SCHEDULED_SUPPORT = 'lifetime is £31.99 from 25 September 2026 (£24.99 until 24 September 2026);'
+OLD_SUPPORT = 'lifetime is £24.99 at UK launch; App Store prices can vary by region.'
+SCHEDULED_SUPPORT = 'lifetime is £31.99 from 25 September 2026 (£24.99 until 24 September 2026); App Store prices can vary by region.'
 NEW_PRICE = '<p class="price"><strong>£31.99</strong><span>one-off</span></p>'
-NEW_SUPPORT = 'lifetime is £31.99;'
+NEW_SUPPORT = 'lifetime is £31.99.'
 
 
 def digest(value: bytes) -> str:
