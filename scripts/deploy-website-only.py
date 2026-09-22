@@ -80,6 +80,41 @@ def machine(machine_id: str) -> dict:
     return result
 
 
+def update_image(before: dict, image: str) -> dict:
+    """Change only the image via the documented optimistic-concurrency API.
+
+    flyctl versions that append a digest to an already pinned image can form
+    an invalid double-digest reference. The API accepts the immutable image
+    directly; the observed instance_id prevents overwriting a concurrent edit.
+    Credentials stay in memory and are never passed as arguments or logged.
+    """
+    overlay_dockerfile(image, '0' * 40)  # validate immutable app-owned image
+    if not re.fullmatch(r'[a-zA-Z0-9]+', str(before.get('id', ''))):
+        raise ValueError('Missing exact machine ID')
+    if not before.get('instance_id'):
+        raise ValueError('Missing optimistic-concurrency version')
+    config = dict(before['config'])
+    config['image'] = image
+    token = checked(['flyctl', 'auth', 'token']).strip()
+    if not token:
+        raise ValueError('Existing Fly authentication unavailable')
+    url = f"https://api.machines.dev/v1/apps/{APP}/machines/{before['id']}"
+    payload = {'config': config, 'current_version': before['instance_id']}
+    request = urllib.request.Request(url, data=json.dumps(payload).encode(),
+        headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}, method='POST')
+    with urllib.request.urlopen(request, timeout=90) as response:
+        result = json.load(response)
+    instance = result.get('instance_id', '')
+    if not re.fullmatch(r'[a-zA-Z0-9]+', instance):
+        raise RuntimeError('Update response lacks an instance; inspect actual machine before retry')
+    wait = urllib.request.Request(url + '/wait?state=started&timeout=60&instance_id=' + instance,
+                                 headers={'Authorization': 'Bearer ' + token})
+    with urllib.request.urlopen(wait, timeout=70) as response:
+        response.read(16_384)
+    return {'id': result['id'], 'instanceId': instance, 'image': image,
+            'method': 'Machines API with exact current_version; only image changed'}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--expected-backend-revision', required=True)
@@ -156,11 +191,8 @@ def main() -> int:
         raise ValueError('Production changed during build; do not update it')
     # Only the image flag is supplied. Existing environment, workers, secrets,
     # services, checks, size and encrypted volume must remain byte-equivalent.
-    result = subprocess.run(['flyctl', 'machine', 'update', args.machine_id, '--app', APP,
-                             '--image', new_image, '--yes'], capture_output=True, text=True, timeout=300)
-    (evidence / 'machine-update.log').write_text(result.stdout + '\n' + result.stderr)
-    if result.returncode:
-        raise RuntimeError('Update outcome requires readback. Do not blindly repeat or overwrite it.')
+    result = update_image(latest, new_image)
+    (evidence / 'machine-update.json').write_text(json.dumps(result, indent=2))
     after = machine(args.machine_id)
     if config_digest(after) != plan['configSha256'] or after['image_ref']['digest'] != matches[-1]:
         raise RuntimeError('Unexpected configuration/image readback; inspect before any further mutation')
