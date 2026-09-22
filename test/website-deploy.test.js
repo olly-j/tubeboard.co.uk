@@ -32,12 +32,15 @@ after=copy.deepcopy(before);after['config']['image']='new';assert m.config_diges
 for key,val in [('mounts',[]),('env',{'WORKER':'false'}),('services',[])]:
  changed=copy.deepcopy(after);changed['config'][key]=val;assert m.config_digest(before)!=m.config_digest(changed)`);
 });
-test('current homepage and support disclose both scheduled Lifetime price and effective date', () => {
+test('current homepage and support show only the selected Lifetime price', () => {
   for (const name of ['index.html','support.html']) {
     const html=fs.readFileSync(name,'utf8');
     assert.ok(html.includes('£31.99'));
-    assert.ok(html.includes('25 September 2026'));
-    assert.ok(html.includes('£24.99 until 24 September 2026'));
+    assert.ok(!html.includes('25 September 2026'));
+    assert.ok(!html.includes('24 September 2026'));
+    assert.ok(!html.includes('£24.99'));
+    if (name === 'index.html') assert.ok(html.includes('<strong>£31.99</strong><span>one-off</span>'));
+    else assert.ok(html.includes('lifetime is £31.99;'));
     assert.ok(html.includes('£1.99') && html.includes('£9.99'));
   }
 });
@@ -60,4 +63,16 @@ with patch.object(m,'checked',side_effect=AssertionError('credential call')):
  try: m.update_image({'id':'abc123','config':{}},'registry.fly.io/tubeboard-co-uk@sha256:'+'a'*64)
  except ValueError: pass
  else: raise AssertionError('missing version accepted')`);
+});
+
+test('plain-price publication accepts the exact original or reviewed scheduled overlay only', () => {
+  verify(`for name,old,scheduled,new in [('index.html',m.OLD_PRICE,m.SCHEDULED_PRICE,m.NEW_PRICE),('support.html',m.OLD_SUPPORT,m.SCHEDULED_SUPPORT,m.NEW_SUPPORT)]:
+ prior=('header '+old+' footer').encode()
+ overlay=('header '+scheduled+' footer').encode()
+ expected=('header '+new+' footer').encode()
+ for live in (prior,overlay): assert m.verified_price_page(name,prior,live)==expected
+ for live in (b'changed '+overlay,overlay+b' changed',expected,overlay.replace(b'header',b'different')):
+  try: m.verified_price_page(name,prior,live)
+  except ValueError: pass
+  else: raise AssertionError('unreviewed live content accepted')`);
 });

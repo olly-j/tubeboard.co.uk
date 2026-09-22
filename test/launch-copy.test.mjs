@@ -51,7 +51,7 @@ test('launch schema and visible links identify the same existing app without cha
   assert.ok(app.featureList.some((feature) => /London Overground/.test(feature)));
   assert.ok(app.featureList.some((feature) => /By destination/.test(feature)));
   assert.ok(app.featureList.some((feature) => /Apple Watch.*widgets/.test(feature)));
-  for (const price of ['£1.99', '£9.99', '£24.99']) {
+  for (const price of ['£1.99', '£9.99', '£31.99']) {
     assert.ok(home.includes(price));
     assert.ok(support.includes(price));
   }
