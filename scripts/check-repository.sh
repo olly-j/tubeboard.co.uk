@@ -5,6 +5,17 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# A source archive has no tracked-file inventory. Refuse a false-green secret
+# audit instead of allowing failed git commands inside if conditions to pass.
+git_root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "Repository checks require a Git working tree." >&2
+  exit 1
+}
+[[ "$git_root" == "$repo_root" ]] || {
+  echo "Repository checks must run against this exact Git root." >&2
+  exit 1
+}
+
 required=(
   AGENTS.md
   CONTRIBUTING.md
