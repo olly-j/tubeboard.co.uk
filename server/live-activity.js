@@ -833,15 +833,15 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
     return;
   }
 
-  const refreshes = new Map();
+  const publicResponses = new Map();
   for (const record of liveRecords.filter((record) => record.contentStateContract === STATION_BOARD_CONTRACT)) {
     signal?.throwIfAborted();
     try {
       let cache = record.stationBoardCache || {};
       if (!cacheOnly && !(cache.nextRefreshAt > now.getTime())) {
-        const boardKey = `${record.stationID}:${record.lineID}`;
-        if (!refreshes.has(boardKey)) refreshes.set(boardKey, refreshStationBoard(record, cache, config, fetchImpl, now.getTime(), signal, clock));
-        cache = mergeContexts(cache, await refreshes.get(boardKey), record, clock());
+        // Only public HTTP reads are shared. Each activity qualifies those
+        // immutable receipts against its own selection and retained context.
+        cache = await refreshStationBoard(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses);
       }
       const effectiveNow = new Date(clock());
       cache = await store.retainStationBoard(record.activityID, record.environment, cache, effectiveNow);
