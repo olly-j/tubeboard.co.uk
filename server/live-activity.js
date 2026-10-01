@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
 import { TransactionalJsonStore } from './transactional-json-store.js';
+import { admitPlannedSeed } from './station-board-seed.js';
+import { STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, buildStationBoardState } from './station-board-v2.js';
 
 export const TUBE_LINES = new Map([
   ['bakerloo', 'Bakerloo'],
@@ -80,6 +82,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
 
       const previous = matchIndex >= 0 ? state.records[matchIndex] : {};
       const isSameActivity = previous.activityID === payload.activityID;
+      // An older token registration cannot downgrade an already negotiated
+      // activity or change its selected board behind a newer observation.
+      if (isSameActivity && (previous.contentStateContract === STATION_BOARD_CONTRACT || payload.contentStateContract === STATION_BOARD_CONTRACT) && Date.parse(payload.tokenUpdatedAt) < Date.parse(previous.tokenUpdatedAt)) return { changed: false, value: redactRecord(previous) };
+      if (previous.contentStateContract === STATION_BOARD_CONTRACT && (!validBoard(payload.stationID, payload.lineID))) return { changed: false, value: redactRecord(previous) };
       const record = {
         ...previous,
         installID: payload.installID,
@@ -115,6 +121,12 @@ export class LiveActivityStore extends TransactionalJsonStore {
         backoffReason: null
       };
 
+      if (payload.contentStateContract === STATION_BOARD_CONTRACT || previous.contentStateContract === STATION_BOARD_CONTRACT) {
+        record.contentStateContract = STATION_BOARD_CONTRACT;
+        if (previous.stationID !== payload.stationID || previous.lineID !== payload.lineID) delete record.stationBoardCache;
+        const seed = admitPlannedSeed(payload.plannedContextSeed, record, now.getTime());
+        if (!seed.errors.length && (Object.keys(seed.sources).length || Object.keys(seed.closureSources).length)) record.stationBoardCache = mergeContexts(record.stationBoardCache, { sources: seed.sources, closureSources: seed.closureSources }, record, now.getTime());
+      }
       if (matchIndex >= 0) {
         state.records[matchIndex] = record;
       } else {
@@ -183,6 +195,15 @@ export class LiveActivityStore extends TransactionalJsonStore {
     }));
   }
 
+  async retainStationBoard(activityID, environment, incoming, now = new Date()) {
+    return this.transaction((state) => {
+      const record = this.findByActivity(activityID, environment, state);
+      if (!record || record.active === false || record.contentStateContract !== STATION_BOARD_CONTRACT) return { changed: false, value: null };
+      record.stationBoardCache = mergeContexts(record.stationBoardCache, incoming, record, now.getTime());
+      return { value: record.stationBoardCache };
+    });
+  }
+
   async markPushed(activityID, environment, info, now = new Date()) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
@@ -198,6 +219,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
         record.lastStationName = info.contentState.stationName;
         record.lastLineName = info.contentState.lineName;
         record.lastPlatform = info.contentState.platform;
+        if (record.contentStateContract === STATION_BOARD_CONTRACT) {
+          record.lastBoardContentDigest = info.contentDigest;
+          record.nextBoardBoundaryAt = info.contentState.nextBoardBoundaryAt;
+        }
       }
       record.backoffUntil = null;
     });
@@ -452,7 +477,7 @@ export class TokenRateLimiter {
   }
 }
 
-export function validateTokenPayload(input) {
+export function validateTokenPayload(input, now = new Date()) {
   const payload = input && typeof input === 'object' ? input : {};
   const errors = [];
   const requiredStringFields = [
@@ -478,10 +503,15 @@ export function validateTokenPayload(input) {
     errors.push('stationID is invalid');
   }
 
-  if (typeof payload.lineID === 'string' && !LIVE_ACTIVITY_LINES.has(payload.lineID)) {
+  const v2 = payload.contentStateContract === STATION_BOARD_CONTRACT;
+  if (payload.contentStateContract !== undefined && !v2) errors.push('contentStateContract is unsupported');
+  if (v2 && !validBoard(payload.stationID, payload.lineID)) errors.push('stationID is not on the selected station-board line');
+  if (typeof payload.lineID === 'string' && !(v2 ? STATION_BOARD_LINES : LIVE_ACTIVITY_LINES).has(payload.lineID)) {
     errors.push('lineID is not a supported Live Activity line');
   }
 
+  if (payload.plannedContextSeed !== undefined && !v2) errors.push('plannedContextSeed requires station-board-v2');
+  if (v2) errors.push(...admitPlannedSeed(payload.plannedContextSeed, payload, now.getTime()).errors);
   const explicitSelectionMode = optionalString(payload.selectionMode);
   const selectionMode = inferSelectionMode(payload);
   if (explicitSelectionMode && !['platform', 'allPlatforms'].includes(explicitSelectionMode)) {
@@ -534,7 +564,8 @@ export function validateTokenPayload(input) {
       appBundleID: String(payload.appBundleID || '').trim(),
       appVersion: String(payload.appVersion || '').trim(),
       buildNumber: String(payload.buildNumber || '').trim(),
-      environment: String(payload.environment || '').trim()
+      environment: String(payload.environment || '').trim(),
+      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
     }
   };
 }
@@ -672,12 +703,16 @@ export function buildContentState(record, arrivals, statuses, now = new Date()) 
 }
 
 export function buildApnsPayload(contentState, now = new Date()) {
-  const staleAt = new Date(now.getTime() + LIVE_ACTIVITY_STALE_BUFFER_MS);
+  const staleAt = contentState.contentStateContract === STATION_BOARD_CONTRACT
+    ? new Date((contentState.staleAt * 1000) + APPLE_REFERENCE_UNIX_SECONDS * 1000)
+    : new Date(now.getTime() + LIVE_ACTIVITY_STALE_BUFFER_MS);
   return {
     aps: {
       timestamp: toUnixSeconds(now),
       event: 'update',
-      'content-state': contentState,
+      'content-state': contentState.contentStateContract === STATION_BOARD_CONTRACT
+        ? Object.fromEntries(Object.entries(contentState).filter(([field]) => field !== 'nextBoardBoundaryAt'))
+        : contentState,
       'stale-date': toUnixSeconds(staleAt)
     }
   };
@@ -751,7 +786,7 @@ export async function pushLiveActivityUpdate(record, payload, config, options = 
   throw error;
 }
 
-export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal }) {
+export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal, cacheOnly = false, clock = () => Date.now() }) {
   signal?.throwIfAborted();
   await store.expireOld(now, config);
   const records = await store.listActive(now, config);
@@ -798,12 +833,44 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
     return;
   }
 
+  const refreshes = new Map();
+  for (const record of liveRecords.filter((record) => record.contentStateContract === STATION_BOARD_CONTRACT)) {
+    signal?.throwIfAborted();
+    try {
+      let cache = record.stationBoardCache || {};
+      if (!cacheOnly && !(cache.nextRefreshAt > now.getTime())) {
+        const boardKey = `${record.stationID}:${record.lineID}`;
+        if (!refreshes.has(boardKey)) refreshes.set(boardKey, refreshStationBoard(record, cache, config, fetchImpl, now.getTime(), signal, clock));
+        cache = mergeContexts(cache, await refreshes.get(boardKey), record, clock());
+      }
+      const effectiveNow = new Date(clock());
+      cache = await store.retainStationBoard(record.activityID, record.environment, cache, effectiveNow);
+      if (!cache) continue;
+      const contentState = buildStationBoardState(record, cache, effectiveNow.getTime());
+      const digestInput = { ...contentState }; delete digestInput.updatedAt; delete digestInput.nextBoardBoundaryAt;
+      const contentDigest = crypto.createHash('sha256').update(JSON.stringify(digestInput)).digest('hex');
+      if (contentDigest !== record.lastBoardContentDigest) {
+        await pushImpl(record, buildApnsPayload(contentState, effectiveNow), config, { signal });
+        await store.markPushed(record.activityID, record.environment, { emptyArrivals: contentState.arrivals.length === 0, contentState, contentDigest }, effectiveNow);
+        logger.info(`Live Activity station-board update pushed, arrivals ${contentState.arrivals.length}`);
+      }
+      if (typeof scheduleRolloverPush === 'function') scheduleRolloverPush(record, contentState, effectiveNow, config.workerIntervalMs);
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (error.permanent) await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
+      else await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120000, 'stationBoardPushFailed', now);
+      logger.warn('Live Activity station-board update could not be delivered');
+    }
+  }
+  // A typed cache boundary never admits new legacy source reads.
+  const legacyRecords = cacheOnly ? [] : liveRecords.filter((record) => record.contentStateContract !== STATION_BOARD_CONTRACT);
+  if (!legacyRecords.length) return;
   let statuses = [];
   try {
     statuses = await fetchTfLStatuses(config, fetchImpl, { signal });
   } catch (error) {
     signal?.throwIfAborted();
-    for (const record of liveRecords) {
+    for (const record of legacyRecords) {
       await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
     }
     logger.warn(`Live Activity worker backed off all records: ${error.message}`);
@@ -812,7 +879,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
 
   const arrivalsByStation = new Map();
 
-  for (const record of liveRecords) {
+  for (const record of legacyRecords) {
     signal?.throwIfAborted();
     try {
       if (!arrivalsByStation.has(record.stationID)) {
@@ -862,6 +929,10 @@ function shouldBackoffEmptyArrivals(record, contentState) {
 }
 
 export function getRolloverDelayMs(contentState, now = new Date(), workerIntervalMs = 90_000) {
+  if (contentState.contentStateContract === STATION_BOARD_CONTRACT) {
+    const delay = contentState.nextBoardBoundaryAt - now.getTime();
+    return Number.isFinite(contentState.nextBoardBoundaryAt) && delay > 0 && delay < workerIntervalMs ? delay : null;
+  }
   const firstExpectedArrival = contentState.arrivals?.[0]?.expectedArrival;
   if (typeof firstExpectedArrival !== 'number') {
     return null;

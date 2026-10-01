@@ -1,0 +1,3654 @@
+{
+  "schemaVersion": 1,
+  "sourceAppRevision": "eb0b2a9fa08146d7c3332e0dd28c4f9ce844fc05",
+  "sourceCatalogueSHA256": "f98fbbe6e4c343fe53a99a471dd8e9c21049651717af681fc1509f33838f5590",
+  "timezone": "Europe/London",
+  "lines": [
+    {
+      "lineID": "bakerloo",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUHAW",
+      "branchTargetIDs": [
+        "940GZZLUHAW",
+        "940GZZLUEAC"
+      ],
+      "stationCount": 25
+    },
+    {
+      "lineID": "central",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUEPG",
+      "branchTargetIDs": [
+        "940GZZLUEPG",
+        "940GZZLUWRP"
+      ],
+      "stationCount": 49
+    },
+    {
+      "lineID": "circle",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUERC",
+      "branchTargetIDs": [
+        "940GZZLUHSC",
+        "940GZZLUALD"
+      ],
+      "stationCount": 36
+    },
+    {
+      "lineID": "district",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUUPM",
+      "branchTargetIDs": [
+        "940GZZLUUPM",
+        "940GZZLURMD"
+      ],
+      "stationCount": 60
+    },
+    {
+      "lineID": "hammersmith-city",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUHSC",
+      "branchTargetIDs": [
+        "940GZZLUHSC",
+        "940GZZLUBKG"
+      ],
+      "stationCount": 29
+    },
+    {
+      "lineID": "jubilee",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUSTM",
+      "branchTargetIDs": [
+        "940GZZLUSTM",
+        "940GZZLUSTD"
+      ],
+      "stationCount": 27
+    },
+    {
+      "lineID": "metropolitan",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUAMS",
+      "branchTargetIDs": [
+        "940GZZLUAMS",
+        "940GZZLUALD"
+      ],
+      "stationCount": 35
+    },
+    {
+      "lineID": "northern",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUEGW",
+      "branchTargetIDs": [
+        "940GZZLUEGW",
+        "940GZZLUMDN"
+      ],
+      "stationCount": 52
+    },
+    {
+      "lineID": "piccadilly",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUHR4",
+      "branchTargetIDs": [
+        "940GZZLUCKS",
+        "940GZZLUHR5"
+      ],
+      "stationCount": 53
+    },
+    {
+      "lineID": "victoria",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUBXN",
+      "branchTargetIDs": [
+        "940GZZLUBXN",
+        "940GZZLUWWL"
+      ],
+      "stationCount": 16
+    },
+    {
+      "lineID": "waterloo-city",
+      "mode": "tube",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZLUWLO",
+      "branchTargetIDs": [
+        "940GZZLUWLO",
+        "940GZZLUBNK"
+      ],
+      "stationCount": 2
+    },
+    {
+      "lineID": "elizabeth",
+      "mode": "elizabeth-line",
+      "qualifiedRailDepartureSource": true,
+      "boundedOriginID": "910GSHENFLD",
+      "branchTargetIDs": [
+        "910GSHENFLD",
+        "910GHTRWTM5"
+      ],
+      "stationCount": 43
+    },
+    {
+      "lineID": "liberty",
+      "mode": "overground",
+      "qualifiedRailDepartureSource": true,
+      "boundedOriginID": "910GROMFORD",
+      "branchTargetIDs": [
+        "910GROMFORD",
+        "910GUPMNSTR"
+      ],
+      "stationCount": 3
+    },
+    {
+      "lineID": "lioness",
+      "mode": "overground",
+      "qualifiedRailDepartureSource": true,
+      "boundedOriginID": "910GWATFJDC",
+      "branchTargetIDs": [
+        "910GWATFJDC",
+        "910GEUSTON"
+      ],
+      "stationCount": 19
+    },
+    {
+      "lineID": "mildmay",
+      "mode": "overground",
+      "qualifiedRailDepartureSource": true,
+      "boundedOriginID": "910GWLSDJHL",
+      "branchTargetIDs": [
+        "910GSTFD",
+        "910GRICHMND"
+      ],
+      "stationCount": 29
+    },
+    {
+      "lineID": "suffragette",
+      "mode": "overground",
+      "qualifiedRailDepartureSource": true,
+      "boundedOriginID": "910GBARKRIV",
+      "branchTargetIDs": [
+        "910GBARKRIV",
+        "910GGOSPLOK"
+      ],
+      "stationCount": 13
+    },
+    {
+      "lineID": "weaver",
+      "mode": "overground",
+      "qualifiedRailDepartureSource": true,
+      "boundedOriginID": "910GENFLDTN",
+      "branchTargetIDs": [
+        "910GENFLDTN",
+        "910GLIVST"
+      ],
+      "stationCount": 25
+    },
+    {
+      "lineID": "windrush",
+      "mode": "overground",
+      "qualifiedRailDepartureSource": true,
+      "boundedOriginID": "910GDALS",
+      "branchTargetIDs": [
+        "910GHGHI",
+        "910GWCROYDN"
+      ],
+      "stationCount": 29
+    },
+    {
+      "lineID": "dlr",
+      "mode": "dlr",
+      "qualifiedRailDepartureSource": false,
+      "boundedOriginID": "940GZZDLBNK",
+      "branchTargetIDs": [
+        "940GZZDLBNK",
+        "940GZZDLLEW"
+      ],
+      "stationCount": 45
+    }
+  ],
+  "stations": [
+    {
+      "stationID": "940GZZDLABR",
+      "stationName": "Abbey Road",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "910GABWDXR",
+      "stationName": "Abbey Wood",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GACTNCTL",
+      "stationName": "Acton Central",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GACTONML",
+      "stationName": "Acton Main Line",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUACT",
+      "stationName": "Acton Town",
+      "lineIDs": [
+        "district",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUALD",
+      "stationName": "Aldgate",
+      "lineIDs": [
+        "circle",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUADE",
+      "stationName": "Aldgate East",
+      "lineIDs": [
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZDLALL",
+      "stationName": "All Saints",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUALP",
+      "stationName": "Alperton",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUAMS",
+      "stationName": "Amersham",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GANERLEY",
+      "stationName": "Anerley",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUAGL",
+      "stationName": "Angel",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUACY",
+      "stationName": "Archway",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUASG",
+      "stationName": "Arnos Grove",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUASL",
+      "stationName": "Arsenal",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBST",
+      "stationName": "Baker Street",
+      "lineIDs": [
+        "bakerloo",
+        "circle",
+        "hammersmith-city",
+        "jubilee",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBLM",
+      "stationName": "Balham",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZDLBNK",
+      "stationName": "Bank",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBNK",
+      "stationName": "Bank",
+      "lineIDs": [
+        "central",
+        "northern",
+        "waterloo-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBBN",
+      "stationName": "Barbican",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GBARKING",
+      "stationName": "Barking",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBKG",
+      "stationName": "Barking",
+      "lineIDs": [
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "910GBARKRIV",
+      "stationName": "Barking Riverside",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBKE",
+      "stationName": "Barkingside",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBSC",
+      "stationName": "Barons Court",
+      "lineIDs": [
+        "district",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZBPSUST",
+      "stationName": "Battersea Power Station",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBWT",
+      "stationName": "Bayswater",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZDLBEC",
+      "stationName": "Beckton",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZDLBPK",
+      "stationName": "Beckton Park",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBEC",
+      "stationName": "Becontree",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBZP",
+      "stationName": "Belsize Park",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBMY",
+      "stationName": "Bermondsey",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GBTHNLGR",
+      "stationName": "Bethnal Green",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBLG",
+      "stationName": "Bethnal Green",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBKF",
+      "stationName": "Blackfriars",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GBLCHSRD",
+      "stationName": "Blackhorse Road",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBLR",
+      "stationName": "Blackhorse Road",
+      "lineIDs": [
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "940GZZDLBLA",
+      "stationName": "Blackwall",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "910GBONDST",
+      "stationName": "Bond Street",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBND",
+      "stationName": "Bond Street",
+      "lineIDs": [
+        "central",
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBOR",
+      "stationName": "Borough",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBOS",
+      "stationName": "Boston Manor",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBDS",
+      "stationName": "Bounds Green",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZDLBOW",
+      "stationName": "Bow Church",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBWR",
+      "stationName": "Bow Road",
+      "lineIDs": [
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBTX",
+      "stationName": "Brent Cross",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GBRTWOOD",
+      "stationName": "Brentwood",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBXN",
+      "stationName": "Brixton",
+      "lineIDs": [
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "910GBROCKLY",
+      "stationName": "Brockley",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBBB",
+      "stationName": "Bromley-by-Bow",
+      "lineIDs": [
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "910GBRBY",
+      "stationName": "Brondesbury",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GBRBYPK",
+      "stationName": "Brondesbury Park",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GBRUCGRV",
+      "stationName": "Bruce Grove",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBKH",
+      "stationName": "Buckhurst Hill",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GBNHAM",
+      "stationName": "Burnham (Berks)",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUBTK",
+      "stationName": "Burnt Oak",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GBHILLPK",
+      "stationName": "Bush Hill Park",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "910GBUSHYDC",
+      "stationName": "Bushey",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCAR",
+      "stationName": "Caledonian Road",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GCLDNNRB",
+      "stationName": "Caledonian Road & Barnsbury",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GCAMHTH",
+      "stationName": "Cambridge Heath (London)",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "910GCMDNRD",
+      "stationName": "Camden Road",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCTN",
+      "stationName": "Camden Town",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GCNDAW",
+      "stationName": "Canada Water",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCWR",
+      "stationName": "Canada Water",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GCANWHRF",
+      "stationName": "Canary Wharf",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZDLCAN",
+      "stationName": "Canary Wharf",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCYF",
+      "stationName": "Canary Wharf",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZDLCGT",
+      "stationName": "Canning Town",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCGT",
+      "stationName": "Canning Town",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCST",
+      "stationName": "Cannon Street",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GCNNB",
+      "stationName": "Canonbury",
+      "lineIDs": [
+        "mildmay",
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCPK",
+      "stationName": "Canons Park",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GCRPNDPK",
+      "stationName": "Carpenders Park",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "910GCHDWLHT",
+      "stationName": "Chadwell Heath",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCAL",
+      "stationName": "Chalfont & Latimer",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCFM",
+      "stationName": "Chalk Farm",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCHL",
+      "stationName": "Chancery Lane",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCHX",
+      "stationName": "Charing Cross",
+      "lineIDs": [
+        "bakerloo",
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCSM",
+      "stationName": "Chesham",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GCHESHNT",
+      "stationName": "Cheshunt",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCWL",
+      "stationName": "Chigwell",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GCHINGFD",
+      "stationName": "Chingford",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCWP",
+      "stationName": "Chiswick Park",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCYD",
+      "stationName": "Chorleywood",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCPC",
+      "stationName": "Clapham Common",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GCLPHHS",
+      "stationName": "Clapham High Street",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GCLPHMJ1",
+      "stationName": "Clapham Junction",
+      "lineIDs": [
+        "mildmay",
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GCLPHMJC",
+      "stationName": "Clapham Junction",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCPN",
+      "stationName": "Clapham North",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCPS",
+      "stationName": "Clapham South",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GCLAPTON",
+      "stationName": "Clapton",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCKS",
+      "stationName": "Cockfosters",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCND",
+      "stationName": "Colindale",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCSD",
+      "stationName": "Colliers Wood",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCGN",
+      "stationName": "Covent Garden",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZDLCLA",
+      "stationName": "Crossharbour",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "910GCROUCHH",
+      "stationName": "Crouch Hill",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZLUCXY",
+      "stationName": "Croxley",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GCRYSTLP",
+      "stationName": "Crystal Palace",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GCUSTMHS",
+      "stationName": "Custom House",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZDLCUS",
+      "stationName": "Custom House (for ExCel)",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZDLCUT",
+      "stationName": "Cutty Sark (for Maritime Greenwich)",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZDLCYP",
+      "stationName": "Cyprus",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUDGE",
+      "stationName": "Dagenham East",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUDGY",
+      "stationName": "Dagenham Heathway",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GDALS",
+      "stationName": "Dalston Junction",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GDALSKLD",
+      "stationName": "Dalston Kingsland",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUDBN",
+      "stationName": "Debden",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GDENMRKH",
+      "stationName": "Denmark Hill",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZDLDEP",
+      "stationName": "Deptford Bridge",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZDLDEV",
+      "stationName": "Devons Road",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUDOH",
+      "stationName": "Dollis Hill",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GEALINGB",
+      "stationName": "Ealing Broadway",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEBY",
+      "stationName": "Ealing Broadway",
+      "lineIDs": [
+        "central",
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUECM",
+      "stationName": "Ealing Common",
+      "lineIDs": [
+        "district",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUECT",
+      "stationName": "Earl's Court",
+      "lineIDs": [
+        "district",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEAN",
+      "stationName": "East Acton",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEFY",
+      "stationName": "East Finchley",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEHM",
+      "stationName": "East Ham",
+      "lineIDs": [
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZDLEIN",
+      "stationName": "East India",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEPY",
+      "stationName": "East Putney",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEAE",
+      "stationName": "Eastcote",
+      "lineIDs": [
+        "metropolitan",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEGW",
+      "stationName": "Edgware",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUERB",
+      "stationName": "Edgware Road (Bakerloo)",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZLUERC",
+      "stationName": "Edgware Road (Circle Line)",
+      "lineIDs": [
+        "circle",
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "910GEDMNGRN",
+      "stationName": "Edmonton Green",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEAC",
+      "stationName": "Elephant & Castle",
+      "lineIDs": [
+        "bakerloo",
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEPK",
+      "stationName": "Elm Park",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZDLELV",
+      "stationName": "Elverson Road",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEMB",
+      "stationName": "Embankment",
+      "lineIDs": [
+        "bakerloo",
+        "circle",
+        "district",
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GEMRSPKH",
+      "stationName": "Emerson Park",
+      "lineIDs": [
+        "liberty"
+      ]
+    },
+    {
+      "stationID": "910GENFLDTN",
+      "stationName": "Enfield Town",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEPG",
+      "stationName": "Epping",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUEUS",
+      "stationName": "Euston",
+      "lineIDs": [
+        "northern",
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "940GZZLUESQ",
+      "stationName": "Euston Square",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUFLP",
+      "stationName": "Fairlop",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GFRNDXR",
+      "stationName": "Farringdon",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUFCN",
+      "stationName": "Farringdon",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUFYC",
+      "stationName": "Finchley Central",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUFYR",
+      "stationName": "Finchley Road",
+      "lineIDs": [
+        "jubilee",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GFNCHLYR",
+      "stationName": "Finchley Road & Frognal",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUFPK",
+      "stationName": "Finsbury Park",
+      "lineIDs": [
+        "piccadilly",
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "910GFRSTGT",
+      "stationName": "Forest Gate",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GFORESTH",
+      "stationName": "Forest Hill",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUFBY",
+      "stationName": "Fulham Broadway",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZDLGAL",
+      "stationName": "Gallions Reach",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGTH",
+      "stationName": "Gants Hill",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GGIDEAPK",
+      "stationName": "Gidea Park",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGTR",
+      "stationName": "Gloucester Road",
+      "lineIDs": [
+        "circle",
+        "district",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGGN",
+      "stationName": "Golders Green",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGHK",
+      "stationName": "Goldhawk Road",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGDG",
+      "stationName": "Goodge Street",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GGODMAYS",
+      "stationName": "Goodmayes",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GGOSPLOK",
+      "stationName": "Gospel Oak",
+      "lineIDs": [
+        "mildmay",
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGGH",
+      "stationName": "Grange Hill",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGPS",
+      "stationName": "Great Portland Street",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGPK",
+      "stationName": "Green Park",
+      "lineIDs": [
+        "jubilee",
+        "piccadilly",
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGFD",
+      "stationName": "Greenford",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZDLGRE",
+      "stationName": "Greenwich",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "910GGNRSBRY",
+      "stationName": "Gunnersbury",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUGBY",
+      "stationName": "Gunnersbury",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GHACKNYC",
+      "stationName": "Hackney Central",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GHAKNYNM",
+      "stationName": "Hackney Downs",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "910GHACKNYW",
+      "stationName": "Hackney Wick",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GHAGGERS",
+      "stationName": "Haggerston",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHLT",
+      "stationName": "Hainault",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHSD",
+      "stationName": "Hammersmith (Dist&Picc Line)",
+      "lineIDs": [
+        "district",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHSC",
+      "stationName": "Hammersmith (H&C Line)",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHTD",
+      "stationName": "Hampstead",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GHMPSTDH",
+      "stationName": "Hampstead Heath",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHGR",
+      "stationName": "Hanger Lane",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GHANWELL",
+      "stationName": "Hanwell",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GHARLSDN",
+      "stationName": "Harlesden",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHSN",
+      "stationName": "Harlesden",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "910GHRLDWOD",
+      "stationName": "Harold Wood",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GHRGYGL",
+      "stationName": "Harringay Green Lanes",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "910GHROW",
+      "stationName": "Harrow & Wealdstone",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHAW",
+      "stationName": "Harrow & Wealdstone",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHOH",
+      "stationName": "Harrow-on-the-Hill",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GHTCHEND",
+      "stationName": "Hatch End",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHNX",
+      "stationName": "Hatton Cross",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GHAYESAH",
+      "stationName": "Hayes & Harlington",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GHEDSTNL",
+      "stationName": "Headstone Lane",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "910GHTRWTM4",
+      "stationName": "Heathrow Terminal 4",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHR4",
+      "stationName": "Heathrow Terminal 4",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GHTRWTM5",
+      "stationName": "Heathrow Terminal 5",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHR5",
+      "stationName": "Heathrow Terminal 5",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GHTRWAPT",
+      "stationName": "Heathrow Terminals 2 & 3",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHRC",
+      "stationName": "Heathrow Terminals 2 & 3",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHCL",
+      "stationName": "Hendon Central",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZDLHEQ",
+      "stationName": "Heron Quays",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHBT",
+      "stationName": "High Barnet",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHSK",
+      "stationName": "High Street Kensington",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GHGHMSPK",
+      "stationName": "Highams Park",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "910GHGHI",
+      "stationName": "Highbury & Islington",
+      "lineIDs": [
+        "mildmay",
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHAI",
+      "stationName": "Highbury & Islington",
+      "lineIDs": [
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHGT",
+      "stationName": "Highgate",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHGD",
+      "stationName": "Hillingdon",
+      "lineIDs": [
+        "metropolitan",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHBN",
+      "stationName": "Holborn",
+      "lineIDs": [
+        "central",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHPK",
+      "stationName": "Holland Park",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHWY",
+      "stationName": "Holloway Road",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GHOMRTON",
+      "stationName": "Homerton",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GHONROPK",
+      "stationName": "Honor Oak Park",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHCH",
+      "stationName": "Hornchurch",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHWC",
+      "stationName": "Hounslow Central",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHWE",
+      "stationName": "Hounslow East",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHWT",
+      "stationName": "Hounslow West",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GHOXTON",
+      "stationName": "Hoxton",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUHPC",
+      "stationName": "Hyde Park Corner",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUICK",
+      "stationName": "Ickenham",
+      "lineIDs": [
+        "metropolitan",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GILFORD",
+      "stationName": "Ilford",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GCSEAH",
+      "stationName": "Imperial Wharf",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZDLISL",
+      "stationName": "Island Gardens",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "910GIVER",
+      "stationName": "Iver",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKNG",
+      "stationName": "Kennington",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GKENSLG",
+      "stationName": "Kensal Green",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKSL",
+      "stationName": "Kensal Green",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "910GKENR",
+      "stationName": "Kensal Rise",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GKENOLYM",
+      "stationName": "Kensington (Olympia)",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKOY",
+      "stationName": "Kensington (Olympia)",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKSH",
+      "stationName": "Kentish Town",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GKNTSHTW",
+      "stationName": "Kentish Town West",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GKTON",
+      "stationName": "Kenton",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKEN",
+      "stationName": "Kenton",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "910GKEWGRDN",
+      "stationName": "Kew Gardens",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKWG",
+      "stationName": "Kew Gardens",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKBN",
+      "stationName": "Kilburn",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GKLBRNHR",
+      "stationName": "Kilburn High Road",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKPK",
+      "stationName": "Kilburn Park",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZDLKGV",
+      "stationName": "King George V",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKSX",
+      "stationName": "King's Cross St. Pancras",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city",
+        "metropolitan",
+        "northern",
+        "piccadilly",
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKBY",
+      "stationName": "Kingsbury",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZLUKNB",
+      "stationName": "Knightsbridge",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLULAD",
+      "stationName": "Ladbroke Grove",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLULBN",
+      "stationName": "Lambeth North",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZLULGT",
+      "stationName": "Lancaster Gate",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZDLLDP",
+      "stationName": "Langdon Park",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "910GLANGLEY",
+      "stationName": "Langley (Berks)",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLULRD",
+      "stationName": "Latimer Road",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLULSQ",
+      "stationName": "Leicester Square",
+      "lineIDs": [
+        "northern",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZDLLEW",
+      "stationName": "Lewisham",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLULYN",
+      "stationName": "Leyton",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GLEYTNMR",
+      "stationName": "Leyton Midland Road",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZLULYS",
+      "stationName": "Leytonstone",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GLYTNSHR",
+      "stationName": "Leytonstone High Road",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZDLLIM",
+      "stationName": "Limehouse",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "910GLIVSTLL",
+      "stationName": "Liverpool Street",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLULVT",
+      "stationName": "Liverpool Street",
+      "lineIDs": [
+        "central",
+        "circle",
+        "hammersmith-city",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLULNB",
+      "stationName": "London Bridge",
+      "lineIDs": [
+        "jubilee",
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZDLLCA",
+      "stationName": "London City Airport",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "910GEUSTON",
+      "stationName": "London Euston",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "910GLONFLDS",
+      "stationName": "London Fields",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "910GLIVST",
+      "stationName": "London Liverpool Street",
+      "lineIDs": [
+        "elizabeth",
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "910GPADTON",
+      "stationName": "London Paddington",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLULGN",
+      "stationName": "Loughton",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMVL",
+      "stationName": "Maida Vale",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "910GMDNHEAD",
+      "stationName": "Maidenhead",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMRH",
+      "stationName": "Manor House",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GMANRPK",
+      "stationName": "Manor Park",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMSH",
+      "stationName": "Mansion House",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMBA",
+      "stationName": "Marble Arch",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GMRYLAND",
+      "stationName": "Maryland",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMYB",
+      "stationName": "Marylebone",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMED",
+      "stationName": "Mile End",
+      "lineIDs": [
+        "central",
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMHL",
+      "stationName": "Mill Hill East",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMMT",
+      "stationName": "Monument",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMPK",
+      "stationName": "Moor Park",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMGT",
+      "stationName": "Moorgate",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city",
+        "metropolitan",
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMDN",
+      "stationName": "Morden",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUMTC",
+      "stationName": "Mornington Crescent",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZDLMUD",
+      "stationName": "Mudchute",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNDN",
+      "stationName": "Neasden",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GNWCRELL",
+      "stationName": "New Cross ELL",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GNEWXGTE",
+      "stationName": "New Cross Gate",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNBP",
+      "stationName": "Newbury Park",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZNEUGST",
+      "stationName": "Nine Elms",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNAN",
+      "stationName": "North Acton",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNEN",
+      "stationName": "North Ealing",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNGW",
+      "stationName": "North Greenwich",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNHA",
+      "stationName": "North Harrow",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GNWEMBLY",
+      "stationName": "North Wembley",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNWY",
+      "stationName": "North Wembley",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNFD",
+      "stationName": "Northfields",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNHT",
+      "stationName": "Northolt",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNKP",
+      "stationName": "Northwick Park",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNOW",
+      "stationName": "Northwood",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNWH",
+      "stationName": "Northwood Hills",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GNORWDJ",
+      "stationName": "Norwood Junction",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUNHG",
+      "stationName": "Notting Hill Gate",
+      "lineIDs": [
+        "central",
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUOAK",
+      "stationName": "Oakwood",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUODS",
+      "stationName": "Old Street",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUOSY",
+      "stationName": "Osterley",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUOVL",
+      "stationName": "Oval",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUOXC",
+      "stationName": "Oxford Circus",
+      "lineIDs": [
+        "bakerloo",
+        "central",
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "910GPADTLL",
+      "stationName": "Paddington",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPAC",
+      "stationName": "Paddington",
+      "lineIDs": [
+        "bakerloo",
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPAH",
+      "stationName": "Paddington (H&C Line)-Underground",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPKR",
+      "stationName": "Park Royal",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPSG",
+      "stationName": "Parsons Green",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GPCKHMRY",
+      "stationName": "Peckham Rye",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GPENEW",
+      "stationName": "Penge West",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPVL",
+      "stationName": "Perivale",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPCC",
+      "stationName": "Piccadilly Circus",
+      "lineIDs": [
+        "bakerloo",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPCO",
+      "stationName": "Pimlico",
+      "lineIDs": [
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPNR",
+      "stationName": "Pinner",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPLW",
+      "stationName": "Plaistow",
+      "lineIDs": [
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZDLPDK",
+      "stationName": "Pontoon Dock",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZDLPOP",
+      "stationName": "Poplar",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPRD",
+      "stationName": "Preston Road",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZDLPRE",
+      "stationName": "Prince Regent",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZDLPUD",
+      "stationName": "Pudding Mill Lane",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUPYB",
+      "stationName": "Putney Bridge",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUQPS",
+      "stationName": "Queen's Park",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "910GQPRK",
+      "stationName": "Queens Park (London)",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "910GPCKHMQD",
+      "stationName": "Queens Road Peckham",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUQBY",
+      "stationName": "Queensbury",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZLUQWY",
+      "stationName": "Queensway",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLURVP",
+      "stationName": "Ravenscourt Park",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLURYL",
+      "stationName": "Rayners Lane",
+      "lineIDs": [
+        "metropolitan",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GRDNGSTN",
+      "stationName": "Reading",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GRCTRYRD",
+      "stationName": "Rectory Road",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLURBG",
+      "stationName": "Redbridge",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLURGP",
+      "stationName": "Regent's Park",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZLURMD",
+      "stationName": "Richmond",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GRICHMND",
+      "stationName": "Richmond (London)",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLURKW",
+      "stationName": "Rickmansworth",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLURVY",
+      "stationName": "Roding Valley",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GROMFORD",
+      "stationName": "Romford",
+      "lineIDs": [
+        "elizabeth",
+        "liberty"
+      ]
+    },
+    {
+      "stationID": "910GRTHERHI",
+      "stationName": "Rotherhithe",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZDLRAL",
+      "stationName": "Royal Albert",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLURYO",
+      "stationName": "Royal Oak",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZDLRVC",
+      "stationName": "Royal Victoria",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLURSP",
+      "stationName": "Ruislip",
+      "lineIDs": [
+        "metropolitan",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLURSG",
+      "stationName": "Ruislip Gardens",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLURSM",
+      "stationName": "Ruislip Manor",
+      "lineIDs": [
+        "metropolitan",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLURSQ",
+      "stationName": "Russell Square",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GSVNKNGS",
+      "stationName": "Seven Kings",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GSEVNSIS",
+      "stationName": "Seven Sisters",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSVS",
+      "stationName": "Seven Sisters",
+      "lineIDs": [
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "910GSHADWEL",
+      "stationName": "Shadwell",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZDLSHA",
+      "stationName": "Shadwell",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "910GSHENFLD",
+      "stationName": "Shenfield",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSBC",
+      "stationName": "Shepherd's Bush (Central)",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSBM",
+      "stationName": "Shepherd's Bush Market",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "910GSHPDSB",
+      "stationName": "Shepherds Bush",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "910GSHRDHST",
+      "stationName": "Shoreditch High Street",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GSIVRST",
+      "stationName": "Silver Street",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSSQ",
+      "stationName": "Sloane Square",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GSLOUGH",
+      "stationName": "Slough",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSNB",
+      "stationName": "Snaresbrook",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GSACTON",
+      "stationName": "South Acton",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSEA",
+      "stationName": "South Ealing",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GSHMPSTD",
+      "stationName": "South Hampstead",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSHH",
+      "stationName": "South Harrow",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSKS",
+      "stationName": "South Kensington",
+      "lineIDs": [
+        "circle",
+        "district",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GSKENTON",
+      "stationName": "South Kenton",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSKT",
+      "stationName": "South Kenton",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZDLSOQ",
+      "stationName": "South Quay",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSRP",
+      "stationName": "South Ruislip",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GSTOTNHM",
+      "stationName": "South Tottenham",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSWN",
+      "stationName": "South Wimbledon",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSWF",
+      "stationName": "South Woodford",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GSTHALL",
+      "stationName": "Southall",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GSBURY",
+      "stationName": "Southbury",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSFS",
+      "stationName": "Southfields",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSGT",
+      "stationName": "Southgate",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSWK",
+      "stationName": "Southwark",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GSTJMSST",
+      "stationName": "St James Street (London)",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSJP",
+      "stationName": "St. James's Park",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSJW",
+      "stationName": "St. John's Wood",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSPU",
+      "stationName": "St. Paul's",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSFB",
+      "stationName": "Stamford Brook",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GSTMFDHL",
+      "stationName": "Stamford Hill",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSTM",
+      "stationName": "Stanmore",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZDLSTL",
+      "stationName": "Star Lane",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSGN",
+      "stationName": "Stepney Green",
+      "lineIDs": [
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSKW",
+      "stationName": "Stockwell",
+      "lineIDs": [
+        "northern",
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "910GSTKNWNG",
+      "stationName": "Stoke Newington",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "910GSTNBGPK",
+      "stationName": "Stonebridge Park",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSGP",
+      "stationName": "Stonebridge Park",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZDLSTD",
+      "stationName": "Stratford",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSTD",
+      "stationName": "Stratford",
+      "lineIDs": [
+        "central",
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GSTFD",
+      "stationName": "Stratford (London)",
+      "lineIDs": [
+        "elizabeth",
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZDLSHS",
+      "stationName": "Stratford High Street",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZDLSIT",
+      "stationName": "Stratford International",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSUH",
+      "stationName": "Sudbury Hill",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSUT",
+      "stationName": "Sudbury Town",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GSURREYQ",
+      "stationName": "Surrey Quays",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUSWC",
+      "stationName": "Swiss Cottage",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GSYDENHM",
+      "stationName": "Sydenham",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GTAPLOW",
+      "stationName": "Taplow",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTMP",
+      "stationName": "Temple",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GTHBLDSG",
+      "stationName": "Theobalds Grove",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTHB",
+      "stationName": "Theydon Bois",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTBC",
+      "stationName": "Tooting Bec",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTBY",
+      "stationName": "Tooting Broadway",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GTOTCTRD",
+      "stationName": "Tottenham Court Road",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTCR",
+      "stationName": "Tottenham Court Road",
+      "lineIDs": [
+        "central",
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTMH",
+      "stationName": "Tottenham Hale",
+      "lineIDs": [
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTAW",
+      "stationName": "Totteridge & Whetstone",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZDLTWG",
+      "stationName": "Tower Gateway",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTWH",
+      "stationName": "Tower Hill",
+      "lineIDs": [
+        "circle",
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTFP",
+      "stationName": "Tufnell Park",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GTURKYST",
+      "stationName": "Turkey Street",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTNG",
+      "stationName": "Turnham Green",
+      "lineIDs": [
+        "district",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUTPN",
+      "stationName": "Turnpike Lane",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "910GTWYFORD",
+      "stationName": "Twyford",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GUPMNSTR",
+      "stationName": "Upminster",
+      "lineIDs": [
+        "liberty"
+      ]
+    },
+    {
+      "stationID": "940GZZLUUPM",
+      "stationName": "Upminster",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUUPB",
+      "stationName": "Upminster Bridge",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUUPY",
+      "stationName": "Upney",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GUPRHLWY",
+      "stationName": "Upper Holloway",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZLUUPK",
+      "stationName": "Upton Park",
+      "lineIDs": [
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUUXB",
+      "stationName": "Uxbridge",
+      "lineIDs": [
+        "metropolitan",
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUVXL",
+      "stationName": "Vauxhall",
+      "lineIDs": [
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "940GZZLUVIC",
+      "stationName": "Victoria",
+      "lineIDs": [
+        "circle",
+        "district",
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "910GWLTWCEN",
+      "stationName": "Walthamstow Central",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWWL",
+      "stationName": "Walthamstow Central",
+      "lineIDs": [
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "910GWLTHQRD",
+      "stationName": "Walthamstow Queens Road",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "910GWNDSWRD",
+      "stationName": "Wandsworth Road",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWSD",
+      "stationName": "Wanstead",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GWNSTDPK",
+      "stationName": "Wanstead Park",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "910GWAPPING",
+      "stationName": "Wapping",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWRR",
+      "stationName": "Warren Street",
+      "lineIDs": [
+        "northern",
+        "victoria"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWKA",
+      "stationName": "Warwick Avenue",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWLO",
+      "stationName": "Waterloo",
+      "lineIDs": [
+        "bakerloo",
+        "jubilee",
+        "northern",
+        "waterloo-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWAF",
+      "stationName": "Watford",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GWATFDHS",
+      "stationName": "Watford High Street",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "910GWATFJDC",
+      "stationName": "Watford Junction",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "910GWMBY",
+      "stationName": "Wembley Central",
+      "lineIDs": [
+        "lioness"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWYC",
+      "stationName": "Wembley Central",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWYP",
+      "stationName": "Wembley Park",
+      "lineIDs": [
+        "jubilee",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWTA",
+      "stationName": "West Acton",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GWBRMPTN",
+      "stationName": "West Brompton",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWBN",
+      "stationName": "West Brompton",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "910GWCROYDN",
+      "stationName": "West Croydon",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GWDRYTON",
+      "stationName": "West Drayton",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "910GWEALING",
+      "stationName": "West Ealing",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWFN",
+      "stationName": "West Finchley",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "940GZZDLWHM",
+      "stationName": "West Ham",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWHM",
+      "stationName": "West Ham",
+      "lineIDs": [
+        "district",
+        "hammersmith-city",
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "910GWHMDSTD",
+      "stationName": "West Hampstead",
+      "lineIDs": [
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWHP",
+      "stationName": "West Hampstead",
+      "lineIDs": [
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWHW",
+      "stationName": "West Harrow",
+      "lineIDs": [
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "940GZZDLWIQ",
+      "stationName": "West India Quay",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWKN",
+      "stationName": "West Kensington",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWRP",
+      "stationName": "West Ruislip",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "940GZZDLWSV",
+      "stationName": "West Silvertown",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWSP",
+      "stationName": "Westbourne Park",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZDLWFE",
+      "stationName": "Westferry",
+      "lineIDs": [
+        "dlr"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWSM",
+      "stationName": "Westminster",
+      "lineIDs": [
+        "circle",
+        "district",
+        "jubilee"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWCY",
+      "stationName": "White City",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GWHHRTLA",
+      "stationName": "White Hart Lane",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "910GWCHAPEL",
+      "stationName": "Whitechapel",
+      "lineIDs": [
+        "windrush"
+      ]
+    },
+    {
+      "stationID": "910GWCHAPXR",
+      "stationName": "Whitechapel",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWPL",
+      "stationName": "Whitechapel",
+      "lineIDs": [
+        "district",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWIG",
+      "stationName": "Willesden Green",
+      "lineIDs": [
+        "jubilee",
+        "metropolitan"
+      ]
+    },
+    {
+      "stationID": "910GWLSDJHL",
+      "stationName": "Willesden Junction",
+      "lineIDs": [
+        "lioness",
+        "mildmay"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWJN",
+      "stationName": "Willesden Junction",
+      "lineIDs": [
+        "bakerloo"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWIM",
+      "stationName": "Wimbledon",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWIP",
+      "stationName": "Wimbledon Park",
+      "lineIDs": [
+        "district"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWOG",
+      "stationName": "Wood Green",
+      "lineIDs": [
+        "piccadilly"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWLA",
+      "stationName": "Wood Lane",
+      "lineIDs": [
+        "circle",
+        "hammersmith-city"
+      ]
+    },
+    {
+      "stationID": "910GWDST",
+      "stationName": "Wood Street",
+      "lineIDs": [
+        "weaver"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWOF",
+      "stationName": "Woodford",
+      "lineIDs": [
+        "central"
+      ]
+    },
+    {
+      "stationID": "910GWDGRNPK",
+      "stationName": "Woodgrange Park",
+      "lineIDs": [
+        "suffragette"
+      ]
+    },
+    {
+      "stationID": "940GZZLUWOP",
+      "stationName": "Woodside Park",
+      "lineIDs": [
+        "northern"
+      ]
+    },
+    {
+      "stationID": "910GWOLWXR",
+      "stationName": "Woolwich",
+      "lineIDs": [
+        "elizabeth"
+      ]
+    },
+    {
+      "stationID": "940GZZDLWLA",
+      "stationName": "Woolwich Arsenal",
+      "lineIDs": [
+        "dlr"
+      ]
+    }
+  ],
+  "narrowQueryRules": [
+    {
+      "lineID": "district",
+      "stationID": "940GZZLUERC",
+      "targetID": "940GZZLUWIM",
+      "journeyPreference": "leastinterchange",
+      "includeAlternativeRoutes": false
+    },
+    {
+      "lineID": "hammersmith-city",
+      "stationID": "940GZZLUHSC",
+      "via": "940GZZLUSBM",
+      "maxWalkingMinutes": 0,
+      "journeyPreference": "leastinterchange",
+      "includeAlternativeRoutes": false
+    },
+    {
+      "lineID": "circle",
+      "stationID": "940GZZLUVIC",
+      "via": "940GZZLUNHG",
+      "maxWalkingMinutes": 0,
+      "journeyPreference": "leastinterchange",
+      "includeAlternativeRoutes": false
+    }
+  ]
+}

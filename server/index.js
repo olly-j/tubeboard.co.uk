@@ -80,6 +80,7 @@ const server = http.createServer(async (request, response) => {
         ok: true,
         serviceVersion: SERVICE_VERSION,
         contractVersion: LIVE_ACTIVITY_CONTRACT_VERSION,
+        contentStateContracts: ['station-board-v2'],
         disruptionAlertContractVersion: DISRUPTION_ALERT_CONTRACT_VERSION,
         disruptionAlertWorkerEnabled: disruptionAlertConfig.workerEnabled,
         sourceRevision: SOURCE_REVISION
@@ -199,7 +200,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, () => {
-  console.log(`TubeBoard service listening on http://localhost:${port}`);
+  console.log(`TubeBoard service listening on http://localhost:${server.address().port}`);
   console.log(`Serving static site from ${siteDir}`);
   statusMonitor.start();
 });
@@ -210,13 +211,14 @@ if (config.workerEnabled) {
     initialDelayMs: 2_000,
     intervalMs: config.workerIntervalMs,
     onError: (error) => console.error(`Live Activity worker cycle failed: ${error.message}`),
-    run: (signal) => runLiveActivityWorkerCycle({
+    run: (signal, { cacheOnly }) => runLiveActivityWorkerCycle({
       store,
       config,
       signal,
+      cacheOnly,
       scheduleRolloverPush: (record, contentState, now, workerIntervalMs) => {
         const delayMs = getRolloverDelayMs(contentState, now, workerIntervalMs);
-        worker.scheduleRerun(`${record.environment}:${record.activityID}`, delayMs);
+        worker.scheduleRerun(`${record.environment}:${record.activityID}`, delayMs, { cacheOnly: record.contentStateContract === 'station-board-v2' });
         if (delayMs !== null) {
           console.log(`Live Activity rollover refresh scheduled in ${Math.round(delayMs / 1000)}s`);
         }
@@ -281,7 +283,7 @@ async function handleTokenRegistration(request, response) {
   }
 
   await store.upsertToken(validation.value);
-  sendJson(response, 200, { ok: true });
+  sendJson(response, 200, { ok: true, ...(validation.value.contentStateContract === 'station-board-v2' ? { contentStateContract: 'station-board-v2' } : {}) });
 }
 
 async function handleActivityEnd(request, response) {
@@ -474,6 +476,7 @@ function getStaticRelativePath(cleanPath) {
     '/train-20260830-v2.css',
     '/train-20260830-v2.js',
     '/contracts/live-activity-registration-v1.schema.json',
+    '/contracts/live-activity-registration-v2.schema.json',
     '/contracts/disruption-alert-registration-v1.schema.json',
     '/contracts/disruption-alert-registration-v2.schema.json',
     '/contracts/tubeboard-status-v1.schema.json',

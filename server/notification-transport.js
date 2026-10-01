@@ -40,17 +40,18 @@ async function withDeadline(operation, {
   }
 }
 
-export function fetchJsonResponse(url, fetchImpl = fetch, options = {}) {
+export function fetchJsonResponse(url, fetchImpl = fetch, { includeHeaders = false, method = 'GET', ...options } = {}) {
   return withDeadline(async (signal) => {
-    const response = await fetchImpl(url, { signal });
+    const response = await fetchImpl(url, { signal, ...(method !== 'GET' ? { method } : {}), ...(includeHeaders ? { headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } } : {}) });
     if (!response.ok) {
       // Non-success bodies are not used; release the connection promptly.
       if (response.body?.cancel) void response.body.cancel().catch(() => {});
       return { ok: false, status: response.status, value: null };
     }
-    const value = await response.json();
+    const value = method === 'HEAD' ? null : await response.json();
+    if (method === 'HEAD' && response.body?.cancel) void response.body.cancel().catch(() => {});
     signal.throwIfAborted();
-    return { ok: true, status: response.status, value };
+    return { ok: true, status: response.status, value, ...(includeHeaders ? { headers: Object.fromEntries(response.headers?.entries?.() || []) } : {}) };
   }, options);
 }
 
