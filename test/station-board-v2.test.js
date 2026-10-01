@@ -171,7 +171,7 @@ test('independent source refresh survives status offline, records scoped closure
   assert.ok(cache.sources['journey-planner']); assert.ok(cache.sources['station-arrivals']); assert.equal(reads, 4);
   await refreshStationBoard(record, cache, config, fetchImpl, now + 60000, null); assert.equal(reads, 4);
   const closureFetch = async (url) => new Response(JSON.stringify(new URL(url).pathname.endsWith('/Disruption') ? [{ stationAtcoCode: record.stationID, type: 'StationClosure', fromDate: '2026-10-01T13:00:00Z', toDate: '2026-10-01T15:00:00Z' }] : []), { headers: headers(now + 90000) });
-  const closed = await refreshStationBoard(record, cache, config, closureFetch, now + 90000, null); assert.equal(closed.sources['journey-planner'], undefined); assert.equal(closed.rejections[0].reason, 'stationDisrupted');
+  const closed = await refreshStationBoard(record, cache, config, closureFetch, now + 90000, null); assert.ok(closed.sources['journey-planner']); assert.equal(closed.rejections.length, 0); assert.equal(selectEvents(closed, record, now + 90000).some((e) => e.timeEvidence === 'scheduledDeparture'), false);
 });
 
 test('SerialWorker coalesces cache-only triggers without converting them into new network admission', async () => {
@@ -219,7 +219,7 @@ test('restarted closure watermark blocks older planned writers but not independe
 test('current scoped closure prevents new planner qualification even with older original HTTP observation', async () => {
   const fetchImpl = async (url) => { const p = new URL(url).pathname, closure = p.endsWith('/Disruption'); return new Response(JSON.stringify(closure ? [{ stationAtcoCode: record.stationID, type: 'StationClosure', fromDate: '2026-10-01T12:00:00Z', toDate: '2026-10-01T15:00:00Z' }] : p.includes('JourneyResults') ? journey() : []), { headers: headers(closure ? now - 20000 : now, 0) }); };
   const cache = await refreshStationBoard(record, {}, loadConfig({}), fetchImpl, now, null);
-  assert.equal(cache.sources['journey-planner'], undefined); assert.equal(cache.rejections[0].observedAt, now - 20000);
+  assert.ok(cache.sources['journey-planner']); assert.equal(cache.rejections.length, 0); assert.deepEqual(selectEvents(cache, record, now), []); assert.equal(cache.closureSources.station.observedAt, now - 20000);
 });
 
 test('wire fixture uses exact Swift typed row enum and Apple epoch without internal timer metadata', async () => {
@@ -242,8 +242,8 @@ test('planner via requires a unique actual-line station and preserves explicit c
 test('current closure with old HTTP observation withholds prior newer planner/publication; original source checks survive restart order', async () => {
   const prior = cacheOf(row({ receivedAt: now - 10000 }), row({ sourceID: 'timetable', id: 'tt', receivedAt: now - 10000 }), row({ sourceID: 'rail-departures', id: 'rail', timeEvidence: 'predictedDeparture', receivedAt: now - 10000 }));
   const fetchImpl = async (url) => { const p = new URL(url).pathname, closure = p.endsWith('/Disruption'); return new Response(JSON.stringify(closure ? [{ stationAtcoCode: record.stationID, type: 'StationClosure', fromDate: '2026-10-01T12:00:00Z', toDate: '2026-10-01T15:00:00Z' }] : p.includes('JourneyResults') ? journey() : []), { headers: headers(closure ? now - 20000 : now) }); };
-  const closed = await refreshStationBoard(record, prior, loadConfig({}), fetchImpl, now, null); assert.equal(closed.sources.timetable, undefined); assert.equal(closed.sources['journey-planner'], undefined); assert.ok(closed.sources['rail-departures']); assert.equal(closed.closureSources.station.observedAt, now - 20000);
-  const oldWriter = mergeContexts(closed, prior, record, now + 1000); assert.equal(oldWriter.sources.timetable, undefined);
+  const closed = await refreshStationBoard(record, prior, loadConfig({}), fetchImpl, now, null); assert.ok(closed.sources.timetable); assert.ok(closed.sources['journey-planner']); assert.ok(closed.sources['rail-departures']); assert.deepEqual(selectEvents(closed, record, now).map((e) => e.id), ['rail']); assert.equal(closed.closureSources.station.observedAt, now - 20000);
+  const oldWriter = mergeContexts(closed, prior, record, now + 1000); assert.ok(oldWriter.sources.timetable); assert.equal(selectEvents(oldWriter, record, now + 1000).some((e) => e.timeEvidence === 'scheduledDeparture'), false);
   const clear = { stationID: record.stationID, lineID: record.lineID, observedAt: now + 2000, expiresAt: now + 122000, closed: false };
   const recovered = mergeContexts(oldWriter, { ...cacheOf(row({ receivedAt: now + 2000 })), closureSources: { station: clear } }, record, now + 2000); assert.ok(recovered.sources['journey-planner']);
   const delayedClosure = mergeContexts(recovered, { closureSources: closed.closureSources }, record, now + 3000); assert.equal(delayedClosure.closureSources.station.closed, false); assert.ok(delayedClosure.sources['journey-planner']);
@@ -336,7 +336,7 @@ test('client seed closure evidence cannot clear newer independent server closure
   const store = await temporaryStore(t), closed = { stationID: record.stationID, lineID: record.lineID, observedAt: now + 1000, expiresAt: now + 21000, closed: true, validFrom: now - 60000, validUntil: now + 21000, qualificationOrigin: 'server' };
   await store.retainStationBoard(record.activityID, record.environment, { closureSources: { station: closed } }, new Date(now + 1000));
   const seed = plannedSeed(); seed.closureEvidence = [{ stationID: record.stationID, lineID: record.lineID, sourceScope: 'stationDisruptions', closed: false, observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 120000).toISOString() }];
-  await store.upsertToken({ ...record, tokenUpdatedAt: new Date(now + 2000).toISOString(), plannedContextSeed: seed }, new Date(now + 2000)); assert.equal(store.state.records[0].stationBoardCache.sources.timetable, undefined); assert.equal(store.state.records[0].stationBoardCache.closureSources.station.closed, true); assert.equal(store.state.records[0].stationBoardCache.closureSources.station.expiresAt, now + 21000);
+  await store.upsertToken({ ...record, tokenUpdatedAt: new Date(now + 2000).toISOString(), plannedContextSeed: seed }, new Date(now + 2000)); assert.ok(store.state.records[0].stationBoardCache.sources.timetable); assert.deepEqual(selectEvents(store.state.records[0].stationBoardCache, record, now + 2000), []); assert.equal(store.state.records[0].stationBoardCache.closureSources.station.closed, true); assert.equal(store.state.records[0].stationBoardCache.closureSources.station.expiresAt, now + 21000);
 });
 
 test('current closure expiry is capped at its actual applicable end', async () => {

@@ -1,3 +1,4 @@
+import { validAvailability, qualifiedAvailability, retainedEligibility } from './station-board-availability.js';
 import { STATION_BOARD_STATIONS, validBoard, londonClock, londonLocal } from './station-board-v2.js';
 export const TIMETABLE_PUBLICATION_URL = 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip';
 const digest = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
@@ -10,20 +11,25 @@ const allowed = (value, fields) => value && typeof value === 'object' && !Array.
 // An admitted refresh attempts independent official publication identity checks.
 // Unavailable checks never renew the original client-qualified context.
 export function admitPlannedSeed(seed, record, now) {
-  const errors = [], sources = {}, closureSources = {};
-  if (seed === undefined) return { errors, sources, closureSources };
+  const errors = [], sources = {}, closureSources = {}, availabilityProofs = [];
+  if (seed === undefined) return { errors, sources, closureSources, availabilityProofs };
   if (!allowed(seed, ['schemaVersion', 'stationID', 'lineID', 'contexts', 'closureEvidence']) || seed.schemaVersion !== 1 || seed.stationID !== record.stationID || seed.lineID !== record.lineID || !validBoard(seed.stationID, seed.lineID) || Buffer.byteLength(JSON.stringify(seed)) > 24576 || !Array.isArray(seed.contexts) || seed.contexts.length > 2) return { errors: ['plannedContextSeed is invalid'], sources };
   if (seed.closureEvidence !== undefined) {
-    if (!Array.isArray(seed.closureEvidence) || seed.closureEvidence.length > 2) errors.push('planned seed closure evidence is invalid');
+    if (!Array.isArray(seed.closureEvidence) || seed.closureEvidence.length > 8) errors.push('planned seed closure evidence is invalid');
     else for (const check of seed.closureEvidence) {
-      if (!allowed(check, ['stationID', 'lineID', 'sourceScope', 'closed', 'observedAt', 'expiresAt', 'validFrom', 'validUntil']) || check.stationID !== record.stationID || check.lineID !== record.lineID || !['lineStatus', 'stationDisruptions'].includes(check.sourceScope) || typeof check.closed !== 'boolean') { errors.push('planned seed closure scope is invalid'); continue; }
-      const observedAt = iso(check.observedAt), expiresAt = iso(check.expiresAt), source = check.sourceScope === 'lineStatus' ? 'service' : 'station';
-      if (!Number.isFinite(observedAt) || observedAt > now || !Number.isFinite(expiresAt) || expiresAt <= observedAt || expiresAt > observedAt + 120000 || closureSources[source]) { errors.push('planned seed closure clock is invalid'); continue; }
-      const validFrom = check.validFrom === undefined ? null : iso(check.validFrom), validUntil = check.validUntil === undefined ? null : iso(check.validUntil);
-      if ((check.closed || validFrom != null || validUntil != null) && (!Number.isFinite(validFrom) || !Number.isFinite(validUntil) || validFrom >= validUntil || expiresAt > validUntil)) { errors.push('planned seed closure period is invalid'); continue; }
-      if (expiresAt > now && (!check.closed || validFrom <= now && now < validUntil)) closureSources[source] = { stationID: record.stationID, lineID: record.lineID, observedAt, expiresAt, closed: check.closed, validFrom, validUntil, qualificationOrigin: 'client' };
+      if (!allowed(check, ['stationID', 'lineID', 'sourceScope', 'closed', 'observedAt', 'expiresAt', 'validFrom', 'validUntil', 'closureWindows', 'plannedUnavailable'])) { errors.push('planned seed closure scope is invalid'); continue; }
+      const proof = { ...check, observedAt: iso(check.observedAt), expiresAt: iso(check.expiresAt), qualificationOrigin: 'client' };
+      if (check.validFrom !== undefined) proof.validFrom = iso(check.validFrom);
+      if (check.validUntil !== undefined) proof.validUntil = iso(check.validUntil);
+      if (check.closureWindows !== undefined) {
+        if (!Array.isArray(check.closureWindows) || check.closureWindows.length > 32 || check.closureWindows.some((w) => !allowed(w, ['validFrom', 'validUntil']))) { errors.push('planned seed closure windows are invalid'); continue; }
+        proof.closureWindows = check.closureWindows.map((w) => ({ validFrom: iso(w.validFrom), validUntil: iso(w.validUntil) }));
+      }
+      if (!validAvailability(proof, record) || proof.observedAt > now) { errors.push('planned seed closure clock or scope is invalid'); continue; }
+      if (qualifiedAvailability(proof, now) || retainedEligibility(proof, now)) availabilityProofs.push(proof);
     }
   }
+
   const seenSources = new Set();
   for (const context of seed.contexts) {
     if (!allowed(context, ['sourceID', 'observedAt', 'expiresAt', 'sourceSHA256', 'publication', 'rows']) || !['timetable', 'unified-timetable', 'journey-planner'].includes(context.sourceID)) { errors.push('planned seed source is invalid'); continue; }
@@ -71,5 +77,5 @@ export function admitPlannedSeed(seed, record, now) {
     }
     if (events.length) sources[normalized] = { observedAt, events, qualificationOrigin: 'client', evidence: { publication: publication || null, sourceSHA256: context.sourceSHA256 || null, rows: rowEvidence } };
   }
-  return { errors, sources, closureSources };
+  return { errors, sources, closureSources, availabilityProofs };
 }

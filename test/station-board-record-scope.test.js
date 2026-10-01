@@ -27,7 +27,11 @@ for (const reverse of [false, true]) {
     assert.equal(a.stationBoardCache.sources.timetable.events.length, 3);
     assert.equal(b.stationBoardCache.sources.timetable, undefined);
     assert.equal(b.stationBoardCache.sources['journey-planner'].events.length, 1);
-    assert.equal(pushes.find(([id]) => id === seeded.activityID)[1].arrivals.length, 3);
+    const seededRows = pushes.find(([id]) => id === seeded.activityID)[1].arrivals;
+    assert.equal(seededRows.length, 4);
+    assert.equal(seededRows.filter((r) => r.plannedSourceID === 'timetable').length, 3);
+    assert.equal(seededRows.filter((r) => r.plannedSourceID === 'journey-planner').length, 1);
+    assert.deepEqual(selectEvents(a.stationBoardCache, seeded, now).map((e) => e.id), a.stationBoardCache.sources.timetable.events.map((e) => e.id));
     assert.equal(pushes.find(([id]) => id === plain.activityID)[1].arrivals.length, 1);
     assert.equal(new Set(requests).size, requests.length);
     assert.equal(requests.length, 6);
@@ -109,7 +113,7 @@ test('current exact Closure alias blocks scheduled sources; foreign/future/Part 
     const fetchImpl = async (url) => { const p = new URL(url).pathname; const value = p.endsWith('/Disruption') ? [{ stationAtcoCode: variant === 'foreign' ? '940GZZLUMDN' : record.stationID, type: variant === 'Part Closure' ? variant : 'Closure', fromDate: new Date(now + (variant === 'future' ? 10000 : -10000)).toISOString(), toDate: new Date(now + 20000).toISOString() }] : p.includes('JourneyResults') ? journey() : []; return new Response(JSON.stringify(value), { headers: headers() }); };
     const cache = await refreshStationBoard(record, context(event('existing-plan')), config, fetchImpl, now, null);
     assert.equal(selectEvents(cache, record, now).length === 0, variant === 'Closure');
-    if (variant === 'Closure') { assert.equal(cache.closureSources.station.expiresAt, now + 20000); assert.equal(cache.rejections[0].reason, 'stationDisrupted'); }
+    if (variant === 'Closure') { assert.equal(cache.closureSources.station.expiresAt, now + 20000); assert.equal(cache.rejections.length, 0); assert.ok(cache.sources['journey-planner']); assert.equal(selectEvents(cache, record, now).length, 0); }
   }
 });
 
@@ -190,8 +194,8 @@ test('conditional facts latency uses final closure applicability without renewin
       assert.equal(cache.closureSources.station.closed, true);
       assert.equal(cache.closureSources.station.observedAt, now);
       assert.equal(cache.closureSources.station.expiresAt, now + 30000);
-      assert.equal(cache.rejections[0].reason, 'stationDisrupted');
-      assert.equal(cache.sources['journey-planner'], undefined);
+      assert.equal(cache.rejections.length, 0);
+      assert.ok(cache.sources['journey-planner']); assert.deepEqual(selectEvents(cache, record, at), []);
     }
   }
 });

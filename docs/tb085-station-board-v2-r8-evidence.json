@@ -1,0 +1,104 @@
+{
+  "workItem": "TB-085 / My-Train-Times#298 and #618",
+  "sourceBase": "5b6b0f47884b39882eeb403e13d3284e2bf31f46",
+  "privateReceiptSHA256": "09b70f5050ab83c6e1dda712321659919af4601245c479766f6576077aa82b62",
+  "scope": "Original TT3 + JP3 + independent3 raw context when both sources or availability exist; optional plannedSourceID for genuine scheduled TT/JP only. Per-date usable contract chooses one tagged planned source after expiry/availability. Compact display3, original clocks, scoped availability, legacy v1 and 90s/15s admission/deadline unchanged.",
+  "changedSourceSHA256": {
+    "contracts/live-activity-registration-v2.schema.json": "afd6f70d794e9ead4a0a28711247a08e47b5fb463bea5c3e08a1a7d8e5f97406",
+    "docs/live-activity-service.md": "da4583daf9784bcc715c133f9ea4b8fab553a9e32c5a0d09a8d1a9f92e0e654e",
+    "package.json": "c0c7f90a1f05e7c9dadfa19cb847bb94bbedbca014ddb9c79e248ed3c022781a",
+    "server/live-activity.js": "c6d079aa0bf3e2a59d5e854d40bf55b28ec074f40681b4725183a51eb066c4e2",
+    "server/station-board-seed.js": "85f6bccdd0619dd1af8f099605c7779624af92ab7061b35a7ac72e9a87b242fc",
+    "server/station-board-v2.js": "176d51e7f1ccd01235c8ecdd8715feeca5b57b4fd314d72373578f2d4896045d",
+    "server/station-board-availability.js": "8e07c0d0778bcb6799ccccd7e27ca356ac22a2fd084b94f78ed9131c93fb545f",
+    "test/station-board-future-availability.test.js": "090eabadbc5ca6c7f90bb441e60e5b0a8b4f2de94a2530b4a8853666b469a2bb",
+    "test/station-board-record-scope.test.js": "ef2276fbd234c75ab9c7b6e135b3a55d433542801e365a262f1abffd0a867745",
+    "test/station-board-v2-endpoint.test.js": "91f613cb065356f81caba8f834b27fc2e30ffd566a808632f24759a9a7b6b599",
+    "test/station-board-v2.test.js": "99805df7bfd3f2398e0bcd7873f0ed4a150d7855a46be681a7e74ad150d70840"
+  },
+  "actualWriterChecks": [
+    {
+      "exitCode": 0,
+      "tests": 72,
+      "passed": 72,
+      "failed": 0,
+      "skipped": 0,
+      "logSHA256": "ef95f9f5e6eb9ecc5450a03994531789629b96a84ad20ef5fc7abe51ba82bdec"
+    },
+    {
+      "exitCode": 0,
+      "tests": 203,
+      "passed": 203,
+      "failed": 0,
+      "skipped": 0,
+      "logSHA256": "bd53206e3d52b15d2d3f0238ed95d307a0f0db16bd9b7951e6816cdaa087d750"
+    },
+    {
+      "exitCode": 0,
+      "assertions": 60,
+      "logSHA256": "660594fb5081610f1f16a51797a953fdf1409ad35a74f652a78595f2bc20e61c"
+    },
+    {
+      "exitCode": 0
+    }
+  ],
+  "actualIndependentReview": {
+    "privateReceiptSHA256": "ec76775ac06850edd172318efec4557b3ebc044f3236eb8f3e7724c53ab9c58b",
+    "verdict": "Bounded SERVICE r8 source/wire cleared; matching APP decoder/render integration and actual OS/APNs gates OPEN",
+    "probeAssertions": 72,
+    "nodeExitCode": 0,
+    "hashCounts": {
+      "changed": 11,
+      "wireInputsOutputs": 14,
+      "logs": 3
+    },
+    "mismatches": [],
+    "measuredWire": {
+      "maskedPlanner": {
+        "rawRows": 4,
+        "contentBytes": 1481,
+        "APSBytes": 1535
+      },
+      "noOverlay": {
+        "rawRows": 9,
+        "contentBytes": 2263,
+        "APSBytes": 2317
+      },
+      "knownGap": {
+        "rawRows": 2,
+        "contentBytes": 1022,
+        "APSBytes": 1076
+      },
+      "eightProofFallback": "3originalpredictedrows/nooverlay, complete fullAPSbound verified"
+    }
+  },
+  "compatibility": [
+    {
+      "path": "contracts/live-activity-registration-v1.schema.json",
+      "sha256": "0db54fd87a07c428bb254442d2b9326ab53d0c5213aed4f54b9e88d603d4c883",
+      "byteIdenticalToBase": true
+    },
+    {
+      "path": "contracts/station-board-catalogue-v2.json",
+      "sha256": "1d9e7615be2e0cea9a7424952f1d6f99a66aadf5595d4249d9642698645b3a82",
+      "byteIdenticalToBase": true
+    },
+    {
+      "path": "fly.toml",
+      "sha256": "e0dac74e8fe60f8ffbeb6165f004a5fe6e1a866c72995ed4a3745a9bf90c4446",
+      "byteIdenticalToBase": true
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "bb7ab0407edc90496aeaef4e6f8e4d237c141e61bf87f216d9e1a11ac7286456",
+      "byteIdenticalToBase": true
+    }
+  ],
+  "remainingGates": [
+    "Matching APP plannedSourceID decoding and source selection not implemented at28714",
+    "Native closed-process widget, Watch accessory, Activity/APNs and all-line/source/render acceptance",
+    "Fly config validation blocked: no access token observed2026-10-01T22:00:00Z; no production deploy authorized or attempted",
+    "Existing Family TestFlight only after every engineering and release gate; no public/AppReview authority"
+  ],
+  "historicalEvidence": "Previous r7review BLOCKED; invalid private harness and obsolete assertion failures retained separately, not passes."
+}

@@ -125,7 +125,7 @@ export class LiveActivityStore extends TransactionalJsonStore {
         record.contentStateContract = STATION_BOARD_CONTRACT;
         if (previous.stationID !== payload.stationID || previous.lineID !== payload.lineID) delete record.stationBoardCache;
         const seed = admitPlannedSeed(payload.plannedContextSeed, record, now.getTime());
-        if (!seed.errors.length && (Object.keys(seed.sources).length || Object.keys(seed.closureSources).length)) record.stationBoardCache = mergeContexts(record.stationBoardCache, { sources: seed.sources, closureSources: seed.closureSources }, record, now.getTime());
+        if (!seed.errors.length && (Object.keys(seed.sources).length || Object.keys(seed.closureSources).length || seed.availabilityProofs?.length)) record.stationBoardCache = mergeContexts(record.stationBoardCache, { sources: seed.sources, closureSources: seed.closureSources, availabilityProofs: seed.availabilityProofs }, record, now.getTime());
       }
       if (matchIndex >= 0) {
         state.records[matchIndex] = record;

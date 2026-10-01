@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability } from './station-board-availability.js';
 import { fetchJsonResponse } from './notification-transport.js';
 
 export const STATION_BOARD_CONTRACT = 'station-board-v2';
@@ -19,6 +20,7 @@ const isoClock = (value) => {
 };
 const swift = (ms) => (ms - APPLE_EPOCH) / 1000;
 const sourceKey = (source) => ['timetable', 'unified-timetable'].includes(source) ? 'timetable' : source;
+const plannedSource = (event) => event.kind === 'outgoingDeparture' && event.timeEvidence === 'scheduledDeparture' && ['timetable', 'journey-planner'].includes(sourceKey(event.sourceID)) ? sourceKey(event.sourceID) : null;
 const planned = (event) => ['timetable', 'journey-planner'].includes(sourceKey(event.sourceID)) || (event.kind === 'outgoingDeparture' && event.timeEvidence === 'scheduledDeparture');
 export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -227,31 +229,25 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
   const rejections = [...(previous.rejections || []), ...(incoming.rejections || [])].filter((r) => r && ['publicationChanged', 'timetableChanged', 'unsupportedCalendar', 'serviceUnavailable', 'stationDisrupted'].includes(r.reason) && r.stationID === record.stationID && r.lineID === record.lineID && Number.isFinite(r.observedAt) && r.observedAt <= now && r.observedAt + 600000 > now);
   const markerMap = new Map();
   for (const marker of rejections) { const scope = ['stationDisrupted', 'serviceUnavailable'].includes(marker.reason) ? 'planned-service' : 'publication'; if ((markerMap.get(scope)?.observedAt ?? -Infinity) < marker.observedAt) markerMap.set(scope, marker); }
-  const markers = [...markerMap.values()], sources = {}, closureSources = {};
-  for (const checks of [previous.closureSources || {}, incoming.closureSources || {}]) {
-    for (const [source, check] of Object.entries(checks)) {
-      if (!['service', 'station'].includes(source) || !objectRow(check) || check.stationID !== record.stationID || check.lineID !== record.lineID || typeof check.closed !== 'boolean' || !Number.isFinite(check.observedAt) || check.observedAt > now || check.observedAt + 600000 <= now || !Number.isFinite(check.expiresAt) || check.expiresAt > check.observedAt + 120000) continue;
-      const previousCheck = closureSources[source];
-      if (!previousCheck || check.observedAt > previousCheck.observedAt || (check.observedAt === previousCheck.observedAt && check.closed && !previousCheck.closed)) closureSources[source] = check;
-    }
-  }
+  const markers = [...markerMap.values()], sources = {};
+  const availabilityProofs = retainAvailability(previous, incoming, record, now);
+  const closureSources = legacyClosureSources(availabilityProofs);
   let publicationIdentity = null;
   for (const check of [previous.publicationIdentity, incoming.publicationIdentity]) {
     if (objectRow(check) && Number.isFinite(check.observedAt) && check.observedAt <= now && check.observedAt + 600000 > now && check.expiresAt <= check.observedAt + 600000 && /^[a-f0-9]{64}$/i.test(check.sha256 || '') && (!publicationIdentity || check.observedAt > publicationIdentity.observedAt)) publicationIdentity = check;
   }
-  const closed = Object.values(closureSources).some((check) => check.closed && check.expiresAt > now);
   for (const contexts of [previous.sources || {}, incoming.sources || {}]) {
     for (const [source, context] of Object.entries(contexts)) {
       if (!objectRow(context)) continue;
       const normalized = sourceKey(source), old = sources[normalized];
       if (!Number.isFinite(context.observedAt) || context.observedAt > now) continue;
       if (normalized === 'timetable' && publicationIdentity?.expiresAt > now && publicationIdentity.observedAt >= context.observedAt && context.evidence?.publication?.sha256?.toLowerCase() !== publicationIdentity.sha256.toLowerCase()) continue;
-      const events = (context.events || []).filter((e) => usable(e, record, now) && !(closed && planned(e)) && !markers.some((r) => rejectionInvalidates(r, e, record, now)));
+      const events = (context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && availabilityProofs.some((p) => p.plannedUnavailable === true && blocksScheduled(p, e.time, now))) && !markers.some((r) => rejectionInvalidates(r, e, record, now)));
       if (!events.length) continue;
       if (!old || context.observedAt > old.observedAt) sources[normalized] = { observedAt: context.observedAt, events, ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }
-  return { sources, rejections: markers, closureSources, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), status: incoming.status || previous.status || null };
+  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), status: incoming.status || previous.status || null };
 }
 function selectionMatches(event, record) {
   if (record.selectionMode !== 'platform' && !record.platformID) return true;
@@ -286,10 +282,10 @@ export function retainsThroughArrival(through, candidates) {
     return through.timeEvidence === 'arrivalPrediction' && Number.isFinite(through.time) && Number.isFinite(departure.time) && through.time > departure.time;
   });
 }
-export function selectEvents(cache, record, now) {
-  const closed = Object.values(cache.closureSources || {}).some((check) => check.stationID === record.stationID && check.lineID === record.lineID && check.closed && check.observedAt <= now && check.expiresAt > now);
-  let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(closed && planned(e)) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
-  if (events.some((e) => sourceKey(e.sourceID) === 'timetable')) events = events.filter((e) => e.sourceID !== 'journey-planner');
+export function selectEvents(cache, record, now, { retainingMaskedPlans = false, retainingPlannedAlternatives = false } = {}) {
+  const proofs = retainAvailability(cache, {}, record, now);
+  let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && proofs.some((p) => (!retainingMaskedPlans || p.plannedUnavailable === true) && blocksScheduled(p, e.time, now))) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
+  if (!retainingPlannedAlternatives && events.some((e) => plannedSource(e) === 'timetable')) events = events.filter((e) => plannedSource(e) !== 'journey-planner');
   const rail = events.filter((e) => e.sourceID === 'rail-departures' && e.kind === 'outgoingDeparture' && e.timeEvidence === 'predictedDeparture');
   events = events.filter((event) => retainsThroughArrival(event, rail));
   const seen = new Set(); events = events.filter((e) => { const signature = canonical(e); if (seen.has(signature)) return false; seen.add(signature); return true; });
@@ -305,7 +301,7 @@ export function countdown(event, now) {
   return seconds < 60 ? 'Due' : `${Math.floor(seconds / 60)} min`;
 }
 export function nextBoundary(cache, record, now) {
-  const boundaries = [];
+  const boundaries = availabilityBoundaries(retainAvailability(cache, {}, record, now), now);
   if (cache.status?.expiresAt > now) boundaries.push(cache.status.expiresAt);
   for (const event of Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now))) {
     boundaries.push(event.expiresAt);
@@ -319,13 +315,50 @@ export function nextBoundary(cache, record, now) {
   return future.length ? Math.min(...future) : null;
 }
 export function buildStationBoardState(record, cache, now) {
-  const rows = selectEvents(cache, record, now).slice(0, 3), deadlines = rows.flatMap((e) => e.kind === 'outgoingDeparture' && Number.isFinite(e.time) ? [e.expiresAt, e.time + 1] : [e.expiresAt]);
+  const proofs = retainAvailability(cache, {}, record, now).filter((p) => p.closed || p.plannedUnavailable === true);
+  let rows = selectEvents(cache, record, now, { retainingMaskedPlans: true, retainingPlannedAlternatives: true });
+  const originalRows = rows;
+  const hasAlternatives = ['timetable', 'journey-planner'].every((source) => rows.some((e) => plannedSource(e) === source));
+  const retainsContexts = proofs.length > 0 || hasAlternatives;
+  if (retainsContexts) {
+    // Original sources remain separate for cache-only expiry/gap recovery.
+    // Eligibility precedes each source's transport budget; renderers choose
+    // one eligible tagged planned source before their three-row display limit.
+    const eligible = (e) => !planned(e) || !proofs.some((p) => blocksScheduled(p, e.time, now));
+    const selected = new Set();
+    for (const source of ['timetable', 'journey-planner', null]) {
+      const group = rows.filter((e) => plannedSource(e) === source);
+      const useful = group.filter(eligible).slice(0, 3);
+      for (const e of [...useful, ...group.filter((e) => !eligible(e)).slice(0, 3 - useful.length)]) selected.add(e);
+    }
+    rows = rows.filter((e) => selected.has(e));
+  } else rows = rows.slice(0, 3);
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
-  return { contentStateContract: STATION_BOARD_CONTRACT, stationName: STATION_BOARD_STATIONS.get(record.stationID)?.stationName || record.stationID, lineName: STATION_BOARD_LINES.get(record.lineID)?.lineID === 'dlr' ? 'DLR' : record.lineID === 'elizabeth' ? 'Elizabeth' : record.lineID === 'hammersmith-city' ? 'Hammersmith & City' : record.lineID === 'waterloo-city' ? 'Waterloo & City' : record.lineID.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' '), platform: record.selectionMode === 'platform' || record.platformID ? record.platformHeading || record.platformLabel || record.platformID : 'All platforms',
-    arrivals: rows.map((e) => ({ id: e.id, destination: e.destination, expectedArrival: Number.isFinite(e.time) ? swift(e.time) : null, countdownText: countdown(e, now), timeEvidence: evidence[e.kind] || (e.timeEvidence === 'predictedDeparture' ? 'estimatedDeparture' : 'scheduledDeparture'), via: e.via || null, reportedPlatform: e.platform || null, expiresAt: swift(e.expiresAt), isCached: false })),
-    status: status?.label || 'Status unavailable', statusReason: status?.reason || null, isDisrupted: status?.isDisrupted || false, updatedAt: swift(now), staleAt: swift(deadlines.length ? Math.min(...deadlines) : now), nextBoardBoundaryAt: nextBoundary(cache, record, now) };
+  const wireRow = (e) => ({ id: e.id, destination: e.destination, expectedArrival: Number.isFinite(e.time) ? swift(e.time) : null, countdownText: countdown(e, now), timeEvidence: evidence[e.kind] || (e.timeEvidence === 'predictedDeparture' ? 'estimatedDeparture' : 'scheduledDeparture'), via: e.via || null, reportedPlatform: e.platform || null, expiresAt: swift(e.expiresAt), isCached: false, ...(plannedSource(e) ? { plannedSourceID: plannedSource(e) } : {}) });
+  let state = { contentStateContract: STATION_BOARD_CONTRACT, stationName: STATION_BOARD_STATIONS.get(record.stationID)?.stationName || record.stationID, lineName: record.lineID === 'dlr' ? 'DLR' : record.lineID === 'elizabeth' ? 'Elizabeth' : record.lineID === 'hammersmith-city' ? 'Hammersmith & City' : record.lineID === 'waterloo-city' ? 'Waterloo & City' : record.lineID.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' '), platform: record.selectionMode === 'platform' || record.platformID ? record.platformHeading || record.platformLabel || record.platformID : 'All platforms',
+    arrivals: rows.map(wireRow),
+    status: status?.label || 'Status unavailable', statusReason: status?.reason || null, isDisrupted: status?.isDisrupted || false, updatedAt: swift(now),
+    ...(proofs.length ? { plannedAvailability: { stationID: record.stationID, lineID: record.lineID, proofs: wireAvailability(proofs, swift) } } : {}) };
+  const staleAt = () => {
+    const deadlines = rows.flatMap((e) => e.kind === 'outgoingDeparture' && Number.isFinite(e.time) ? [e.expiresAt, e.time + 1] : [e.expiresAt]);
+    if (state.plannedAvailability && rows.some(planned)) deadlines.push(...availabilityBoundaries(proofs, now));
+    return swift(deadlines.length ? Math.min(...deadlines) : now);
+  };
+  state.staleAt = staleAt();
+  state.nextBoardBoundaryAt = nextBoundary(cache, record, now);
+  if (retainsContexts && Buffer.byteLength(JSON.stringify(state)) > 3500) {
+    rows = originalRows.filter((e) => !planned(e)).slice(0, 3);
+    state.arrivals = rows.map(wireRow); delete state.plannedAvailability;
+    state.staleAt = staleAt();
+  }
+  // APNs must never receive an oversized typed update, including provider text.
+  const encoded = () => Buffer.byteLength(JSON.stringify({ aps: { timestamp: Math.floor(now / 1000), event: 'update', 'content-state': Object.fromEntries(Object.entries(state).filter(([k]) => k !== 'nextBoardBoundaryAt')), 'stale-date': Math.floor((state.staleAt * 1000 + APPLE_EPOCH) / 1000) } }));
+  if (encoded() > 4096) { state.statusReason = null; state.status = 'Status unavailable'; }
+  if (encoded() > 4096) { state.arrivals = []; delete state.plannedAvailability; state.status = 'Status unavailable'; state.statusReason = null; state.staleAt = swift(now); }
+  return state;
 }
+
 function immutable(value) {
   if (value && typeof value === 'object') {
     for (const child of Object.values(value)) immutable(child);
@@ -386,37 +419,16 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     if (facts.ok) add('at-station-destination', parseDestinationFacts(facts.value, record, facts.headers, facts.completedAt));
   }
   const applicabilityAt = clock();
-  const rejections = publicationRejection ? [publicationRejection] : [], closureSources = {};
-  const period = (value) => objectRow(value) && londonClock(value.fromDate) <= applicabilityAt && applicabilityAt < londonClock(value.toDate);
-  const closureCheck = (observation, periods, closed) => {
-    const applicable = periods.filter(period), validFrom = applicable.length ? Math.min(...applicable.map((p) => londonClock(p.fromDate))) : null, validUntil = applicable.length ? Math.max(...applicable.map((p) => londonClock(p.toDate))) : null;
-    return { stationID: record.stationID, lineID: record.lineID, ...observation, closed, validFrom, validUntil, expiresAt: closed ? Math.min(observation.expiresAt, validUntil) : observation.expiresAt, qualificationOrigin: 'server' };
-  };
+  const rejections = publicationRejection ? [publicationRejection] : [], availabilityProofs = [];
   let status = null;
   if (service.ok) {
     const observed = httpObservation(service.headers, service.completedAt, 120000);
-    const line = Array.isArray(service.value) && service.value.length === 1 && service.value[0].id === record.lineID ? service.value[0] : null;
-    if (observed && observed.expiresAt > applicabilityAt && Array.isArray(line?.lineStatuses) && line.lineStatuses.length && line.lineStatuses.every((d) => objectRow(d) && Number.isInteger(d.statusSeverity))) {
-      const details = line.lineStatuses;
-      const periods = details.filter((d) => [1, 2, 16].includes(d.statusSeverity) && ['closed', 'suspended', 'not running'].includes(key(d.statusSeverityDescription))).flatMap((d) => Array.isArray(d.validityPeriods) ? d.validityPeriods : []);
-      const closed = periods.some(period);
-      if (closed || details.every((d) => [5, 6, 7, 8, 9, 10].includes(d.statusSeverity) && text(d.statusSeverityDescription))) closureSources.service = closureCheck(observed, periods, closed);
-      if (closed) rejections.push({ stationID: record.stationID, lineID: record.lineID, observedAt: observed.observedAt, reason: 'serviceUnavailable' });
-      status = { label: details[0].statusSeverityDescription || 'Status unavailable', reason: details[0].reason || null, isDisrupted: details.some((d) => d.statusSeverity !== 10), expiresAt: observed.expiresAt };
-    }
+    availabilityProofs.push(...qualifyAvailability(service.value, record, 'lineStatus', observed, applicabilityAt, londonClock));
+    const details = Array.isArray(service.value) && service.value.length === 1 && service.value[0].id === record.lineID ? service.value[0].lineStatuses : null;
+    if (observed && observed.expiresAt > applicabilityAt && Array.isArray(details) && details.length && details.every((d) => objectRow(d) && Number.isInteger(d.statusSeverity))) status = { label: details[0].statusSeverityDescription || 'Status unavailable', reason: details[0].reason || null, isDisrupted: details.some((d) => d.statusSeverity !== 10), expiresAt: observed.expiresAt };
   }
-  if (station.ok) {
-    const observed = httpObservation(station.headers, station.completedAt, 120000);
-    if (observed && observed.expiresAt > applicabilityAt && Array.isArray(station.value)) {
-      const periods = station.value.filter((d) => objectRow(d) && (d.stationAtcoCode || d.atcoCode) === record.stationID && ['stationclosure', 'stopclosed', 'closed', 'closure'].includes(key(d.type)));
-      const closed = periods.some(period);
-      if (closed || station.value.length === 0) closureSources.station = closureCheck(observed, periods, closed);
-      if (closed) rejections.push({ stationID: record.stationID, lineID: record.lineID, observedAt: observed.observedAt, reason: 'stationDisrupted' });
-    }
-  }
-  // A still-current explicit closure prevents qualification of this read's
-  // planned context even if its HTTP observation predates the itinerary.
-  // Keep the rejection's original timestamp for older-writer protection.
-  if (rejections.some((r) => ['serviceUnavailable', 'stationDisrupted'].includes(r.reason))) delete sources['journey-planner'];
-  return mergeContexts(previous, { sources, rejections, closureSources, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
+  if (station.ok) availabilityProofs.push(...qualifyAvailability(station.value, record, 'stationDisruptions', httpObservation(station.headers, station.completedAt, 120000), applicabilityAt, londonClock));
+  // Availability masks presentation. It never destroys the original source
+  // context or creates a permanent publication-style closure rejection.
+  return mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
 }

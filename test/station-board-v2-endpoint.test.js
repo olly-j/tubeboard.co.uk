@@ -31,9 +31,23 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   const publication = { url: 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip', sha256: 'a'.repeat(64), timezone: 'Europe/London', operatingStartDate: `${day.slice(0,4)}-01-01`, operatingEndDate: `${day.slice(0,4)}-12-31`, holidayCoverageStart: `${day.slice(0,4)}-01-01`, holidayCoverageEnd: `${day.slice(0,4)}-12-31`, nonOperationBankHolidays: true };
   const seed = { schemaVersion: 1, stationID: board.stationID, lineID: board.lineID, contexts: [{ sourceID: 'timetable', observedAt: new Date(anchor).toISOString(), expiresAt: new Date(Math.min(anchor + 600000, midnight)).toISOString(), publication, rows: [0,1,2].map((i) => ({ id: `schedule:northern:${board.stationID}:${day}:0:0:${i}`, destinationID: '940GZZLUMDN', destination: 'Morden', departure: new Date(departure).toISOString(), via: i === 1 ? 'Bank' : null, routeStationIDs: i === 1 ? ['940GZZLUBNK', '940GZZLUMDN'] : ['940GZZLUMDN'], serviceDay: day, profileName: 'Endpoint fixture profile', profileSHA256: 'b'.repeat(64), weekdays: [new Date(`${day}T12:00:00Z`).getUTCDay() + 1], serviceMinute: minute, isBankHoliday: false })) }] };
   const seededResponse = await post({ ...board, plannedContextSeed: seed }); assert.equal(seededResponse.status, 200); assert.equal((await seededResponse.json()).contentStateContract, 'station-board-v2');
+  const announced = structuredClone(seed);
+  announced.closureEvidence = Array.from({ length: 8 }, (_, index) => ({ stationID: board.stationID, lineID: board.lineID,
+    sourceScope: 'stationDisruptions', closed: true, observedAt: new Date(anchor - 60000 + index * 1000).toISOString(),
+    expiresAt: new Date(anchor - 30000 + index * 1000).toISOString(),
+    closureWindows: [{ validFrom: new Date(anchor + 100000 + index * 1000).toISOString(), validUntil: new Date(anchor + 300000).toISOString() }] }));
+  const announcedResponse = await post({ ...board, plannedContextSeed: announced });
+  assert.equal(announcedResponse.status, 200); assert.equal((await announcedResponse.json()).contentStateContract, 'station-board-v2');
+  const ninth = structuredClone(announced); ninth.closureEvidence.push(ninth.closureEvidence[0]);
+  assert.equal((await post({ ...board, plannedContextSeed: ninth })).status, 400);
   const seededStore = new LiveActivityStore(path.join(directory, 'activities.json')); await seededStore.load();
   const seeded = seededStore.state.records.find((r) => r.activityID === board.activityID);
   assert.equal(seeded.stationBoardCache.sources.timetable.events.length, 3);
+  assert.equal(seeded.stationBoardCache.availabilityProofs.length, 8);
+  assert.equal(seeded.stationBoardCache.availabilityProofs[0].observedAt, anchor - 60000);
+  assert.equal(seeded.stationBoardCache.availabilityProofs[7].expiresAt, anchor - 23000);
+  assert.equal(selectEvents(seeded.stationBoardCache, board, anchor + 100000).length, 0);
+
   const planner = { stationID: board.stationID, lineID: board.lineID, sourceID: 'journey-planner', id: 'one-bounded-planner', kind: 'outgoingDeparture', timeEvidence: 'scheduledDeparture', destination: 'Morden', destinationStationID: '940GZZLUMDN', time: departure, platform: null, receivedAt: anchor + 1000, expiresAt: Math.min(anchor + 121000, midnight) };
   const partial = await seededStore.retainStationBoard(board.activityID, board.environment, { sources: { 'journey-planner': { observedAt: anchor + 1000, events: [planner] } } }, new Date(anchor + 1000));
   assert.equal(selectEvents(partial, board, anchor + 1000).length, 3);
