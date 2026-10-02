@@ -1,0 +1,67 @@
+{
+  "closureEvidence" : [
+    {
+      "closed" : false,
+      "closureWindows" : [
+        {
+          "validFrom" : "2026-10-02T00:17:57Z",
+          "validUntil" : "2026-10-02T05:46:00Z"
+        }
+      ],
+      "expiresAt" : "2026-10-02T02:47:13Z",
+      "lineID" : "liberty",
+      "observedAt" : "2026-10-02T02:46:43Z",
+      "scheduledClockOnly" : true,
+      "sourceScope" : "lineStatus",
+      "stationID" : "910GROMFORD",
+      "validFrom" : "2026-10-02T00:17:57Z",
+      "validUntil" : "2026-10-02T05:46:00Z"
+    }
+  ],
+  "contexts" : [
+    {
+      "expiresAt" : "2026-10-02T02:48:45Z",
+      "observedAt" : "2026-10-02T02:46:45Z",
+      "rows" : [
+        {
+          "departure" : "2026-10-02T05:12:00Z",
+          "destination" : "Upminster",
+          "destinationID" : "910GUPMNSTR",
+          "id" : "journey-leg:3721ebc70252377b48d8d25e259a4e98127fe5370a4c66b044dad898af9055aa",
+          "providerDirection" : "Outbound",
+          "routeStationIDs" : [
+            "910GEMRSPKH",
+            "910GUPMNSTR"
+          ]
+        },
+        {
+          "departure" : "2026-10-02T05:41:00Z",
+          "destination" : "Upminster",
+          "destinationID" : "910GUPMNSTR",
+          "id" : "journey-leg:9c466686ec5580546a21bb027005111db9ba73ee7eca6a7de1bd889e5a43caf8",
+          "providerDirection" : "Outbound",
+          "routeStationIDs" : [
+            "910GEMRSPKH",
+            "910GUPMNSTR"
+          ]
+        },
+        {
+          "departure" : "2026-10-02T06:11:00Z",
+          "destination" : "Upminster",
+          "destinationID" : "910GUPMNSTR",
+          "id" : "journey-leg:1072de2e40dea0b1a0a3bb2daf78b4aa22f5fff550ef496979a85950240f44c2",
+          "providerDirection" : "Outbound",
+          "routeStationIDs" : [
+            "910GEMRSPKH",
+            "910GUPMNSTR"
+          ]
+        }
+      ],
+      "sourceID" : "journey-planner",
+      "sourceSHA256" : "0781cc8215399e95e5702210e47e49d6427d4c2235a8d56dd6600fba9a0287a5"
+    }
+  ],
+  "lineID" : "liberty",
+  "schemaVersion" : 1,
+  "stationID" : "910GROMFORD"
+}

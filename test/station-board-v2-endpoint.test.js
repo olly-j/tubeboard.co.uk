@@ -14,11 +14,20 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   t.after(async () => { child.kill('SIGTERM'); await once(child, 'exit'); await fs.rm(directory, { recursive: true, force: true }); });
   const origin = await new Promise((resolve, reject) => { child.once('error', reject); let output = ''; child.stdout.on('data', (data) => { output += data; const match = /http:\/\/localhost:(\d+)/.exec(output); if (match) resolve(match[0]); }); child.once('exit', () => reject(new Error('Local service ended before listen'))); });
   const fixture = JSON.parse(await fs.readFile(new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url)));
-  const health = await (await fetch(`${origin}/healthz`)).json(); assert.equal(health.ok, true); assert.equal(health.contractVersion, 1); assert.deepEqual(health.contentStateContracts, ['station-board-v2']);
+  const health = await (await fetch(`${origin}/healthz`)).json(); assert.equal(health.ok, true); assert.equal(health.contractVersion, 1); assert.deepEqual(health.contentStateContracts, ['station-board-v2']); assert.equal(health.plannedPresentationVersion, 2);
   const post = async (body) => fetch(`${origin}/api/live-activities/tokens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const legacyResponse = await post(fixture); assert.equal(legacyResponse.status, 200); assert.deepEqual(await legacyResponse.json(), { ok: true });
   const schemaResponse = await fetch(`${origin}/contracts/live-activity-registration-v2.schema.json`); assert.equal(schemaResponse.status, 200); const schema = await schemaResponse.json(); assert.equal(schema.properties.lineID.enum.length, 19); assert.equal(schema.properties.contentStateContract.const, 'station-board-v2');
   for (const [lineID, line] of STATION_BOARD_LINES) { const response = await post({ ...fixture, installID: `synthetic-${lineID}`, activityID: `synthetic-${lineID}`, stationID: line.boundedOriginID, lineID, contentStateContract: 'station-board-v2' }); assert.equal(response.status, 200, lineID); }
+  const capabilityBoard = { ...fixture, installID: 'synthetic-capability', activityID: 'synthetic-capability', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2, tokenUpdatedAt: new Date().toISOString() };
+  const capResponse = await post(capabilityBoard); assert.equal(capResponse.status, 200); assert.deepEqual(await capResponse.json(), { ok: true, contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 });
+  const tiedOld = await post({ ...capabilityBoard, plannedPresentationVersion: undefined }); assert.deepEqual(await tiedOld.json(), { ok: true, contentStateContract: 'station-board-v2' });
+  const tiedNew = await post(capabilityBoard); assert.deepEqual(await tiedNew.json(), { ok: false, contentStateContract: 'station-board-v2' });
+  const restored = { ...capabilityBoard, tokenUpdatedAt: new Date(Date.parse(capabilityBoard.tokenUpdatedAt) + 1000).toISOString() };
+  assert.equal((await (await post(restored)).json()).plannedPresentationVersion, 2);
+  const outdated = await post({ ...capabilityBoard, plannedPresentationVersion: undefined }); assert.deepEqual(await outdated.json(), { ok: false, contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 });
+  for (const invalid of [null, true, '2', 1, 3, {}, []]) assert.equal((await post({ ...capabilityBoard, plannedPresentationVersion: invalid })).status, 400);
+  assert.equal((await post({ ...fixture, plannedPresentationVersion: 2 })).status, 400);
   assert.equal((await post({ ...fixture, installID: 'synthetic-invalid', lineID: 'dlr' })).status, 400);
   assert.equal((await post({ ...fixture, installID: 'synthetic-invalid', contentStateContract: 'station-board-v9' })).status, 400);
   assert.equal((await post({ ...fixture, installID: 'synthetic-invalid', contentStateContract: 'station-board-v2', lineID: 'mildmay' })).status, 400);
@@ -58,5 +67,5 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   assert.equal(seededStore.state.records.find((r) => r.activityID === board.activityID).stationBoardCache.sources.timetable, undefined);
   const expiry = mergeContexts(partial, {}, board, Math.min(anchor + 600000, midnight)); assert.equal(expiry.sources.timetable, undefined);
   const bad = structuredClone(seed); bad.contexts[0].rows[0].platform = 'Platform 1'; assert.equal((await post({ ...board, plannedContextSeed: bad })).status, 400);
-  const saved = JSON.parse(await fs.readFile(path.join(directory, 'activities.json'))); assert.equal(saved.records.filter((r) => r.contentStateContract === 'station-board-v2').length, 20); assert.equal(saved.records.find((r) => r.activityID === fixture.activityID).contentStateContract, undefined);
+  const saved = JSON.parse(await fs.readFile(path.join(directory, 'activities.json'))); assert.equal(saved.records.filter((r) => r.contentStateContract === 'station-board-v2').length, 21); assert.equal(saved.records.find((r) => r.activityID === fixture.activityID).contentStateContract, undefined);
 });

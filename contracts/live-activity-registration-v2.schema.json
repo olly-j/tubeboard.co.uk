@@ -127,6 +127,10 @@
     "contentStateContract": {
       "const": "station-board-v2"
     },
+    "plannedPresentationVersion": {
+      "type": "integer",
+      "const": 2
+    },
     "plannedContextSeed": {
       "type": "object",
       "additionalProperties": false,
@@ -455,6 +459,9 @@
               },
               "plannedUnavailable": {
                 "type": "boolean"
+              },
+              "scheduledClockOnly": {
+                "type": "boolean"
               }
             },
             "allOf": [
@@ -471,6 +478,29 @@
                     "validFrom",
                     "validUntil"
                   ]
+                }
+              },
+              {
+                "if": {
+                  "required": [
+                    "scheduledClockOnly"
+                  ],
+                  "properties": {
+                    "scheduledClockOnly": {
+                      "const": true
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "validFrom",
+                    "validUntil"
+                  ],
+                  "properties": {
+                    "closed": {
+                      "const": false
+                    }
+                  }
                 }
               }
             ]

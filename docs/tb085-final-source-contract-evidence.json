@@ -1,0 +1,69 @@
+{
+  "task": "TB-085 / #298; shared system surfaces TB-150 / #618",
+  "state": "implemented, tested and independently reviewed source; not deployed or beta-ready",
+  "appSource": "c188dbf80549a1b60ccb7a1e802026997e524bdd",
+  "serviceBase": "6c0477806c5bcd56d88d7a89187f171fd4dfac2e",
+  "behaviour": "All19 catalogue lines retain selected-station event roles, separate scheduled/predicted authority, outgoing before arrivals, known/unassigned platforms and original source/own expiry. Capability2 permits per-date shared source choice; older typed clients receive eligible compact context and legacy v1 remains unchanged. Live rail incoming uses only estimated arrival, retains scheduled metadata/internal platform and cannot supply outgoing clocks/platforms. Planned fallback renewals are bounded own-line requests after applicable fresh availability controls. Optional capability2 ACK and async callbacks describe accepted registration only. Duration callbacks guard newer registration identity/capability.",
+  "checks": {
+    "focusedActual": {
+      "passed": 46,
+      "failed": 0,
+      "skipped": 0
+    },
+    "fullServiceActual": {
+      "passed": 231,
+      "failed": 0,
+      "skipped": 0,
+      "includes": "existing Node,syntax,repository"
+    },
+    "swiftWireActual": {
+      "assertions": 218,
+      "cases": 7,
+      "scope": "Foundation exact unchanged APP decoder/renderer bodies; not native SDK/OS"
+    },
+    "formalRegistration": {
+      "cases": 28,
+      "result": "passed exact unchanged input reuse; not rerun in duration slice"
+    },
+    "flyConfigCurrent": {
+      "result": "blocked",
+      "detail": "no access token available; no login/deploy performed",
+      "recordedAtUTC": "2026-10-02T08:49:41.252696+00:00"
+    }
+  },
+  "historicalSourceObservations": {
+    "scope": "Seven immutable public incoming bodies at original Date/Age/receipt, elapsed; automated fixtures are separate from live and physical validation.",
+    "futureEstimatedIncomingCounts": {
+      "elizabeth": 14,
+      "liberty": 0,
+      "lioness": 8,
+      "mildmay": 9,
+      "suffragette": 4,
+      "weaver": 4,
+      "windrush": 11
+    },
+    "missingFields": [
+      "vehicle identity",
+      "via",
+      "ordered calls",
+      "per-row line IDs"
+    ],
+    "remaining": "Current all19 source acceptance and loop/shared-line observations required; empty Liberty incoming is not whole-line fallback acceptance."
+  },
+  "preservedFailures": [
+    "prior raw source/semantic fixture defects corrected in recorded iterations",
+    "independent duration callback race held r1; corrected in r2",
+    "APP SDK Liberty resource lookup twice failed; Phone0/4 and Watch10/13 setup failures preserved; no expiry acceptance"
+  ],
+  "remainingGates": [
+    "current actual source qualification for every19 line/28 representative pairs",
+    "corrected APP signed native, closed-host widget/Watch/Activity and rendered acceptance",
+    "backend config/authentication and explicit owner production deployment authority",
+    "normal nonfixture token/typed ACK/APNs/closed-app expiry acceptance",
+    "protected integration and exact final signed candidate/TestFlight processing/distribution"
+  ],
+  "physicalStationValidation": "not run; public 10/5/5 gates preserved",
+  "betaReady": false,
+  "deployed": false,
+  "releaseActions": []
+}

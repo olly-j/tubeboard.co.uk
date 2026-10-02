@@ -8,7 +8,7 @@ import { refreshStationBoard, selectEvents, STATION_BOARD_STATIONS } from '../se
 const now = Date.parse('2026-10-01T13:00:00Z');
 const config = loadConfig({});
 const headers = (at = now, age = 0, maxAge = 120) => ({ date: new Date(at).toUTCString(), age: String(age), 'cache-control': `public,max-age=${maxAge}` });
-const record = { activityID: 'synthetic-A', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1.0', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2' };
+const record = { activityID: 'synthetic-A', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1.0', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 };
 const event = (id, overrides = {}) => ({ id, stationID: record.stationID, lineID: record.lineID, sourceID: 'journey-planner', kind: 'outgoingDeparture', timeEvidence: 'scheduledDeparture', time: now + 90000, destination: 'Morden', destinationStationID: '940GZZLUMDN', receivedAt: now, expiresAt: now + 120000, ...overrides });
 const context = (...events) => ({ sources: Object.fromEntries([...new Set(events.map((e) => e.sourceID))].map((source) => [source, { observedAt: Math.max(...events.filter((e) => e.sourceID === source).map((e) => e.receivedAt)), events: events.filter((e) => e.sourceID === source) }])) });
 function journey() { return { searchCriteria: { dateTimeType: 'Departing', dateTime: '2026-10-01T14:00:00' }, recommendedMaxAgeMinutes: 2, stopMessages: [], journeys: [{ legs: [{ mode: { id: 'tube' }, departurePoint: { naptanId: record.stationID }, arrivalPoint: { naptanId: '940GZZLUMDN' }, scheduledDepartureTime: '2026-10-01T14:02:00', isDisrupted: false, disruptions: [], plannedWorks: [], routeOptions: [{ lineIdentifier: { id: 'northern' }, direction: 'Outbound', directions: ['Morden'] }], path: { stopPoints: [{ id: record.stationID }, { id: '940GZZLUMDN' }] } }] }] }; }
@@ -65,7 +65,7 @@ for (const reverse of [false, true]) {
     assert.equal(rows(two)[0].platform, 'Platform 2');
     assert.equal(rows(two)[0].time, null);
     assert.equal(new Set(requests).size, requests.length);
-    assert.equal(requests.length, 5);
+    assert.equal(requests.length, 6);
   });
 }
 
@@ -75,17 +75,17 @@ test('public receipt freezes Date/Age freshness across late consumers and source
   const first = await refreshStationBoard(r, {}, config, fetchImpl, now, null, () => at, shared);
   at = now + 20000; const second = await refreshStationBoard(r, {}, config, fetchImpl, now, null, () => at, shared);
   for (const cache of [first, second]) { assert.equal(cache.sources['rail-departures'].events[0].receivedAt, now - 30000); assert.equal(cache.sources['rail-departures'].events[0].expiresAt, now + 60000); }
-  assert.equal(reads, 4);
+  assert.equal(reads, 5);
   const receipt = await [...shared.values()][1]; assert.equal(receipt.completedAt, now); assert.equal(Object.isFrozen(receipt.value), true); assert.equal(Object.isFrozen(receipt.headers), true);
   assert.throws(() => { receipt.headers.age = '0'; }, TypeError);
-  at = now + 61000; const expired = await refreshStationBoard(r, {}, config, fetchImpl, now, null, () => at, shared); assert.equal(expired.sources['rail-departures'], undefined); assert.equal(reads, 5);
+  at = now + 61000; const expired = await refreshStationBoard(r, {}, config, fetchImpl, now, null, () => at, shared); assert.equal(expired.sources['rail-departures'], undefined); assert.equal(reads, 7); // New civil query minute and newly needed destination facts each have their own final URL.
 });
 
 test('public response promise coalesces concurrent parsing, missing-Age retry, failures and abort', async () => {
   let reads = 0, jsonReads = 0; const shared = new Map();
   const fetchImpl = async (url) => { reads++; const age = reads <= 4 ? undefined : '0'; return { ok: true, status: 200, headers: new Headers({ date: new Date(now).toUTCString(), ...(age ? { age } : {}), 'cache-control': 'max-age=120' }), async json() { jsonReads++; return []; } }; };
   await Promise.all([refreshStationBoard(record, {}, config, fetchImpl, now, null, () => now, shared), refreshStationBoard(record, {}, config, fetchImpl, now, null, () => now, shared)]);
-  assert.equal(reads, 9); assert.equal(jsonReads, reads); assert.equal(shared.size, 5);
+  assert.equal(reads, 8); assert.equal(jsonReads, reads); assert.equal(shared.size, 5);
   const failures = new Map(); let attempts = 0; const offline = async () => { attempts++; throw new Error('offline'); };
   await Promise.all([refreshStationBoard(record, {}, config, offline, now, null, () => now, failures), refreshStationBoard(record, {}, config, offline, now, null, () => now, failures)]); assert.equal(attempts, 5);
   const controller = new AbortController(); controller.abort(new Error('root-cycle-aborted')); await assert.rejects(refreshStationBoard(record, {}, config, offline, now, controller.signal), /root-cycle-aborted/);
@@ -181,7 +181,8 @@ test('conditional facts latency uses final closure applicability without renewin
       const value = p.endsWith('/Disruption') ? [{ stationAtcoCode: record.stationID, type: 'Closure', fromDate: new Date(now + (variant === 'newly-active' ? 10000 : -10000)).toISOString(), toDate: new Date(now + (variant === 'ended' ? 10000 : 30000)).toISOString() }] : p.includes('JourneyResults') ? journey() : [];
       return new Response(JSON.stringify(value), { headers: headers(now, 0, variant === 'availability-expired' && p.endsWith('/Disruption') ? 10 : 120) });
     };
-    const cache = await refreshStationBoard(record, {}, config, fetchImpl, now, null, () => at);
+    const retained = context(event('original-plan', { time: now + 120000 }));
+    const cache = await refreshStationBoard(record, retained, config, fetchImpl, now, null, () => at);
     assert.equal(at, now + 20000);
     if (variant === 'ended' || variant === 'availability-expired') {
       assert.equal(cache.closureSources.station, undefined);

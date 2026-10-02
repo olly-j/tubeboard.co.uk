@@ -3,12 +3,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { mergeContexts, selectEvents, nextBoundary, buildStationBoardState, refreshStationBoard, londonClock, STATION_BOARD_LINES } from '../server/station-board-v2.js';
+import { mergeContexts, selectEvents, nextBoundary, buildStationBoardState, refreshStationBoard, compactPlanningSource, londonClock, STATION_BOARD_LINES } from '../server/station-board-v2.js';
 import { retainAvailability, activeClosure, expiredBarrier, blocksScheduled, qualifyAvailability, knownNonClosure } from '../server/station-board-availability.js';
 import { admitPlannedSeed } from '../server/station-board-seed.js';
 import { LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload } from '../server/live-activity.js';
 const now = Date.parse('2026-10-01T13:00:00Z'), at = (s) => now + s * 1000;
-const record = { activityID: 'synthetic-future', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2' };
+const record = { activityID: 'synthetic-future', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 };
 const proof = (obs = 0, exp = 30, start = 60, end = 180, extra = {}) => ({ stationID: record.stationID, lineID: record.lineID, sourceScope: 'stationDisruptions', observedAt: at(obs), expiresAt: at(exp), closed: true, closureWindows: [{ validFrom: at(start), validUntil: at(end) }], ...extra });
 const event = (id, time = 100, obs = 0, exp = 600, extra = {}) => ({ id, stationID: record.stationID, lineID: record.lineID, sourceID: 'timetable', kind: 'outgoingDeparture', destination: 'Morden', destinationStationID: '940GZZLUMDN', time: at(time), timeEvidence: 'scheduledDeparture', receivedAt: at(obs), expiresAt: at(exp), ...extra });
 const context = (...events) => ({ sources: Object.fromEntries([...new Set(events.map((e) => e.sourceID))].map((source) => [source, { observedAt: Math.max(...events.filter((e) => e.sourceID === source).map((e) => e.receivedAt)), events: events.filter((e) => e.sourceID === source) }])) });
@@ -20,8 +20,8 @@ function renderedIDs(state, clock) {
   const apple = 978307200000;
   const proofs = state.plannedAvailability?.proofs.map((p) => ({ ...p, observedAt: p.observedAt * 1000 + apple, expiresAt: p.expiresAt * 1000 + apple, closureWindows: p.closureWindows?.map((w) => ({ validFrom: w.validFrom * 1000 + apple, validUntil: w.validUntil * 1000 + apple })) })) || [];
   let rows = state.arrivals.filter((e) => e.expiresAt * 1000 + apple > clock && (e.expectedArrival === null || e.expectedArrival * 1000 + apple >= clock) && (e.timeEvidence !== 'scheduledDeparture' || !retainAvailability({ availabilityProofs: proofs }, {}, record, clock).some((p) => blocksScheduled(p, e.expectedArrival * 1000 + apple, clock))));
-  const selected = rows.some((r) => r.timeEvidence === 'scheduledDeparture' && r.plannedSourceID === 'timetable') ? 'timetable' : 'journey-planner';
-  rows = rows.filter((r) => r.timeEvidence !== 'scheduledDeparture' || !['timetable', 'journey-planner'].includes(r.plannedSourceID) || r.plannedSourceID === selected);
+  const selected = compactPlanningSource(rows.map((r) => ({ kind: 'outgoingDeparture', timeEvidence: r.timeEvidence, sourceID: r.plannedSourceID, time: r.expectedArrival * 1000 + apple })));
+  rows = rows.filter((r) => r.timeEvidence !== 'scheduledDeparture' || !['timetable', 'journey-planner', 'rail-departures'].includes(r.plannedSourceID) || r.plannedSourceID === selected);
   return rows.slice(0, 3).map((r) => r.id);
 }
 
@@ -89,7 +89,7 @@ test('temporary closure refresh and transactional restart restore original plans
   const original = event('gap', 35), p = proof(0, 20, 10, 20); await store.retainStationBoard(record.activityID, record.environment, cache([original, event('predicted', 40, 0, 600, { sourceID: 'rail-departures', timeEvidence: 'predictedDeparture' })], []), new Date(now));
   let reads = 0; const fetchImpl = async (url) => { reads++; const values = new URL(url).pathname.endsWith('/Disruption') ? [rawClosure(10, 20)] : []; return new Response(JSON.stringify(values), { headers: { date: new Date(now).toUTCString(), age: '0', 'cache-control': 'public,max-age=30' } }); };
   const read = await refreshStationBoard(record, store.state.records[0].stationBoardCache, loadConfig({}), fetchImpl, at(15), null); assert.equal(read.rejections.length, 0); assert.equal(read.sources.timetable.events[0].time, original.time); assert.equal(read.availabilityProofs[0].expiresAt, p.expiresAt); await store.retainStationBoard(record.activityID, record.environment, read, new Date(at(15)));
-  const restarted = new LiveActivityStore(file), pushes = []; await runLiveActivityWorkerCycle({ store: restarted, config: loadConfig({}), cacheOnly: true, now: new Date(at(20)), clock: () => at(20), fetchImpl: async () => { reads++; throw Error('No reads at boundary'); }, pushImpl: async (_, payload) => pushes.push(payload), logger: { info() {}, warn() {} } }); assert.equal(reads, 5); assert.ok(pushes[0].aps['content-state'].arrivals.some((r) => r.id === original.id)); assert.equal(restarted.state.records[0].stationBoardCache.sources.timetable.events[0].expiresAt, original.expiresAt);
+  const restarted = new LiveActivityStore(file), pushes = []; await runLiveActivityWorkerCycle({ store: restarted, config: loadConfig({}), cacheOnly: true, now: new Date(at(20)), clock: () => at(20), fetchImpl: async () => { reads++; throw Error('No reads at boundary'); }, pushImpl: async (_, payload) => pushes.push(payload), logger: { info() {}, warn() {} } }); assert.equal(reads, 4); assert.ok(pushes[0].aps['content-state'].arrivals.some((r) => r.id === original.id)); assert.equal(restarted.state.records[0].stationBoardCache.sources.timetable.events[0].expiresAt, original.expiresAt);
   const changed = mergeContexts(read, { rejections: [{ stationID: record.stationID, lineID: record.lineID, observedAt: at(16), reason: 'publicationChanged' }] }, record, at(20)); assert.equal(changed.sources.timetable, undefined); assert.ok(changed.sources['rail-departures']);
 });
 
@@ -164,13 +164,13 @@ test('nine original source rows keep useful alternatives and optional provenance
   assert.deepEqual(renderedIDs(legacy, at(50)), ['TT-0', 'TT-1', 'TT-2']); assert.deepEqual(renderedIDs(legacy, at(60)), ['JP-0']);
   const rail = event('rail-plan', 230, 20, 140, { sourceID: 'rail-departures' });
   const independent = buildStationBoardState(record, cache([event('TT', 250), rail, live()], [proof(0, 30, 10, 20)]), at(21));
-  assert.equal(independent.arrivals.find((r) => r.id === rail.id).plannedSourceID, undefined); assert.deepEqual(renderedIDs(independent, at(21)), ['rail-plan', 'TT', 'live']);
+  assert.equal(independent.arrivals.find((r) => r.id === rail.id).plannedSourceID, 'rail-departures'); assert.deepEqual(renderedIDs(independent, at(21)), ['rail-plan', 'live']);
 });
 
 test('independent raw group prioritizes useful live rows before masked rail schedules and overflow preserves original live context', () => {
   const rail = [100, 110, 120].map((t, i) => event(`rail-${i}`, t, 20, 620, { sourceID: 'rail-departures' }));
   const original = cache([...rail, live('live-A'), live('live-B'), live('live-C')], [proof()]);
-  const state = buildStationBoardState(record, original, at(50)); assert.deepEqual(state.arrivals.map((r) => r.id), ['live-A', 'live-B', 'live-C']);
+  const state = buildStationBoardState(record, original, at(50)); assert.deepEqual(state.arrivals.map((r) => r.id), ['rail-0', 'rail-1', 'rail-2', 'live-A', 'live-B', 'live-C']); assert.deepEqual(renderedIDs(state, at(50)), ['live-A', 'live-B', 'live-C']);
   const long = context(event('TT', 250, 0, 600, { destination: 'x'.repeat(3000) }), event('JP', 260, 20, 140, { sourceID: 'journey-planner' }), ...rail, live('live-A'), live('live-B'), live('live-C'));
   const fallback = buildStationBoardState(record, long, at(50)); assert.deepEqual(fallback.arrivals.map((r) => r.id), ['live-A', 'live-B', 'live-C']); assert.ok(fallback.arrivals.every((r) => r.timeEvidence === 'estimatedDeparture')); assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(fallback, new Date(at(50))))) <= 4096);
 });

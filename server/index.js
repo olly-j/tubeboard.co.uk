@@ -81,6 +81,7 @@ const server = http.createServer(async (request, response) => {
         serviceVersion: SERVICE_VERSION,
         contractVersion: LIVE_ACTIVITY_CONTRACT_VERSION,
         contentStateContracts: ['station-board-v2'],
+        plannedPresentationVersion: 2,
         disruptionAlertContractVersion: DISRUPTION_ALERT_CONTRACT_VERSION,
         disruptionAlertWorkerEnabled: disruptionAlertConfig.workerEnabled,
         sourceRevision: SOURCE_REVISION
@@ -282,8 +283,8 @@ async function handleTokenRegistration(request, response) {
     return;
   }
 
-  await store.upsertToken(validation.value);
-  sendJson(response, 200, { ok: true, ...(validation.value.contentStateContract === 'station-board-v2' ? { contentStateContract: 'station-board-v2' } : {}) });
+  const accepted = await store.upsertToken(validation.value);
+  sendJson(response, 200, { ok: accepted.registrationAccepted !== false, ...(accepted.contentStateContract === 'station-board-v2' ? { contentStateContract: 'station-board-v2', ...(accepted.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}) } : {}) });
 }
 
 async function handleActivityEnd(request, response) {

@@ -6,6 +6,10 @@ import { TransactionalJsonStore } from './transactional-json-store.js';
 import { admitPlannedSeed } from './station-board-seed.js';
 import { STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, buildStationBoardState } from './station-board-v2.js';
 
+// Never log this tuple: it includes token custody and exact selected scope.
+export function registrationTuple(record) {
+  return JSON.stringify(['environment','activityID','tokenUpdatedAt','pushTokenHex','stationID','lineID','selectionMode','platformID','platformHeading','platformLabel','platformDirection','activityStartedAt','activityEndsAt','contentStateContract','plannedPresentationVersion'].map((k) => record[k] ?? null));
+}
 export const TUBE_LINES = new Map([
   ['bakerloo', 'Bakerloo'],
   ['central', 'Central'],
@@ -84,8 +88,20 @@ export class LiveActivityStore extends TransactionalJsonStore {
       const isSameActivity = previous.activityID === payload.activityID;
       // An older token registration cannot downgrade an already negotiated
       // activity or change its selected board behind a newer observation.
-      if (isSameActivity && (previous.contentStateContract === STATION_BOARD_CONTRACT || payload.contentStateContract === STATION_BOARD_CONTRACT) && Date.parse(payload.tokenUpdatedAt) < Date.parse(previous.tokenUpdatedAt)) return { changed: false, value: redactRecord(previous) };
-      if (previous.contentStateContract === STATION_BOARD_CONTRACT && (!validBoard(payload.stationID, payload.lineID))) return { changed: false, value: redactRecord(previous) };
+      if (isSameActivity && (previous.contentStateContract === STATION_BOARD_CONTRACT || payload.contentStateContract === STATION_BOARD_CONTRACT) && Date.parse(payload.tokenUpdatedAt) < Date.parse(previous.tokenUpdatedAt)) return { changed: false, value: { ...redactRecord(previous), registrationAccepted: false } };
+      if (isSameActivity && previous.contentStateContract === STATION_BOARD_CONTRACT && Date.parse(payload.tokenUpdatedAt) === Date.parse(previous.tokenUpdatedAt)) {
+        // Equal observations cannot establish a different board/token contract.
+        const equalScope = registrationTuple({ ...payload, plannedPresentationVersion: previous.plannedPresentationVersion }) === registrationTuple(previous);
+        if (!equalScope) return { changed: false, value: { ...redactRecord(previous), registrationAccepted: false } };
+        if (previous.plannedPresentationVersion !== payload.plannedPresentationVersion) {
+          if (payload.plannedPresentationVersion === undefined) { delete previous.plannedPresentationVersion; delete previous.lastBoardContentDigest; }
+          return { value: { ...redactRecord(previous), registrationAccepted: payload.plannedPresentationVersion === undefined } };
+        }
+        const seed = admitPlannedSeed(payload.plannedContextSeed, previous, now.getTime());
+        if (!seed.errors.length && (Object.keys(seed.sources).length || seed.availabilityProofs?.length)) previous.stationBoardCache = mergeContexts(previous.stationBoardCache, seed, previous, now.getTime());
+        return { changed: payload.plannedContextSeed !== undefined, value: { ...redactRecord(previous), registrationAccepted: true } };
+      }
+      if (previous.contentStateContract === STATION_BOARD_CONTRACT && (!validBoard(payload.stationID, payload.lineID))) return { changed: false, value: { ...redactRecord(previous), registrationAccepted: false } };
       const record = {
         ...previous,
         installID: payload.installID,
@@ -123,6 +139,9 @@ export class LiveActivityStore extends TransactionalJsonStore {
 
       if (payload.contentStateContract === STATION_BOARD_CONTRACT || previous.contentStateContract === STATION_BOARD_CONTRACT) {
         record.contentStateContract = STATION_BOARD_CONTRACT;
+        if (payload.plannedPresentationVersion === 2) record.plannedPresentationVersion = 2;
+        else delete record.plannedPresentationVersion;
+        if (isSameActivity && registrationTuple(previous) !== registrationTuple(record)) delete record.lastBoardContentDigest;
         if (previous.stationID !== payload.stationID || previous.lineID !== payload.lineID) delete record.stationBoardCache;
         const seed = admitPlannedSeed(payload.plannedContextSeed, record, now.getTime());
         if (!seed.errors.length && (Object.keys(seed.sources).length || Object.keys(seed.closureSources).length || seed.availabilityProofs?.length)) record.stationBoardCache = mergeContexts(record.stationBoardCache, { sources: seed.sources, closureSources: seed.closureSources, availabilityProofs: seed.availabilityProofs }, record, now.getTime());
@@ -150,7 +169,7 @@ export class LiveActivityStore extends TransactionalJsonStore {
         }
       }
 
-      return { value: redactRecord(record) };
+      return { value: { ...redactRecord(record), ...(record.contentStateContract === STATION_BOARD_CONTRACT ? { registrationAccepted: true } : {}) } };
     });
   }
 
@@ -195,10 +214,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
     }));
   }
 
-  async retainStationBoard(activityID, environment, incoming, now = new Date()) {
+  async retainStationBoard(activityID, environment, incoming, now = new Date(), expectedTuple = null) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record || record.active === false || record.contentStateContract !== STATION_BOARD_CONTRACT) return { changed: false, value: null };
+      if (!record || record.active === false || record.contentStateContract !== STATION_BOARD_CONTRACT || expectedTuple !== null && registrationTuple(record) !== expectedTuple) return { changed: false, value: null };
       record.stationBoardCache = mergeContexts(record.stationBoardCache, incoming, record, now.getTime());
       return { value: record.stationBoardCache };
     });
@@ -207,7 +226,7 @@ export class LiveActivityStore extends TransactionalJsonStore {
   async markPushed(activityID, environment, info, now = new Date()) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || info.expectedTuple !== undefined && registrationTuple(record) !== info.expectedTuple) {
         return { changed: false };
       }
 
@@ -228,10 +247,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
     });
   }
 
-  async markBackoff(activityID, environment, delayMs, reason, now = new Date()) {
+  async markBackoff(activityID, environment, delayMs, reason, now = new Date(), expectedTuple = null) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || expectedTuple !== null && registrationTuple(record) !== expectedTuple) {
         return { changed: false };
       }
 
@@ -241,10 +260,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
     });
   }
 
-  async markPaused(activityID, environment, now = new Date()) {
+  async markPaused(activityID, environment, now = new Date(), expectedTuple = null) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || expectedTuple !== null && registrationTuple(record) !== expectedTuple) {
         return { changed: false };
       }
 
@@ -257,10 +276,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
     });
   }
 
-  async markDurationEnded(activityID, environment, now = new Date()) {
+  async markDurationEnded(activityID, environment, now = new Date(), expectedTuple = null) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || expectedTuple !== null && registrationTuple(record) !== expectedTuple) {
         return { changed: false };
       }
 
@@ -271,10 +290,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
     });
   }
 
-  async deactivate(activityID, environment, reason, now = new Date()) {
+  async deactivate(activityID, environment, reason, now = new Date(), expectedTuple = null) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || expectedTuple !== null && registrationTuple(record) !== expectedTuple) {
         return { changed: false };
       }
 
@@ -504,6 +523,7 @@ export function validateTokenPayload(input, now = new Date()) {
   }
 
   const v2 = payload.contentStateContract === STATION_BOARD_CONTRACT;
+  if (payload.plannedPresentationVersion !== undefined && (!v2 || payload.plannedPresentationVersion !== 2)) errors.push('plannedPresentationVersion is unsupported');
   if (payload.contentStateContract !== undefined && !v2) errors.push('contentStateContract is unsupported');
   if (v2 && !validBoard(payload.stationID, payload.lineID)) errors.push('stationID is not on the selected station-board line');
   if (typeof payload.lineID === 'string' && !(v2 ? STATION_BOARD_LINES : LIVE_ACTIVITY_LINES).has(payload.lineID)) {
@@ -565,7 +585,7 @@ export function validateTokenPayload(input, now = new Date()) {
       appVersion: String(payload.appVersion || '').trim(),
       buildNumber: String(payload.buildNumber || '').trim(),
       environment: String(payload.environment || '').trim(),
-      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
+      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
     }
   };
 }
@@ -803,27 +823,32 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       continue;
     }
 
+    const expectedTuple = record.contentStateContract === STATION_BOARD_CONTRACT ? registrationTuple(record) : null;
     try {
+      if (expectedTuple !== null) {
+        const current = (await store.listActive(now, config)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
+        if (!current || registrationTuple(current) !== expectedTuple) continue;
+      }
       const pausedAt = Date.parse(record.pausedAt || '');
       if (!Number.isFinite(pausedAt)) {
         const pushResult = await pushImpl(record, buildPausedApnsPayload(record, now), config, { signal });
-        await store.markPaused(record.activityID, record.environment, now);
+        await store.markPaused(record.activityID, record.environment, now, expectedTuple);
         logger.info(`Live Activity paused after its selected duration: APNs ${pushResult?.status || 200}`);
         continue;
       }
 
       if (now.getTime() - pausedAt >= config.pauseGraceMs) {
         const pushResult = await pushImpl(record, buildEndApnsPayload(record, now), config, { signal });
-        await store.markDurationEnded(record.activityID, record.environment, now);
+        await store.markDurationEnded(record.activityID, record.environment, now, expectedTuple);
         logger.info(`Live Activity ended after its pause grace period: APNs ${pushResult?.status || 200}`);
       }
     } catch (error) {
       signal?.throwIfAborted();
       if (error.permanent) {
-        await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
+        await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now, expectedTuple);
         logger.warn(`Live Activity deactivated after permanent APNs error: ${error.reason || error.message}`);
       } else {
-        await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
+        await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now, expectedTuple);
         logger.warn(`Live Activity duration transition backed off: ${error.message}`);
       }
     }
@@ -836,6 +861,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
   const publicResponses = new Map();
   for (const record of liveRecords.filter((record) => record.contentStateContract === STATION_BOARD_CONTRACT)) {
     signal?.throwIfAborted();
+    const expectedTuple = registrationTuple(record);
     try {
       let cache = record.stationBoardCache || {};
       if (!cacheOnly && !(cache.nextRefreshAt > now.getTime())) {
@@ -844,21 +870,24 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
         cache = await refreshStationBoard(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses);
       }
       const effectiveNow = new Date(clock());
-      cache = await store.retainStationBoard(record.activityID, record.environment, cache, effectiveNow);
+      cache = await store.retainStationBoard(record.activityID, record.environment, cache, effectiveNow, expectedTuple);
       if (!cache) continue;
       const contentState = buildStationBoardState(record, cache, effectiveNow.getTime());
       const digestInput = { ...contentState }; delete digestInput.updatedAt; delete digestInput.nextBoardBoundaryAt;
       const contentDigest = crypto.createHash('sha256').update(JSON.stringify(digestInput)).digest('hex');
       if (contentDigest !== record.lastBoardContentDigest) {
-        await pushImpl(record, buildApnsPayload(contentState, effectiveNow), config, { signal });
-        await store.markPushed(record.activityID, record.environment, { emptyArrivals: contentState.arrivals.length === 0, contentState, contentDigest }, effectiveNow);
+        const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
+        if (!current || registrationTuple(current) !== expectedTuple) continue;
+        await pushImpl(current, buildApnsPayload(contentState, effectiveNow), config, { signal });
+        await store.markPushed(record.activityID, record.environment, { emptyArrivals: contentState.arrivals.length === 0, contentState, contentDigest, expectedTuple }, effectiveNow);
         logger.info(`Live Activity station-board update pushed, arrivals ${contentState.arrivals.length}`);
       }
-      if (typeof scheduleRolloverPush === 'function') scheduleRolloverPush(record, contentState, effectiveNow, config.workerIntervalMs);
+      const retainedRecord = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
+      if (retainedRecord && registrationTuple(retainedRecord) === expectedTuple && typeof scheduleRolloverPush === 'function') scheduleRolloverPush(retainedRecord, contentState, effectiveNow, config.workerIntervalMs);
     } catch (error) {
       signal?.throwIfAborted();
-      if (error.permanent) await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
-      else await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120000, 'stationBoardPushFailed', now);
+      if (error.permanent) await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now, expectedTuple);
+      else await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120000, 'stationBoardPushFailed', now, expectedTuple);
       logger.warn('Live Activity station-board update could not be delivered');
     }
   }

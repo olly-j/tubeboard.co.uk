@@ -7,7 +7,7 @@ import { STATION_BOARD_LINES, STATION_BOARD_STATIONS, validBoard, httpObservatio
 import { validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
 import { SerialWorker } from '../server/worker-lifecycle.js';
 const now = Date.parse('2026-10-01T13:00:00Z');
-const record = { activityID: 'synthetic-v2', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1.0', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2' };
+const record = { activityID: 'synthetic-v2', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1.0', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 };
 const headers = (time = now, age = 0, maxAge = 150) => ({ date: new Date(time).toUTCString(), age: String(age), 'cache-control': `public,max-age=${maxAge}` });
 const row = (overrides = {}) => ({ stationID: record.stationID, lineID: record.lineID, sourceID: 'journey-planner', kind: 'outgoingDeparture', id: 'planned-A', destination: 'Morden', destinationStationID: '940GZZLUMDN', time: now + 90000, timeEvidence: 'scheduledDeparture', platform: null, direction: null, providerDirection: 'Outbound', receivedAt: now, expiresAt: now + 120000, ...overrides });
 const cacheOf = (...events) => ({ sources: Object.fromEntries([...new Set(events.map((e) => e.sourceID))].map((source) => [source, { observedAt: Math.max(...events.filter((e) => e.sourceID === source).map((e) => e.receivedAt)), events: events.filter((e) => e.sourceID === source) }])), rejections: [] });
@@ -24,7 +24,7 @@ test('all19 exact catalogue boards negotiate v2 while v1 allowlist remains17', (
     const stationID = line.boundedOriginID;
     assert.equal(validBoard(stationID, lineID), true, lineID);
     assert.equal(validateTokenPayload({ ...record, stationID, lineID }).ok, true, lineID);
-    assert.equal(validateTokenPayload({ ...record, stationID, lineID, contentStateContract: undefined }).ok, !['elizabeth', 'dlr'].includes(lineID), lineID);
+    assert.equal(validateTokenPayload({ ...record, stationID, lineID, contentStateContract: undefined, plannedPresentationVersion: undefined }).ok, !['elizabeth', 'dlr'].includes(lineID), lineID);
     const url = journeyURL({ stationID, lineID }, now);
     assert.equal(url.searchParams.get('mode'), line.mode); assert.equal(url.searchParams.get('date'), '20261001'); assert.equal(url.searchParams.get('time'), '1400');
     const destinationID = line.branchTargetIDs.find((id) => id !== stationID && validBoard(id, lineID));
@@ -219,7 +219,7 @@ test('restarted closure watermark blocks older planned writers but not independe
 test('current scoped closure prevents new planner qualification even with older original HTTP observation', async () => {
   const fetchImpl = async (url) => { const p = new URL(url).pathname, closure = p.endsWith('/Disruption'); return new Response(JSON.stringify(closure ? [{ stationAtcoCode: record.stationID, type: 'StationClosure', fromDate: '2026-10-01T12:00:00Z', toDate: '2026-10-01T15:00:00Z' }] : p.includes('JourneyResults') ? journey() : []), { headers: headers(closure ? now - 20000 : now, 0) }); };
   const cache = await refreshStationBoard(record, {}, loadConfig({}), fetchImpl, now, null);
-  assert.ok(cache.sources['journey-planner']); assert.equal(cache.rejections.length, 0); assert.deepEqual(selectEvents(cache, record, now), []); assert.equal(cache.closureSources.station.observedAt, now - 20000);
+  assert.equal(cache.sources['journey-planner'], undefined); assert.equal(cache.rejections.length, 0); assert.deepEqual(selectEvents(cache, record, now), []); assert.equal(cache.closureSources.station.observedAt, now - 20000);
 });
 
 test('wire fixture uses exact Swift typed row enum and Apple epoch without internal timer metadata', async () => {

@@ -46,7 +46,7 @@ export function admitPlannedSeed(seed, record, now) {
   if (seed.closureEvidence !== undefined) {
     if (!Array.isArray(seed.closureEvidence) || seed.closureEvidence.length > 8) errors.push('planned seed closure evidence is invalid');
     else for (const check of seed.closureEvidence) {
-      if (!allowed(check, ['stationID', 'lineID', 'sourceScope', 'closed', 'observedAt', 'expiresAt', 'validFrom', 'validUntil', 'closureWindows', 'plannedUnavailable'])) { errors.push('planned seed closure scope is invalid'); continue; }
+      if (!allowed(check, ['stationID', 'lineID', 'sourceScope', 'closed', 'observedAt', 'expiresAt', 'validFrom', 'validUntil', 'closureWindows', 'plannedUnavailable', 'scheduledClockOnly'])) { errors.push('planned seed closure scope is invalid'); continue; }
       const proof = { ...check, observedAt: iso(check.observedAt), expiresAt: iso(check.expiresAt), qualificationOrigin: 'client' };
       if (check.validFrom !== undefined) proof.validFrom = iso(check.validFrom);
       if (check.validUntil !== undefined) proof.validUntil = iso(check.validUntil);

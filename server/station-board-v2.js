@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability } from './station-board-availability.js';
+import { retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability, containsServiceClosed, knownNonClosure, activeClosure, expiredBarrier } from './station-board-availability.js';
 import { fetchJsonResponse } from './notification-transport.js';
 
 export const STATION_BOARD_CONTRACT = 'station-board-v2';
@@ -20,7 +20,7 @@ const isoClock = (value) => {
 };
 const swift = (ms) => (ms - APPLE_EPOCH) / 1000;
 const sourceKey = (source) => ['timetable', 'unified-timetable'].includes(source) ? 'timetable' : source;
-const plannedSource = (event) => event.kind === 'outgoingDeparture' && event.timeEvidence === 'scheduledDeparture' && ['timetable', 'journey-planner'].includes(sourceKey(event.sourceID)) ? sourceKey(event.sourceID) : null;
+const plannedSource = (event) => event.kind === 'outgoingDeparture' && event.timeEvidence === 'scheduledDeparture' && ['timetable', 'journey-planner', 'rail-departures'].includes(sourceKey(event.sourceID)) ? sourceKey(event.sourceID) : null;
 const planned = (event) => ['timetable', 'journey-planner'].includes(sourceKey(event.sourceID)) || (event.kind === 'outgoingDeparture' && event.timeEvidence === 'scheduledDeparture');
 export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -172,10 +172,10 @@ export function parseRailDepartures(rows, record, headers, now) {
     if (['check front of train', 'see front of train'].includes(key(row.destinationName))) return [];
     if (!text(row.destinationNaptanId) || !text(row.destinationName) || !destination || !['ontime', 'delayed'].includes(status) || alternatives.get(canonical(withoutPlatform)) > 1) return [];
     const incoming = destination.stationID === record.stationID;
-    const time = incoming ? isoClock(row.estimatedTimeOfArrival || row.scheduledTimeOfArrival) : Number.isFinite(estimated) ? estimated : status === 'ontime' ? scheduled : NaN;
+    const time = incoming ? isoClock(row.estimatedTimeOfArrival) : Number.isFinite(estimated) ? estimated : status === 'ontime' ? scheduled : NaN;
     if (!Number.isFinite(time) || time < now) return [];
     return [event(record, 'rail-departures', { id: `rail:${hash(row)}`, kind: incoming ? 'incomingArrival' : 'outgoingDeparture', destination: destination.stationName, destinationStationID: destination.stationID, time,
-      timeEvidence: incoming ? 'arrivalPrediction' : Number.isFinite(estimated) ? 'predictedDeparture' : 'scheduledDeparture', platform: usablePlatform(row.platformName), direction: publicDirection(row.platformName), providerDirection: null, via: null }, observation)];
+      timeEvidence: incoming ? 'arrivalPrediction' : Number.isFinite(estimated) ? 'predictedDeparture' : 'scheduledDeparture', platform: usablePlatform(row.platformName), direction: publicDirection(row.platformName), providerDirection: null, via: null, ...(incoming ? { scheduledArrival: Number.isFinite(isoClock(row.scheduledTimeOfArrival)) ? isoClock(row.scheduledTimeOfArrival) : null } : {}) }, observation)];
   });
 }
 export function journeyURL(record, now) {
@@ -189,7 +189,7 @@ export function journeyURL(record, now) {
   if (rule?.via) { url.searchParams.set('via', rule.via); url.searchParams.set('maxWalkingMinutes', '0'); }
   return url;
 }
-export function parseJourney(root, record, headers, requestedAt, now) {
+export function parseJourney(root, record, headers, requestedAt, now, actualRequestAt = requestedAt) {
   const line = STATION_BOARD_LINES.get(record.lineID), local = `${londonLocal(requestedAt).slice(0, 16)}:00`;
   if (!line || !validBoard(record.stationID, record.lineID) || root?.searchCriteria?.dateTimeType !== 'Departing' || root.searchCriteria.dateTime !== local || !Number.isInteger(root.recommendedMaxAgeMinutes) || root.recommendedMaxAgeMinutes <= 0 || !Array.isArray(root.stopMessages) || root.stopMessages.some((message) => typeof message !== 'string') || !Array.isArray(root.journeys)) return [];
   const observation = httpObservation(headers, now, Math.min(root.recommendedMaxAgeMinutes, 2) * 60000, { futureSkew: 120000 });
@@ -200,7 +200,7 @@ export function parseJourney(root, record, headers, requestedAt, now) {
     const leg = Array.isArray(journey?.legs) ? journey.legs.find((leg) => objectRow(leg) && leg.mode?.id !== 'walking') : null, option = leg?.routeOptions?.[0];
     if (!leg || leg.mode?.id !== line.mode || leg.departurePoint?.naptanId !== record.stationID || leg.isDisrupted !== false || !Array.isArray(leg.disruptions) || leg.disruptions.length || !Array.isArray(leg.plannedWorks) || leg.plannedWorks.length || leg.routeOptions?.length !== 1 || option.lineIdentifier?.id !== record.lineID || option.directions?.length !== 1 || typeof option.directions[0] !== 'string') continue;
     const departure = londonClock(leg.scheduledDepartureTime), parts = option.directions[0].split(/ via /i), destination = named(parts[0], record.lineID);
-    if (!Number.isFinite(departure) || departure < now || departure < requestedAt - 60000 || !destination || destination.stationID === record.stationID || parts.length > 2 || !Array.isArray(leg.path?.stopPoints) || !leg.path.stopPoints.length) continue;
+    if (!Number.isFinite(departure) || departure < now || departure < requestedAt - (requestedAt > actualRequestAt ? 0 : 60000) || !destination || destination.stationID === record.stationID || parts.length > 2 || !Array.isArray(leg.path?.stopPoints) || !leg.path.stopPoints.length) continue;
     const viaStation = parts.length === 2 ? named(parts[1], record.lineID) : null;
     if (parts.length === 2 && !viaStation) continue;
     const calls = leg.path.stopPoints.map((stop) => !objectRow(stop) ? null : stop.id ? validBoard(stop.id, record.lineID) ? stop.id : null : named(stop.name, record.lineID)?.stationID);
@@ -242,8 +242,8 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       const normalized = sourceKey(source), old = sources[normalized];
       if (!Number.isFinite(context.observedAt) || context.observedAt > now) continue;
       if (normalized === 'timetable' && publicationIdentity?.expiresAt > now && publicationIdentity.observedAt >= context.observedAt && context.evidence?.publication?.sha256?.toLowerCase() !== publicationIdentity.sha256.toLowerCase()) continue;
-      const events = (context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && availabilityProofs.some((p) => p.plannedUnavailable === true && blocksScheduled(p, e.time, now))) && !markers.some((r) => rejectionInvalidates(r, e, record, now)));
-      if (!events.length) continue;
+      const events = (context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && availabilityProofs.some((p) => p.plannedUnavailable === true && p.scheduledClockOnly !== true && blocksScheduled(p, e.time, now))) && !markers.some((r) => rejectionInvalidates(r, e, record, now)));
+      if (!events.length && !(normalized === 'rail-departures' && Array.isArray(context.events) && context.events.length === 0)) continue;
       if (!old || context.observedAt > old.observedAt) sources[normalized] = { observedAt: context.observedAt, events, ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }
@@ -284,7 +284,7 @@ export function retainsThroughArrival(through, candidates) {
 }
 export function selectEvents(cache, record, now, { retainingMaskedPlans = false, retainingPlannedAlternatives = false } = {}) {
   const proofs = retainAvailability(cache, {}, record, now);
-  let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && proofs.some((p) => (!retainingMaskedPlans || p.plannedUnavailable === true) && blocksScheduled(p, e.time, now))) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
+  let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && proofs.some((p) => (!retainingMaskedPlans || p.plannedUnavailable === true && p.scheduledClockOnly !== true) && blocksScheduled(p, e.time, now))) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
   if (!retainingPlannedAlternatives && events.some((e) => plannedSource(e) === 'timetable')) events = events.filter((e) => plannedSource(e) !== 'journey-planner');
   const rail = events.filter((e) => e.sourceID === 'rail-departures' && e.kind === 'outgoingDeparture' && e.timeEvidence === 'predictedDeparture');
   events = events.filter((event) => retainsThroughArrival(event, rail));
@@ -314,48 +314,64 @@ export function nextBoundary(cache, record, now) {
   const future = boundaries.filter((boundary) => boundary > now);
   return future.length ? Math.min(...future) : null;
 }
+export function compactPlanningSource(events) {
+  const clocks = new Map();
+  for (const e of events) { const source = plannedSource(e); if (source) clocks.set(source, Math.min(clocks.get(source) ?? Infinity, e.time)); }
+  const primary = clocks.has('timetable') ? 'timetable' : clocks.has('journey-planner') ? 'journey-planner' : null;
+  return [...clocks.keys()].filter((s) => !['timetable', 'journey-planner'].includes(s) || s === primary).sort((a,b) => clocks.get(a) - clocks.get(b) || Number(b === primary) - Number(a === primary) || a.localeCompare(b))[0] || null;
+}
+export function compactEvents(events) {
+  const source = compactPlanningSource(events);
+  return events.filter((e) => !plannedSource(e) || plannedSource(e) === source);
+}
 export function buildStationBoardState(record, cache, now) {
-  const proofs = retainAvailability(cache, {}, record, now).filter((p) => p.closed || p.plannedUnavailable === true);
-  let rows = selectEvents(cache, record, now, { retainingMaskedPlans: true, retainingPlannedAlternatives: true });
+  const capable = record.plannedPresentationVersion === 2;
+  const proofs = retainAvailability(cache, {}, record, now).filter((p) => p.closed || p.plannedUnavailable === true || p.scheduledClockOnly === true);
+  let rows = selectEvents(cache, record, now, { retainingMaskedPlans: capable, retainingPlannedAlternatives: capable });
   const originalRows = rows;
-  const hasAlternatives = ['timetable', 'journey-planner'].every((source) => rows.some((e) => plannedSource(e) === source));
-  const retainsContexts = proofs.length > 0 || hasAlternatives;
+  const sources = [...new Set(rows.map(plannedSource).filter(Boolean))];
+  const retainsContexts = capable && (proofs.length > 0 || sources.length > 1);
+  const eligible = (e) => !planned(e) || !proofs.some((p) => blocksScheduled(p, e.time, now));
   if (retainsContexts) {
-    // Original sources remain separate for cache-only expiry/gap recovery.
-    // Eligibility precedes each source's transport budget; renderers choose
-    // one eligible tagged planned source before their three-row display limit.
-    const eligible = (e) => !planned(e) || !proofs.some((p) => blocksScheduled(p, e.time, now));
-    const selected = new Set();
-    for (const source of ['timetable', 'journey-planner', null]) {
+    const chosen = compactPlanningSource(rows.filter(eligible));
+    const orderedSources = sources.sort((a,b) => Number(b === chosen) - Number(a === chosen) || a.localeCompare(b));
+    const groups = [...orderedSources, null].map((source) => {
       const group = rows.filter((e) => plannedSource(e) === source);
       const useful = group.filter(eligible).slice(0, 3);
-      for (const e of [...useful, ...group.filter((e) => !eligible(e)).slice(0, 3 - useful.length)]) selected.add(e);
+      return [...useful, ...group.filter((e) => !eligible(e)).slice(0, 3 - useful.length)];
+    });
+    let retained = groups.flat();
+    if (retained.length > 9) {
+      const active = groups[orderedSources.indexOf(chosen)] || [];
+      const independent = groups.at(-1);
+      const prioritized = [...active, ...independent, ...groups.flat()];
+      retained = [...new Set(prioritized)].slice(0, 9);
     }
-    rows = rows.filter((e) => selected.has(e));
-  } else rows = rows.slice(0, 3);
+    const selected = new Set(retained); rows = rows.filter((e) => selected.has(e));
+  } else rows = compactEvents(rows.filter(eligible)).slice(0, 3);
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
-  const wireRow = (e) => ({ id: e.id, destination: e.destination, expectedArrival: Number.isFinite(e.time) ? swift(e.time) : null, countdownText: countdown(e, now), timeEvidence: evidence[e.kind] || (e.timeEvidence === 'predictedDeparture' ? 'estimatedDeparture' : 'scheduledDeparture'), via: e.via || null, reportedPlatform: e.platform || null, expiresAt: swift(e.expiresAt), isCached: false, ...(plannedSource(e) ? { plannedSourceID: plannedSource(e) } : {}) });
+  const wireRow = (e) => ({ id: e.id, destination: e.destination, expectedArrival: Number.isFinite(e.time) ? swift(e.time) : null, countdownText: countdown(e, now), timeEvidence: evidence[e.kind] || (e.timeEvidence === 'predictedDeparture' ? 'estimatedDeparture' : 'scheduledDeparture'), via: e.via || null, reportedPlatform: e.platform || null, expiresAt: swift(e.expiresAt), isCached: false, ...(plannedSource(e) && (capable || plannedSource(e) !== 'rail-departures') ? { plannedSourceID: plannedSource(e) } : {}) });
   let state = { contentStateContract: STATION_BOARD_CONTRACT, stationName: STATION_BOARD_STATIONS.get(record.stationID)?.stationName || record.stationID, lineName: record.lineID === 'dlr' ? 'DLR' : record.lineID === 'elizabeth' ? 'Elizabeth' : record.lineID === 'hammersmith-city' ? 'Hammersmith & City' : record.lineID === 'waterloo-city' ? 'Waterloo & City' : record.lineID.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' '), platform: record.selectionMode === 'platform' || record.platformID ? record.platformHeading || record.platformLabel || record.platformID : 'All platforms',
     arrivals: rows.map(wireRow),
     status: status?.label || 'Status unavailable', statusReason: status?.reason || null, isDisrupted: status?.isDisrupted || false, updatedAt: swift(now),
-    ...(proofs.length ? { plannedAvailability: { stationID: record.stationID, lineID: record.lineID, proofs: wireAvailability(proofs, swift) } } : {}) };
+    ...(capable && proofs.length ? { plannedAvailability: { stationID: record.stationID, lineID: record.lineID, proofs: wireAvailability(proofs, swift) } } : {}) };
   const staleAt = () => {
-    const deadlines = rows.flatMap((e) => e.kind === 'outgoingDeparture' && Number.isFinite(e.time) ? [e.expiresAt, e.time + 1] : [e.expiresAt]);
-    if (state.plannedAvailability && rows.some(planned)) deadlines.push(...availabilityBoundaries(proofs, now));
+    const deadlines = rows.flatMap((e) => ['outgoingDeparture', 'incomingArrival', 'throughArrival'].includes(e.kind) && Number.isFinite(e.time) ? [e.expiresAt, e.time + 1] : [e.expiresAt]);
+    if (rows.some(planned)) deadlines.push(...availabilityBoundaries(proofs, now));
     return swift(deadlines.length ? Math.min(...deadlines) : now);
   };
   state.staleAt = staleAt();
   state.nextBoardBoundaryAt = nextBoundary(cache, record, now);
-  if (retainsContexts && Buffer.byteLength(JSON.stringify(state)) > 3500) {
+  if (Buffer.byteLength(JSON.stringify(state)) > 3500) {
     rows = originalRows.filter((e) => !planned(e)).slice(0, 3);
     state.arrivals = rows.map(wireRow); delete state.plannedAvailability;
     state.staleAt = staleAt();
   }
   // APNs must never receive an oversized typed update, including provider text.
   const encoded = () => Buffer.byteLength(JSON.stringify({ aps: { timestamp: Math.floor(now / 1000), event: 'update', 'content-state': Object.fromEntries(Object.entries(state).filter(([k]) => k !== 'nextBoardBoundaryAt')), 'stale-date': Math.floor((state.staleAt * 1000 + APPLE_EPOCH) / 1000) } }));
-  if (encoded() > 4096) { state.statusReason = null; state.status = 'Status unavailable'; }
-  if (encoded() > 4096) { state.arrivals = []; delete state.plannedAvailability; state.status = 'Status unavailable'; state.statusReason = null; state.staleAt = swift(now); }
+  if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) { state.statusReason = null; state.status = 'Status unavailable'; }
+  if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) { state.arrivals = []; delete state.plannedAvailability; state.status = 'Status unavailable'; state.statusReason = null; state.staleAt = swift(now); }
   return state;
 }
 
@@ -368,6 +384,7 @@ function immutable(value) {
 }
 
 export async function refreshStationBoard(record, previous, config, fetchImpl, now, signal, clock = () => now, publicResponses = new Map()) {
+  signal?.throwIfAborted();
   if (previous.nextRefreshAt > now) return mergeContexts(previous, {}, record, now);
   const request = (inputURL, method = 'GET') => {
     const url = new URL(inputURL);
@@ -400,14 +417,33 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     if (publicationIdentity && publicationIdentity.observedAt >= previous.sources.timetable.observedAt && currentSHA.toLowerCase() !== publication.sha256.toLowerCase()) publicationRejection = { stationID: record.stationID, lineID: record.lineID, observedAt: observed.observedAt, reason: 'publicationChanged' };
   }
   const rail = STATION_BOARD_LINES.get(record.lineID)?.qualifiedRailDepartureSource;
-  const plannedURL = rail ? new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/ArrivalDepartures?lineIds=${record.lineID}`) : journeyURL(record, now);
-  const urls = [new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`), plannedURL, new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Status?detail=true`), new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Disruption?getFamily=true&includeRouteBlockedStops=true&flattenResponse=true`)];
-  const [arrivals, departures, service, station] = await Promise.all(urls.map((url) => url ? request(url) : { ok: false }));
-  const completedAt = clock();
-  const sources = {};
-  const add = (source, events) => { if (events.length) sources[source] = { observedAt: Math.max(...events.map((e) => e.receivedAt)), events }; };
+  const arrivalTask = request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`)).catch(() => ({ ok: false }));
+  const railTask = rail ? request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/ArrivalDepartures?lineIds=${record.lineID}`)).catch(() => ({ ok: false })) : Promise.resolve({ ok: false });
+  const [service, station] = await Promise.all([
+    request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Status?detail=true`)),
+    request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Disruption?getFamily=true&includeRouteBlockedStops=true&flattenResponse=true`))
+  ]);
+  const authority = { mode: STATION_BOARD_LINES.get(record.lineID)?.mode, stationName: (id) => validBoard(id, record.lineID) ? STATION_BOARD_STATIONS.get(id)?.stationName : null };
+  const is20 = service.ok && containsServiceClosed(service.value);
+  const serviceObservation = service.ok && (!is20 || typeof service.headers?.age === 'string' && service.headers.age.trim().length > 0) ? httpObservation(service.headers, service.completedAt, 120000, { futureSkew: is20 ? 0 : 5000 }) : null;
+  const serviceProofs = service.ok ? qualifyAvailability(service.value, record, 'lineStatus', serviceObservation, service.completedAt, londonClock, authority) : [];
+  const stationProofs = station.ok ? qualifyAvailability(station.value, record, 'stationDisruptions', httpObservation(station.headers, station.completedAt, 120000), station.completedAt, londonClock) : [];
+  const actualRequestAt = clock();
+  const admissionProofs = retainAvailability(previous, { availabilityProofs: [...serviceProofs, ...stationProofs] }, record, actualRequestAt);
+  const unknown20 = is20 && !serviceProofs.some((p) => p.scheduledClockOnly === true && (p.observedAt + 600000 > actualRequestAt || p.expiresAt + 600000 > actualRequestAt));
+  const blocked = unknown20 || admissionProofs.some((p) => p.scheduledClockOnly !== true && (activeClosure(p, actualRequestAt) || expiredBarrier(p, actualRequestAt) || p.plannedUnavailable === true && p.expiresAt > actualRequestAt));
+  const journeyDepartAt = blocked ? actualRequestAt : shiftedJourneyTime(service.value, serviceProofs, admissionProofs, actualRequestAt);
+  const plannedURL = !blocked ? journeyURL(record, journeyDepartAt) : null;
+  const journeyTask = plannedURL ? request(plannedURL) : Promise.resolve({ ok: false });
+  const [arrivals, departures, journey] = await Promise.all([arrivalTask, railTask, journeyTask]);
+  const completedAt = clock(), sources = {};
+  const add = (source, events, observation = null) => {
+    // A fresh explicit empty rail read replaces only its exact source.
+    if (events.length || observation && observation.expiresAt > completedAt) sources[source] = { ...(observation ? { expiresAt: observation.expiresAt } : {}), observedAt: events.length ? Math.max(...events.map((e) => e.receivedAt)) : observation.observedAt, events };
+  };
   if (arrivals.ok) add('station-arrivals', parseStationArrivals(arrivals.value, record, arrivals.headers, arrivals.completedAt));
-  if (departures.ok) add(rail ? 'rail-departures' : 'journey-planner', rail ? parseRailDepartures(departures.value, record, departures.headers, departures.completedAt) : parseJourney(departures.value, record, departures.headers, now, departures.completedAt));
+  if (departures.ok) add('rail-departures', parseRailDepartures(departures.value, record, departures.headers, departures.completedAt), Array.isArray(departures.value) && departures.value.length === 0 ? httpObservation(departures.headers, departures.completedAt, 90000, { cacheRequired: true }) : null);
+  if (journey.ok) add('journey-planner', parseJourney(journey.value, record, journey.headers, journeyDepartAt, journey.completedAt, actualRequestAt));
   const selected = selectEvents({ sources }, record, completedAt);
   const usefulRail = selected.some((e) => e.sourceID === 'rail-departures' && e.kind === 'outgoingDeparture');
   const through = selected.some((e) => e.kind === 'throughArrival');
@@ -419,16 +455,42 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     if (facts.ok) add('at-station-destination', parseDestinationFacts(facts.value, record, facts.headers, facts.completedAt));
   }
   const applicabilityAt = clock();
-  const rejections = publicationRejection ? [publicationRejection] : [], availabilityProofs = [];
+  const rejections = publicationRejection ? [publicationRejection] : [], availabilityProofs = [...(is20 ? serviceProofs : service.ok ? qualifyAvailability(service.value, record, 'lineStatus', serviceObservation, applicabilityAt, londonClock, authority) : []), ...(station.ok ? qualifyAvailability(station.value, record, 'stationDisruptions', httpObservation(station.headers, station.completedAt, 120000), applicabilityAt, londonClock) : [])];
   let status = null;
   if (service.ok) {
     const observed = httpObservation(service.headers, service.completedAt, 120000);
-    availabilityProofs.push(...qualifyAvailability(service.value, record, 'lineStatus', observed, applicabilityAt, londonClock));
+
     const details = Array.isArray(service.value) && service.value.length === 1 && service.value[0].id === record.lineID ? service.value[0].lineStatuses : null;
     if (observed && observed.expiresAt > applicabilityAt && Array.isArray(details) && details.length && details.every((d) => objectRow(d) && Number.isInteger(d.statusSeverity))) status = { label: details[0].statusSeverityDescription || 'Status unavailable', reason: details[0].reason || null, isDisrupted: details.some((d) => d.statusSeverity !== 10), expiresAt: observed.expiresAt };
   }
-  if (station.ok) availabilityProofs.push(...qualifyAvailability(station.value, record, 'stationDisruptions', httpObservation(station.headers, station.completedAt, 120000), applicabilityAt, londonClock));
+
   // Availability masks presentation. It never destroys the original source
   // context or creates a permanent publication-style closure rejection.
   return mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
+}
+
+// One query may move only past the connected literal restriction covering its
+// actual dispatch. Persisted/partial authority never authorizes a search shift.
+export function shiftedJourneyTime(raw, proofs, allProofs, actual) {
+  const p = proofs.length === 1 ? proofs[0] : null;
+  if (!p || p.scheduledClockOnly !== true || p.closed || p.plannedUnavailable === true || p.observedAt > actual || p.expiresAt <= actual || allProofs.some((v) => v.closed || v.plannedUnavailable === true || activeClosure(v, actual) || expiredBarrier(v, actual))) return actual;
+  const periods = [];
+  for (const d of raw?.[0]?.lineStatuses || []) {
+    if (knownNonClosure(d)) continue;
+    if (!Array.isArray(d.validityPeriods)) return actual;
+    for (const w of d.validityPeriods) { const start = londonClock(w?.fromDate), end = londonClock(w?.toDate); if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) return actual; periods.push({ validFrom: start, validUntil: end }); }
+  }
+  if (!periods.length || periods.length > 32 || periods.filter((w) => w.validUntil > actual).some((w) => !p.closureWindows.some((v) => v.validFrom === w.validFrom && v.validUntil === w.validUntil))) return actual;
+  let cursor = actual;
+  for (let count = 0; count <= periods.length + 1; count++) {
+    const connected = periods.filter((w) => w.validFrom <= cursor && cursor < w.validUntil);
+    if (!connected.length) return cursor;
+    const end = Math.max(...connected.map((w) => w.validUntil));
+    const civil = londonLocal(end).slice(0,16) + ':00';
+    const minute = londonClock(civil);
+    if (!Number.isFinite(minute)) return actual;
+    cursor = minute < end ? minute + 60000 : minute;
+    if (londonClock(londonLocal(cursor).slice(0,16) + ':00') !== cursor) return actual;
+  }
+  return actual;
 }
