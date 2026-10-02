@@ -292,10 +292,13 @@ export function selectEvents(cache, record, now, { retainingMaskedPlans = false,
   // Compact activities compare times across eligible outgoing platform groups.
   // Arrivals remain last; physical groups belong to the full app board.
   const category = (e) => ['incomingArrival', 'unverifiedArrival'].includes(e.kind) ? 1 : 0;
-  return events.sort((a, b) => category(a) - category(b) || (a.time ?? Infinity) - (b.time ?? Infinity) || a.id.localeCompare(b.id));
+  const atPlatformDestination = (e) => e.kind === 'outgoingDestinationOnly' && e.time == null && e.timeEvidence == null
+    && /^(?:[0-9]+[a-z]?|[a-z])$/.test(text(e.platform)?.toLowerCase().replace(/^platform\s+/, '') || '');
+  return events.sort((a, b) => category(a) - category(b) || Number(atPlatformDestination(b)) - Number(atPlatformDestination(a)) || (a.time ?? Infinity) - (b.time ?? Infinity) || a.id.localeCompare(b.id));
 }
 export function countdown(event, now) {
-  if (event.kind === 'outgoingDestinationOnly' || !Number.isFinite(event.time) || event.time < now || event.expiresAt <= now) return '--';
+  if (event.kind === 'outgoingDestinationOnly') return usable(event, event, now) ? 'TBC' : '--';
+  if (!Number.isFinite(event.time) || event.time < now || event.expiresAt <= now) return '--';
   const seconds = Math.ceil((event.time - now) / 1000);
   if (seconds < 0) return '--';
   return seconds < 60 ? 'Due' : `${Math.floor(seconds / 60)} min`;

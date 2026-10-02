@@ -91,7 +91,7 @@ test('individual endpoint IDs/conflicts/loops and actual selected lines preserve
 
 test('destination/platform facts use their own provider clocks and never legacy/downstream clocks', () => {
   const fact = arrival({ naptanId: '940GZZLUCND', stationName: 'Colindale', currentLocation: 'At Edgware Platform 2' });
-  const parsed = parseDestinationFacts([fact], record, headers(), now); assert.equal(parsed.length, 1); assert.equal(parsed[0].platform, 'Platform 2'); assert.equal(parsed[0].time, null); assert.equal(countdown(parsed[0], now), '--');
+  const parsed = parseDestinationFacts([fact], record, headers(), now); assert.equal(parsed.length, 1); assert.equal(parsed[0].platform, 'Platform 2'); assert.equal(parsed[0].time, null); assert.equal(countdown(parsed[0], now), 'TBC');
   assert.equal(buildStationBoardState(record, cacheOf(...parsed), now).arrivals[0].timeEvidence, 'destinationOnly');
   assert.equal(parseDestinationFacts([{ ...fact, timing: undefined, timeToLive: new Date(now).toISOString() }], record, headers(), now).length, 0);
   assert.equal(parseDestinationFacts([{ ...fact, timestamp: new Date(now - 55000).toISOString() }], record, headers(), now)[0].expiresAt, now + 5000);
@@ -193,7 +193,7 @@ test('arrival platform alternatives collapse locally; same provider ID distinct 
 
 test('compact next departure compares eligible clocks before platform groups and keeps untimed facts', () => {
   const early = row({ id: 'early-unassigned', time: now + 20000 }), late = row({ id: 'later-platform', platform: 'Platform 1', time: now + 80000 }), fact = row({ id: 'untimed', sourceID: 'at-station-destination', kind: 'outgoingDestinationOnly', time: null, timeEvidence: null, platform: 'Platform 2' });
-  assert.deepEqual(buildStationBoardState(record, cacheOf(early, late, fact), now).arrivals.map((e) => e.id), ['early-unassigned', 'later-platform', 'untimed']);
+  assert.deepEqual(buildStationBoardState(record, cacheOf(early, late, fact), now).arrivals.map((e) => e.id), ['untimed', 'early-unassigned', 'later-platform']);
   assert.equal(buildStationBoardState(record, cacheOf(early, late, fact), now).platform, 'All platforms');
 });
 
