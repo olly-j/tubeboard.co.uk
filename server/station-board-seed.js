@@ -7,6 +7,35 @@ const dateKey = (value) => typeof value === 'string' && /^\d{4}-\d\d-\d\d$/.test
 const nameKey = (value) => String(value || '').toLowerCase().replace(/ (underground|rail|dlr) station/g, '').replace(/\s*\([^)]*\)/g, '').trim();
 const allowed = (value, fields) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every((field) => fields.includes(field));
 
+function validOriginatingRanges(ranges, publication, serviceDay) {
+  if (!Array.isArray(ranges) || !ranges.length || ranges.length > 32) return false;
+  let previousEnd = null;
+  for (const range of ranges) {
+    if (!allowed(range, ['startDate', 'endDate']) || !dateKey(range.startDate) || !dateKey(range.endDate)
+      || range.startDate > range.endDate || range.startDate < publication.operatingStartDate
+      || range.endDate > publication.operatingEndDate || (previousEnd !== null && previousEnd >= range.startDate)) return false;
+    previousEnd = range.endDate;
+  }
+  return ranges.some((range) => range.startDate <= serviceDay && serviceDay <= range.endDate);
+}
+
+function profilesOverlap(left, right, publication) {
+  const weekdays = left.weekdays.filter((day) => right.weekdays.includes(day));
+  if (!weekdays.length) return false;
+  const legacy = [{ startDate: publication.operatingStartDate, endDate: publication.operatingEndDate }];
+  for (const a of left.originatingServiceDateRanges ?? legacy) {
+    for (const b of right.originatingServiceDateRanges ?? legacy) {
+      const start = a.startDate > b.startDate ? a.startDate : b.startDate, end = a.endDate < b.endDate ? a.endDate : b.endDate;
+      if (start > end) continue;
+      const first = Date.parse(`${start}T12:00:00Z`), last = Date.parse(`${end}T12:00:00Z`);
+      for (let offset = 0; offset < 7 && first + offset * 86400000 <= last; offset += 1) {
+        if (weekdays.includes(new Date(first + offset * 86400000).getUTCDay() + 1)) return true;
+      }
+    }
+  }
+  return false;
+}
+
 // This is carry-forward client qualification, not server proof of a profile.
 // An admitted refresh attempts independent official publication identity checks.
 // Unavailable checks never renew the original client-qualified context.
@@ -46,9 +75,9 @@ export function admitPlannedSeed(seed, record, now) {
     if (expiresAt <= now) continue;
     const today = londonLocal(now).slice(0, 10), nextDay = new Date(`${today}T12:00:00Z`); nextDay.setUTCDate(nextDay.getUTCDate() + 1);
     if (expiresAt > londonClock(`${nextDay.toISOString().slice(0, 10)}T00:00:00`)) { errors.push('planned seed crosses current calendar expiry'); continue; }
-    const events = [], rowEvidence = [], seenRows = new Set(), profiles = new Map();
+    const events = [], rowEvidence = [], seenRows = new Set(), profiles = new Map(), profileDefinitions = new Map();
     for (const row of context.rows) {
-      const permitted = ['id', 'destinationID', 'destination', 'departure', 'via', 'providerDirection', 'routeStationIDs', 'serviceDay', 'profileName', 'profileSHA256', 'weekdays', 'serviceMinute', 'isBankHoliday'];
+      const permitted = ['id', 'destinationID', 'destination', 'departure', 'via', 'providerDirection', 'routeStationIDs', 'serviceDay', 'profileName', 'profileSHA256', 'weekdays', 'serviceMinute', 'isBankHoliday', 'originatingServiceDateRanges'];
       if (!allowed(row, permitted) || typeof row.id !== 'string' || !row.id.trim() || row.id.length > 256 || seenRows.has(row.id) || !validBoard(row.destinationID, record.lineID) || row.destinationID === record.stationID || nameKey(row.destination) !== nameKey(STATION_BOARD_STATIONS.get(row.destinationID)?.stationName) || !Array.isArray(row.routeStationIDs) || !row.routeStationIDs.length || row.routeStationIDs.length > 200 || (normalized === 'timetable' && row.routeStationIDs.at(-1) !== row.destinationID) || row.routeStationIDs.some((id) => !validBoard(id, record.lineID)) || (row.via != null && (typeof row.via !== 'string' || row.via.length > 120)) || (row.providerDirection != null && (typeof row.providerDirection !== 'string' || !row.providerDirection.trim() || row.providerDirection.length > 64))) { errors.push('planned seed row is invalid'); continue; }
       if (row.via != null) {
         const viaKey = nameKey(row.via) === 'cx' ? 'charing cross' : nameKey(row.via);
@@ -59,18 +88,23 @@ export function admitPlannedSeed(seed, record, now) {
         const bank = row.routeStationIDs.includes('940GZZLUBNK'), cross = row.routeStationIDs.includes('940GZZLUCHX');
         if ((record.lineID === 'northern' && ((bank && cross) || nameKey(row.via) !== (bank ? 'bank' : cross ? 'charing cross' : ''))) || (record.lineID !== 'northern' && row.via != null)) { errors.push('planned seed full-timetable route/via conflicts'); continue; }
       }
+      if (normalized !== 'timetable' && row.originatingServiceDateRanges !== undefined) { errors.push('planner seed cannot carry timetable date ranges'); continue; }
       seenRows.add(row.id); const departure = iso(row.departure);
       if (!Number.isFinite(departure)) { errors.push('planned seed departure is invalid'); continue; }
       if (normalized === 'timetable') {
         if (!dateKey(row.serviceDay) || !row.id.startsWith(`schedule:${record.lineID}:${record.stationID}:${row.serviceDay}:`) || typeof row.profileName !== 'string' || !row.profileName.trim() || row.profileName.length > 240 || !digest(row.profileSHA256) || !Array.isArray(row.weekdays) || !row.weekdays.length || new Set(row.weekdays).size !== row.weekdays.length || row.weekdays.some((day) => !Number.isInteger(day) || day < 1 || day > 7) || row.isBankHoliday !== false || !Number.isInteger(row.serviceMinute) || row.serviceMinute < 0 || row.serviceMinute >= 2880 || row.serviceDay < publication.operatingStartDate || row.serviceDay > publication.operatingEndDate || row.serviceDay < publication.holidayCoverageStart || row.serviceDay > publication.holidayCoverageEnd) { errors.push('planned seed originating calendar/profile is invalid'); continue; }
-        const profile = JSON.stringify([row.profileName, row.profileSHA256, row.weekdays]);
+        if (row.originatingServiceDateRanges !== undefined && !validOriginatingRanges(row.originatingServiceDateRanges, publication, row.serviceDay)) { errors.push('planned seed originating date ranges are invalid'); continue; }
+        const definition = { profileName: row.profileName, profileSHA256: row.profileSHA256, weekdays: [...row.weekdays].sort(), originatingServiceDateRanges: row.originatingServiceDateRanges?.map((range) => ({ startDate: range.startDate, endDate: range.endDate })) };
+        const profile = JSON.stringify(definition);
+        if ([...profileDefinitions.entries()].some(([identity, other]) => identity !== profile && profilesOverlap(definition, other, publication))) { errors.push('planned seed profile/date ranges are ambiguous'); continue; }
+        profileDefinitions.set(profile, definition);
         if ((profiles.has(row.serviceDay) && profiles.get(row.serviceDay) !== profile) || londonLocal(departure).slice(0, 10) !== today) { errors.push('planned seed profile/day is ambiguous'); continue; }
         profiles.set(row.serviceDay, profile);
         const service = new Date(`${row.serviceDay}T12:00:00Z`), weekday = service.getUTCDay() + 1;
         service.setUTCDate(service.getUTCDate() + Math.floor(row.serviceMinute / 1440));
         const minute = row.serviceMinute % 1440, expected = londonClock(`${service.toISOString().slice(0, 10)}T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00`);
         if (!row.weekdays.includes(weekday) || !Number.isFinite(expected) || expected !== departure || ![today, new Date(Date.parse(`${today}T12:00:00Z`) - 86400000).toISOString().slice(0, 10)].includes(row.serviceDay)) { errors.push('planned seed service-day clock is invalid'); continue; }
-        rowEvidence.push({ id: row.id, serviceDay: row.serviceDay, profileName: row.profileName, profileSHA256: row.profileSHA256, weekdays: row.weekdays, serviceMinute: row.serviceMinute, isBankHoliday: false });
+        rowEvidence.push({ id: row.id, serviceDay: row.serviceDay, profileName: row.profileName, profileSHA256: row.profileSHA256, weekdays: row.weekdays, serviceMinute: row.serviceMinute, isBankHoliday: false, ...(row.originatingServiceDateRanges === undefined ? {} : { originatingServiceDateRanges: row.originatingServiceDateRanges }) });
       }
       if (departure < now) continue;
       events.push({ id: row.id, stationID: record.stationID, lineID: record.lineID, sourceID: context.sourceID, kind: 'outgoingDeparture', timeEvidence: 'scheduledDeparture', destination: row.destination, destinationStationID: row.destinationID, via: row.via || null, routeStationIDs: row.routeStationIDs, time: departure, platform: null, direction: null, providerDirection: row.providerDirection || null, receivedAt: observedAt, expiresAt });
