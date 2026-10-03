@@ -99,7 +99,7 @@ test('temporary closure refresh and transactional restart restore original plans
   const fetchImpl = async (url, options) => {
     const headers = { date: new Date(now).toUTCString(), age: '0', 'cache-control': 'public,max-age=30' };
     if (options.method === 'HEAD') {
-      assert.equal(String(url), publicationURL); headRequests.push({ url: String(url), method: options.method });
+      const requested = new URL(url); const nonce = requested.searchParams.get('tb085'); assert.equal(requested.searchParams.getAll('tb085').length, 1); assert.match(nonce, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i); requested.searchParams.delete('tb085'); assert.equal(requested.href, publicationURL); headRequests.push({ url: requested.href, method: options.method });
       return new Response(null, { headers: { ...headers, 'x-amz-meta-sha256': originalCache.sources.timetable.evidence.publication.sha256 } });
     }
     reads++; assert.equal(options.method || 'GET', 'GET'); const pathname = new URL(url).pathname;

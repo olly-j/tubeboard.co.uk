@@ -406,6 +406,9 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
       // and size limit belong to this one public request, including failures.
       publicResponses.set(requestKey, (async () => {
         try {
+          // Match the APP's official timetable cache readback: one UUID belongs
+          // to this canonical shared request, not to each consumer or retry.
+          if (boundedTT || method === 'HEAD' && url.href === 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip') url.searchParams.set('tb085', crypto.randomUUID());
           const options = { signal, includeHeaders: true, method, ...(boundedTT ? { bodyLimitBytes: 2000000, decodeJSON: bytes => parseBoundedJSON(bytes) } : {}) };
           let response = await fetchJsonResponse(url, fetchImpl, options);
           if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, fetchImpl, options);
