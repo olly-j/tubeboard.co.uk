@@ -338,8 +338,58 @@
                         }
                       },
                       "description": "Inclusive original service-day eligibility intersected with weekdays and publication bounds. Ordered/disjoint valid civil dates and the originating day are enforced by the runtime/seed consumer; absence preserves legacy qualification."
+                    },
+                    "publicationDirection": {
+                      "enum": [
+                        "inbound",
+                        "outbound"
+                      ]
                     }
                   }
+                }
+              },
+              "publicationProofIdentity": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "publicationSHA256",
+                  "proofRevision",
+                  "proofBodySHA256"
+                ],
+                "properties": {
+                  "publicationSHA256": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "proofRevision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "proofBodySHA256": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                }
+              },
+              "independentPublicationObservedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "publicationDirections": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "inbound",
+                    "outbound"
+                  ]
                 }
               }
             },
@@ -384,8 +434,37 @@
                     ]
                   }
                 }
+              },
+              {
+                "if": {
+                  "required": [
+                    "publicationProofIdentity"
+                  ]
+                },
+                "then": {
+                  "properties": {
+                    "sourceID": {
+                      "enum": [
+                        "timetable",
+                        "unified-timetable"
+                      ]
+                    }
+                  }
+                }
               }
-            ]
+            ],
+            "dependentRequired": {
+              "publicationProofIdentity": [
+                "independentPublicationObservedAt"
+              ],
+              "independentPublicationObservedAt": [
+                "publicationProofIdentity"
+              ],
+              "publicationDirections": [
+                "publicationProofIdentity",
+                "independentPublicationObservedAt"
+              ]
+            }
           }
         },
         "closureEvidence": {
@@ -508,6 +587,10 @@
         }
       },
       "description": "At most24KiB original client-qualified scheduled context. Identity HEAD is corroboration only; no original dates/expiry are renewed."
+    },
+    "timetablePublicationAuthorityVersion": {
+      "type": "integer",
+      "const": 1
     }
   },
   "allOf": [
@@ -525,6 +608,45 @@
       "then": {
         "required": [
           "platformID"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "timetablePublicationAuthorityVersion"
+        ]
+      },
+      "then": {
+        "required": [
+          "contentStateContract",
+          "plannedPresentationVersion"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "plannedContextSeed"
+        ],
+        "properties": {
+          "plannedContextSeed": {
+            "properties": {
+              "contexts": {
+                "contains": {
+                  "required": [
+                    "publicationProofIdentity"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "timetablePublicationAuthorityVersion",
+          "plannedPresentationVersion"
         ]
       }
     }

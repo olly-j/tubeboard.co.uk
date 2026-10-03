@@ -22,6 +22,20 @@ Product scope and owner decisions are coordinated by `TB-NNN` Issues in
 `olly-j/My-Train-Times` and the private TubeBoard Delivery Project. Read
 `AGENTS.md` before changing this repository.
 
+TB-085 prepares optional typed station-board pushes with presentation capability
+2 and publication-authority capability 1 on the existing token endpoint. A
+reviewed local publication proof can qualify a bounded selected-station timetable
+read against the original official HEAD, service calendars and current controls;
+HEAD or a proof-resource cache hit alone never extends a departure's expiry.
+Legacy clients keep their existing contract. The fixed proof-resource directory
+currently contains no publication asset, so maintained assets, deployment and
+normal closed-app APNs acceptance remain required. Original-clock Swift-to-Node
+parity, 264 host checks and eight local endpoint checks passed. The exact Node
+22.21.1 image ran 264 tests: 255 passed, while nine website-deploy tests failed
+because Python 3 is absent from that slim image. Node 22 Service Quality CI and
+authenticated Fly validation remain pending. See
+`docs/live-activity-service.md` for qualification and compatibility boundaries.
+
 The public service also provides a server-rendered data-health page at
 `GET /status` and privacy-safe versioned responses at `GET /api/status/v1`
 and `GET /api/status/v2`. Status contract v1 retains its 11-line Underground

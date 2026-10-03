@@ -1,6 +1,6 @@
 {
   "task": "TB-085 / #298; shared system surfaces TB-150 / #618",
-  "state": "implemented, tested and independently reviewed source; not deployed or beta-ready",
+  "state": "historical reviewed source evidence plus current stage8 publication-renewal source checks passed; not deployed or beta-ready",
   "appSource": "c188dbf80549a1b60ccb7a1e802026997e524bdd",
   "serviceBase": "6c0477806c5bcd56d88d7a89187f171fd4dfac2e",
   "behaviour": "All19 catalogue lines retain selected-station event roles, separate scheduled/predicted authority, outgoing before arrivals, known/unassigned platforms and original source/own expiry. Capability2 permits per-date shared source choice; older typed clients receive eligible compact context and legacy v1 remains unchanged. Live rail incoming uses only estimated arrival, retains scheduled metadata/internal platform and cannot supply outgoing clocks/platforms. Planned fallback renewals are bounded own-line requests after applicable fresh availability controls. Optional capability2 ACK and async callbacks describe accepted registration only. Duration callbacks guard newer registration identity/capability.",
@@ -65,5 +65,104 @@
   "physicalStationValidation": "not run; public 10/5/5 gates preserved",
   "betaReady": false,
   "deployed": false,
-  "releaseActions": []
+  "releaseActions": [],
+  "publicationRenewalCheckpoint": {
+    "serviceBase": "146a76fec599410d69150b354df97d1bf2b4c452",
+    "checkpointRevision": null,
+    "plannedPresentationVersion": 2,
+    "timetablePublicationAuthorityVersion": 1,
+    "behavior": [
+      "Accepted-state health/registration/ACK negotiation; legacy absence remains supported.",
+      "Independent original HEAD and reviewed same-ZIP revision/body negative authority commit atomically; stale writes and failure callbacks cannot undo it.",
+      "One exact-origin or two declared-direction timetable GETs within admitted90s refresh, complete needed-day/profile/path/calendar qualification before one context.",
+      "Common min original HEAD/all required timetable/line/station Date-Age observation plus600s or London midnight; HEAD/resource304 never renews.",
+      "Missing current assets do not qualify timetable renewal; independent Journey/live/incoming and original expiry remain separate."
+    ],
+    "currentAssetDirectory": "public/timetable-publications/v1 contains only .gitkeep",
+    "currentAssetPublished": false,
+    "producerAutomation": false,
+    "actualSwiftToNodeOriginalClockParity": {
+      "cases": 14,
+      "legacyEntries": 13,
+      "goodgeDirections": 2,
+      "goodgeSeedRows": 32,
+      "wireSHA256": "1e9764604a6a99a6b0e8a8b2f299883c797d571f0819b516b1ad45f3e8785694",
+      "scope": "actual production Swift output consumed by stage8 Node and formal validation at immutable original clocks; not current feed/native/runtime proof"
+    },
+    "retainedStage7Verification": {
+      "receiptSHA256": "023e7d069a6c765e410fe9399b8b332c09bca65533a92f8ce26a2565edc57958",
+      "overall": "failed",
+      "focusedPassed": 23,
+      "focusedFailed": 0,
+      "formal": "passed",
+      "fullTests": 264,
+      "fullPassed": 259,
+      "fullFailed": 5,
+      "fullSkipped": 0,
+      "preparatorySyntax": "passed",
+      "chainedProductionSyntaxAndDiff": "not run after full npm test failure"
+    },
+    "stage8FinalVerification": {
+      "state": "passed_host_source_checks_not_release_ready",
+      "receiptSHA256": "824fb5d9babe135e87c9605566c5b83c0b7f8e797119109ddd7b5d902360484f",
+      "independentReviewSHA256": "e562b6f457deb97ac0a487e7e8e4c873fd9f1f1f8498d48232d76650006aec14",
+      "sourcePassContextSHA256": "d9bb71d00c889574ed91b0371e7ed4c192c3ef583af79cfa24c67290b0c6c21e",
+      "sourceTreeSHA256": "9c7397a1ea672a5e7f1a48f2be42c814f0cc9c5bcec049fc4205f4d87ff9bea9",
+      "scopedPaths": 19,
+      "preparatorySyntaxPassed": 3,
+      "focusedPassed": 79,
+      "focusedFailed": 0,
+      "fullTests": 264,
+      "fullPassed": 264,
+      "fullFailed": 0,
+      "fullSkipped": 0,
+      "formalPassed": 11,
+      "whitespace": "passed",
+      "completeScopedDiff": "passed",
+      "endpoint": {
+        "state": "passed_loopback_only",
+        "passed": 8,
+        "receiptSHA256": "9896185884cd2d5604779df76f5cee808b8d45dd56e800717d6a5a4b2f87f14a",
+        "initialFailureRetained": "7 of 8 passed; explicit Node HTTP Host transport successor supplied"
+      },
+      "flyConfig": {
+        "state": "failed_no_authenticated_session",
+        "receiptSHA256": "db89814184ab092e185cbeeb5d8dea4809a0630a218423c105fd457f9905ff8b",
+        "signIn": "pending",
+        "productConfigurationDefect": "not established"
+      },
+      "node22Runtime": {
+        "state": "failed_full_suite_due_to_missing_python3",
+        "image": "node:22.21.1-slim",
+        "nodeActualVersion": "v22.21.1",
+        "platform": "linux/arm64",
+        "repoDigest": "node@sha256:25b3eb23a00590b7499f2a2ce939322727fcce1b15fdd69754fcd09536a3ae2c",
+        "imageAcquisition": "passed",
+        "imageAcquisitionReceiptSHA256": "2da426bf6e1462afc543607272af1fa105c0e64c6723e4b1edddf7b0cd71e54f",
+        "runtimeReceiptSHA256": "d92a61dc866194240072d9140e9a3462b54eb36faf5233c7dacfdf71d672ea0b",
+        "independentReviewSHA256": "f2c7ed9a3f901c499882eb23c2f0b4252f961ee0482d3b10f001c7c9d49eca5d",
+        "tests": 264,
+        "passed": 255,
+        "failed": 9,
+        "skipped": 0,
+        "failureScope": "All9 unchanged test/website-deploy.test.js subprocess calls failed spawnSync python3 ENOENT; no timetable/authority failures.",
+        "sourceAndCustodyGuards": "passed unchanged stage8",
+        "fullRuntimePassed": false,
+        "serviceQualityCI": "pending_after_push; existing full npm check under Node22 and Python3-available Ubuntu",
+        "workflowDockerfileTestsChanged": false
+      },
+      "currentHTTP": false,
+      "native": false,
+      "realAPNs": false
+    },
+    "remaining": [
+      "Review and maintain current publication assets; empty resource is not a renewal pass.",
+      "Current all19 source controls, unsupported rail/branch coverage and normal installed default-client adoption remain explicit.",
+      "Full Node22 Service Quality CI/runtime gate and authenticated Fly validation remain pending; local endpoint/host source passes do not establish deployment.",
+      "Normal capability ACK/APNs, physical and native closed-app rendered own/source expiry, authorized deployment and release remain gated."
+    ],
+    "deployed": false,
+    "betaReady": false,
+    "releaseActions": []
+  }
 }

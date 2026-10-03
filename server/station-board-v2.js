@@ -1,6 +1,10 @@
+import { applyPublicationAuthority } from './station-board-publication.js';
+import { readPublicationAsset } from './timetable-publication-resource.js';
 import crypto from 'node:crypto';
+import { parseBoundedJSON } from './bounded-json.js';
+import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation } from './station-board-timetable.js';
 import fs from 'node:fs';
-import { retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability, containsServiceClosed, knownNonClosure, activeClosure, expiredBarrier } from './station-board-availability.js';
+import { retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability, containsServiceClosed, knownNonClosure, activeClosure, expiredBarrier, completePlannedApplicability } from './station-board-availability.js';
 import { fetchJsonResponse } from './notification-transport.js';
 
 export const STATION_BOARD_CONTRACT = 'station-board-v2';
@@ -243,8 +247,8 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       if (!Number.isFinite(context.observedAt) || context.observedAt > now) continue;
       if (normalized === 'timetable' && publicationIdentity?.expiresAt > now && publicationIdentity.observedAt >= context.observedAt && context.evidence?.publication?.sha256?.toLowerCase() !== publicationIdentity.sha256.toLowerCase()) continue;
       const events = (context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && availabilityProofs.some((p) => p.plannedUnavailable === true && p.scheduledClockOnly !== true && blocksScheduled(p, e.time, now))) && !markers.some((r) => rejectionInvalidates(r, e, record, now)));
-      if (!events.length && !(normalized === 'rail-departures' && Array.isArray(context.events) && context.events.length === 0)) continue;
-      if (!old || context.observedAt > old.observedAt) sources[normalized] = { observedAt: context.observedAt, events, ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
+      if (!events.length && !(Array.isArray(context.events) && context.events.length === 0 && (normalized === 'rail-departures' || normalized === 'timetable' && context.qualificationOrigin === 'server' && context.expiresAt > now))) continue;
+      if (!old || context.observedAt > old.observedAt) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }
   return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), status: incoming.status || previous.status || null };
@@ -386,10 +390,14 @@ function immutable(value) {
   return value;
 }
 
-export async function refreshStationBoard(record, previous, config, fetchImpl, now, signal, clock = () => now, publicResponses = new Map()) {
+export async function refreshStationBoard(record, previous, config, fetchImpl, now, signal, clock = () => now, publicResponses = new Map(), publicationAuthorityStore = null) {
   signal?.throwIfAborted();
   if (previous.nextRefreshAt > now) return mergeContexts(previous, {}, record, now);
-  const request = (inputURL, method = 'GET') => {
+  let renewalAsset = null, renewalHead = null;
+  // Legacy per-record corroboration must inspect its original context even when
+  // persistent HEAD authority removes that context before other source awaits.
+  const legacyPublicationContext = record.timetablePublicationAuthorityVersion === 1 ? null : previous.sources?.timetable;
+  const request = (inputURL, method = 'GET', boundedTT = false) => {
     const url = new URL(inputURL);
     if (config.tflAppKey && url.hostname === 'api.tfl.gov.uk') url.searchParams.set('app_key', config.tflAppKey);
     const requestKey = `${method}:${url.href}`;
@@ -398,8 +406,9 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
       // and size limit belong to this one public request, including failures.
       publicResponses.set(requestKey, (async () => {
         try {
-          let response = await fetchJsonResponse(url, fetchImpl, { signal, includeHeaders: true, method });
-          if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, fetchImpl, { signal, includeHeaders: true, method });
+          const options = { signal, includeHeaders: true, method, ...(boundedTT ? { bodyLimitBytes: 2000000, decodeJSON: bytes => parseBoundedJSON(bytes) } : {}) };
+          let response = await fetchJsonResponse(url, fetchImpl, options);
+          if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, fetchImpl, options);
           const completedAt = clock();
           if (response.ok && Buffer.byteLength(JSON.stringify(response.value)) > 2000000) return immutable({ ok: false, completedAt });
           return immutable(structuredClone({ ...response, completedAt }));
@@ -408,17 +417,45 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     }
     return publicResponses.get(requestKey);
   };
+  // Independent original identity/revision authority is committed before all
+  // feed awaits. Cache-only callers apply retained authority without HTTP.
+  if (publicationAuthorityStore && (record.timetablePublicationAuthorityVersion === 1 || previous.sources?.timetable)) {
+    const head = await request(new URL('https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip'), 'HEAD');
+    const observed = head.ok ? timetableHTTPObservation(head.headers, head.completedAt, { official: true }) : null;
+    const sha = head.headers?.['x-amz-meta-sha256'];
+    if (observed && observed.expiresAt > head.completedAt && typeof sha === 'string' && sha.length === 64 && /^[0-9a-f]{64}$/.test(sha)) {
+      await publicationAuthorityStore.observeOfficialPublication({ sha256: sha, observedAt: observed.observedAt });
+      try {
+        const asset = await publicationAuthorityStore.readPublicationAsset(sha);
+        await publicationAuthorityStore.observePublicationRevision(asset.identity);
+        if (record.plannedPresentationVersion === 2 && record.timetablePublicationAuthorityVersion === 1) {
+          selectedTimetableEntry(asset, record); renewalAsset = asset; renewalHead = { ...observed, sha256: sha };
+        }
+      } catch { /* No asset/parse success: original HEAD negative remains. */ }
+    }
+    previous = applyPublicationAuthority(previous, publicationAuthorityStore.publicationAuthority());
+  }
   // Official metadata identity is checked before other feeds. No client URL
   // is ever fetched, and matching HEAD never extends original seeded expiry.
   let publicationRejection = null, publicationIdentity = null;
-  const publication = previous.sources?.timetable?.evidence?.publication;
+  const publicationContext = legacyPublicationContext || previous.sources?.timetable;
+  const publication = publicationContext?.evidence?.publication;
   if (publication) {
     const head = await request(new URL('https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip'), 'HEAD');
     const observed = head.ok ? httpObservation(head.headers, head.completedAt, 600000, { futureSkew: 120000 }) : null;
     const currentSHA = head.headers?.['x-amz-meta-sha256'];
     if (observed && observed.expiresAt > clock() && typeof currentSHA === 'string' && /^[a-f0-9]{64}$/i.test(currentSHA)) publicationIdentity = { ...observed, sha256: currentSHA.toLowerCase() };
-    if (publicationIdentity && publicationIdentity.observedAt >= previous.sources.timetable.observedAt && currentSHA.toLowerCase() !== publication.sha256.toLowerCase()) publicationRejection = { stationID: record.stationID, lineID: record.lineID, observedAt: observed.observedAt, reason: 'publicationChanged' };
+    if (publicationIdentity && publicationIdentity.observedAt >= publicationContext.observedAt && currentSHA.toLowerCase() !== publication.sha256.toLowerCase()) publicationRejection = { stationID: record.stationID, lineID: record.lineID, observedAt: observed.observedAt, reason: 'publicationChanged' };
   }
+  const timetableTask = renewalAsset ? (async () => {
+    const { sets } = selectedTimetableEntry(renewalAsset, record), responses = [];
+    for (const scope of sets) {
+      const url = new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Timetable/${record.stationID}`);
+      if (scope.direction !== null) url.searchParams.set('direction', scope.direction);
+      responses.push({ ...(await request(url, 'GET', true)), direction: scope.direction });
+    }
+    return responses;
+  })().catch(() => null) : Promise.resolve(null);
   const rail = STATION_BOARD_LINES.get(record.lineID)?.qualifiedRailDepartureSource;
   const arrivalTask = request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`)).catch(() => ({ ok: false }));
   const railTask = rail ? request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/ArrivalDepartures?lineIds=${record.lineID}`)).catch(() => ({ ok: false })) : Promise.resolve({ ok: false });
@@ -426,7 +463,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Status?detail=true`)),
     request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Disruption?getFamily=true&includeRouteBlockedStops=true&flattenResponse=true`))
   ]);
-  const authority = { mode: STATION_BOARD_LINES.get(record.lineID)?.mode, stationName: (id) => validBoard(id, record.lineID) ? STATION_BOARD_STATIONS.get(id)?.stationName : null };
+  const authority = { mode: STATION_BOARD_LINES.get(record.lineID)?.mode, stationName: (id) => validBoard(id, record.lineID) ? STATION_BOARD_STATIONS.get(id)?.stationName : null, stationLines: id => STATION_BOARD_STATIONS.get(id)?.lineIDs || [], lineMode: line => STATION_BOARD_LINES.get(line)?.mode, isRailLine: line => STATION_BOARD_LINES.get(line)?.qualifiedRailDepartureSource === true };
   const is20 = service.ok && containsServiceClosed(service.value);
   const serviceObservation = service.ok && (!is20 || typeof service.headers?.age === 'string' && service.headers.age.trim().length > 0) ? httpObservation(service.headers, service.completedAt, 120000, { futureSkew: is20 ? 0 : 5000 }) : null;
   const serviceProofs = service.ok ? qualifyAvailability(service.value, record, 'lineStatus', serviceObservation, service.completedAt, londonClock, authority) : [];
@@ -438,7 +475,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   const journeyDepartAt = blocked ? actualRequestAt : shiftedJourneyTime(service.value, serviceProofs, admissionProofs, actualRequestAt);
   const plannedURL = !blocked ? journeyURL(record, journeyDepartAt) : null;
   const journeyTask = plannedURL ? request(plannedURL) : Promise.resolve({ ok: false });
-  const [arrivals, departures, journey] = await Promise.all([arrivalTask, railTask, journeyTask]);
+  const [arrivals, departures, journey, timetableResponses] = await Promise.all([arrivalTask, railTask, journeyTask, timetableTask]);
   const completedAt = clock(), sources = {};
   const add = (source, events, observation = null) => {
     // A fresh explicit empty rail read replaces only its exact source.
@@ -457,8 +494,34 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     const facts = await request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Arrivals`));
     if (facts.ok) add('at-station-destination', parseDestinationFacts(facts.value, record, facts.headers, facts.completedAt));
   }
+  // Recheck exact local revision before the final consumer clock. No request
+  // clock is moved by this local read. Expected tuple/generation guards in the
+  // authority store continue to protect return/cache/save/dispatch after awaits.
+  if (renewalAsset) {
+    try {
+      const latest = await publicationAuthorityStore.readPublicationAsset(renewalAsset.identity.publicationSHA256);
+      await publicationAuthorityStore.observePublicationRevision(latest.identity);
+      if (['publicationSHA256','proofRevision','proofBodySHA256'].some(k => latest.identity[k] !== renewalAsset.identity[k])) renewalAsset = null;
+    } catch { renewalAsset = null; }
+  }
   const applicabilityAt = clock();
   const rejections = publicationRejection ? [publicationRejection] : [], availabilityProofs = [...(is20 ? serviceProofs : service.ok ? qualifyAvailability(service.value, record, 'lineStatus', serviceObservation, applicabilityAt, londonClock, authority) : []), ...(station.ok ? qualifyAvailability(station.value, record, 'stationDisruptions', httpObservation(station.headers, station.completedAt, 120000), applicabilityAt, londonClock) : [])];
+  if (renewalAsset && timetableResponses) {
+    const ageIsValid = response => typeof response.headers?.age === 'string' && /^[0-9]+$/.test(response.headers.age.trim());
+    const strictServiceObservation = service.ok && ageIsValid(service) ? serviceObservation : null;
+    const stationObservation = station.ok && ageIsValid(station) ? httpObservation(station.headers, station.completedAt, 120000) : null;
+    const finalProofs = retainAvailability(previous, { availabilityProofs }, record, applicabilityAt);
+    if (completePlannedApplicability({ value: service.value, observation: strictServiceObservation }, { value: station.value, observation: stationObservation }, finalProofs, record, applicabilityAt, londonClock, authority)) {
+      try {
+        sources.timetable = qualifyTimetable(renewalAsset, timetableResponses, record, { head: renewalHead, serviceObservation: strictServiceObservation, stationObservation, at: applicabilityAt });
+      } catch (error) {
+        if (['timetableChanged', 'unsupportedCalendar'].includes(error.timetableReason)) {
+          const observations = timetableResponses.map(r => timetableHTTPObservation(r.headers, r.completedAt)?.observedAt).filter(Number.isFinite);
+          if (observations.length === timetableResponses.length) rejections.push({ stationID: record.stationID, lineID: record.lineID, observedAt: Math.min(renewalHead.observedAt, ...observations), reason: error.timetableReason });
+        }
+      }
+    }
+  }
   let status = null;
   if (service.ok) {
     const observed = httpObservation(service.headers, service.completedAt, 120000);
@@ -469,7 +532,8 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
 
   // Availability masks presentation. It never destroys the original source
   // context or creates a permanent publication-style closure rejection.
-  return mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
+  const merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
+  return publicationAuthorityStore ? applyPublicationAuthority(merged, publicationAuthorityStore.publicationAuthority()) : merged;
 }
 
 // One query may move only past the connected literal restriction covering its

@@ -1,4 +1,5 @@
 import http2 from 'node:http2';
+import crypto from 'node:crypto';
 
 // Absolute per-request bounds include connection, headers and the whole body.
 // Fifteen seconds leaves room within the existing 60/90-second worker cadence;
@@ -40,7 +41,7 @@ async function withDeadline(operation, {
   }
 }
 
-export function fetchJsonResponse(url, fetchImpl = fetch, { includeHeaders = false, method = 'GET', ...options } = {}) {
+export function fetchJsonResponse(url, fetchImpl = fetch, { includeHeaders = false, method = 'GET', bodyLimitBytes = null, decodeJSON = null, ...options } = {}) {
   return withDeadline(async (signal) => {
     const response = await fetchImpl(url, { signal, ...(method !== 'GET' ? { method } : {}), ...(includeHeaders ? { headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } } : {}) });
     if (!response.ok) {
@@ -48,10 +49,22 @@ export function fetchJsonResponse(url, fetchImpl = fetch, { includeHeaders = fal
       if (response.body?.cancel) void response.body.cancel().catch(() => {});
       return { ok: false, status: response.status, value: null };
     }
-    const value = method === 'HEAD' ? null : await response.json();
+    let value = null, bodySHA256;
+    if (method !== 'HEAD' && bodyLimitBytes !== null) {
+      if (!Number.isSafeInteger(bodyLimitBytes) || bodyLimitBytes < 1 || typeof decodeJSON !== 'function' || !response.body) throw transportError('Invalid bounded JSON transport');
+      const chunks = []; let length = 0;
+      try {
+        for await (const chunk of response.body) {
+          signal.throwIfAborted(); const bytes = Buffer.from(chunk); length += bytes.length;
+          if (length > bodyLimitBytes) throw transportError('Response byte bound exceeded'); chunks.push(bytes);
+        }
+        signal.throwIfAborted(); const bytes = Buffer.concat(chunks, length);
+        bodySHA256 = crypto.createHash('sha256').update(bytes).digest('hex'); value = decodeJSON(bytes);
+      } catch (error) { if (response.body?.cancel) void response.body.cancel().catch(() => {}); throw error; }
+    } else if (method !== 'HEAD') value = await response.json();
     if (method === 'HEAD' && response.body?.cancel) void response.body.cancel().catch(() => {});
     signal.throwIfAborted();
-    return { ok: true, status: response.status, value, ...(includeHeaders ? { headers: Object.fromEntries(response.headers?.entries?.() || []) } : {}) };
+    return { ok: true, status: response.status, value, ...(bodySHA256 ? { bodySHA256 } : {}), ...(includeHeaders ? { headers: Object.fromEntries(response.headers?.entries?.() || []) } : {}) };
   }, options);
 }
 

@@ -62,7 +62,7 @@ export function validatePublicationResource(bytes, expectedSHA) {
   };
 }
 
-async function readReviewedAsset(directory, sha) {
+export async function readReviewedAsset(directory, sha) {
   const file = path.join(directory, sha + '.json');
   const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -132,4 +132,12 @@ export async function handlePublicationResource(request, response, url, { direct
     response.end(headOnly ? undefined : bytes);
   }
   return true;
+}
+
+// Reuse exact reviewed local bytes; never call this server's public HTTP route.
+export async function readPublicationAsset(sha, directory = path.resolve('public/timetable-publications/v1')) {
+  if (!validSHA(sha)) throw new Error('Invalid publication identity');
+  const bytes = await readReviewedAsset(directory, sha);
+  const tuple = validatePublicationResource(bytes, sha);
+  return { identity: { publicationSHA256: sha, proofRevision: tuple.revision, proofBodySHA256: tuple.proofBodySHA256 }, etag: tuple.etag, proofBytes: Buffer.from(JSON.parse(bytes).proofBodyBase64, 'base64'), proof: JSON.parse(Buffer.from(JSON.parse(bytes).proofBodyBase64, 'base64').toString('utf8')) };
 }

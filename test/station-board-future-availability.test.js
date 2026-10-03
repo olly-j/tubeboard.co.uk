@@ -86,9 +86,29 @@ test('all19 availability scopes reject restricted/unknown status without renewin
 
 test('temporary closure refresh and transactional restart restore original plans in gap with zero extra HTTP', async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-future-mirror-')); t.after(() => fs.rm(dir, { recursive: true, force: true })); const file = path.join(dir, 'records.json'), store = new LiveActivityStore(file); await store.upsertToken(record, new Date(now));
-  const original = event('gap', 35), p = proof(0, 20, 10, 20); await store.retainStationBoard(record.activityID, record.environment, cache([original, event('predicted', 40, 0, 600, { sourceID: 'rail-departures', timeEvidence: 'predictedDeparture' })], []), new Date(now));
-  let reads = 0; const fetchImpl = async (url) => { reads++; const values = new URL(url).pathname.endsWith('/Disruption') ? [rawClosure(10, 20)] : []; return new Response(JSON.stringify(values), { headers: { date: new Date(now).toUTCString(), age: '0', 'cache-control': 'public,max-age=30' } }); };
+  const original = event('gap', 35), p = proof(0, 20, 10, 20);
+  // Synthetic previously client-qualified context: original publication/HEAD
+  // evidence is required by authority admission, separate from closure clocks.
+  const originalCache = cache([original, event('predicted', 40, 0, 600, { sourceID: 'rail-departures', timeEvidence: 'predictedDeparture' })], []);
+  originalCache.sources.timetable.evidence = { publication: { url: 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip', sha256: 'a'.repeat(64) }, independentPublicationObservedAt: now };
+  originalCache.sources.timetable.qualificationOrigin = 'client';
+  await store.retainStationBoard(record.activityID, record.environment, originalCache, new Date(now));
+  let reads = 0; const headRequests = [];
+  const feedPaths = [`/StopPoint/${record.stationID}/Arrivals`, `/Line/${record.lineID}/Status`, `/StopPoint/${record.stationID}/Disruption`, `/Line/${record.lineID}/Arrivals`], requestedFeedPaths = [];
+  const publicationURL = originalCache.sources.timetable.evidence.publication.url;
+  const fetchImpl = async (url, options) => {
+    const headers = { date: new Date(now).toUTCString(), age: '0', 'cache-control': 'public,max-age=30' };
+    if (options.method === 'HEAD') {
+      assert.equal(String(url), publicationURL); headRequests.push({ url: String(url), method: options.method });
+      return new Response(null, { headers: { ...headers, 'x-amz-meta-sha256': originalCache.sources.timetable.evidence.publication.sha256 } });
+    }
+    reads++; assert.equal(options.method || 'GET', 'GET'); const pathname = new URL(url).pathname;
+    assert.ok(feedPaths.includes(pathname)); requestedFeedPaths.push(pathname);
+    const values = pathname.endsWith('/Disruption') ? [rawClosure(10, 20)] : [];
+    return new Response(JSON.stringify(values), { headers });
+  };
   const read = await refreshStationBoard(record, store.state.records[0].stationBoardCache, loadConfig({}), fetchImpl, at(15), null); assert.equal(read.rejections.length, 0); assert.equal(read.sources.timetable.events[0].time, original.time); assert.equal(read.availabilityProofs[0].expiresAt, p.expiresAt); await store.retainStationBoard(record.activityID, record.environment, read, new Date(at(15)));
+  assert.deepEqual(headRequests, [{ url: publicationURL, method: 'HEAD' }]); assert.equal(read.publicationIdentity.sha256, originalCache.sources.timetable.evidence.publication.sha256); assert.deepEqual(requestedFeedPaths.sort(), feedPaths.sort());
   const restarted = new LiveActivityStore(file), pushes = []; await runLiveActivityWorkerCycle({ store: restarted, config: loadConfig({}), cacheOnly: true, now: new Date(at(20)), clock: () => at(20), fetchImpl: async () => { reads++; throw Error('No reads at boundary'); }, pushImpl: async (_, payload) => pushes.push(payload), logger: { info() {}, warn() {} } }); assert.equal(reads, 4); assert.ok(pushes[0].aps['content-state'].arrivals.some((r) => r.id === original.id)); assert.equal(restarted.state.records[0].stationBoardCache.sources.timetable.events[0].expiresAt, original.expiresAt);
   const changed = mergeContexts(read, { rejections: [{ stationID: record.stationID, lineID: record.lineID, observedAt: at(16), reason: 'publicationChanged' }] }, record, at(20)); assert.equal(changed.sources.timetable, undefined); assert.ok(changed.sources['rail-departures']);
 });

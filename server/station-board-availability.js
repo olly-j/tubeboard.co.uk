@@ -138,3 +138,58 @@ function serviceClosedProof(values, record, observation, clock, { mode, stationN
   if (!periods.length || periods.length > 32) return unavailable();
   return [{ ...base, scheduledClockOnly: true, ...(complete ? {} : { plannedUnavailable: true }), validFrom: periods[0].validFrom, validUntil: Math.max(...periods.map((p) => p.validUntil)), closureWindows: periods }];
 }
+
+// Complete raw applicability admission for a newly qualified TT. Merely
+// retaining a representable closure/open proof is not enough when sibling
+// raw records remain unsupported. Information does not create an open proof.
+export function completePlannedApplicability(service, station, proofs, record, at, clock, authority) {
+  const current = (scope, observation) => observation && observation.expiresAt > at && proofs.some(p => p.sourceScope === scope && p.stationID === record.stationID && p.lineID === record.lineID && p.observedAt === observation.observedAt && qualifiedAvailability(p, at) && p.expiresAt > at && p.plannedUnavailable !== true && !blocksScheduled(p, NaN, at));
+  const future = (raw, scope, observation) => {
+    const proof = proofs.find(p => p.sourceScope === scope && p.observedAt === observation?.observedAt && p.closed && current(scope,observation));
+    if (!proof || !Array.isArray(raw) || !raw.length) return false;
+    const periods = [];
+    if (scope === 'lineStatus') {
+      if (raw.length !== 1 || raw[0]?.id !== record.lineID || !Array.isArray(raw[0].lineStatuses) || !raw[0].lineStatuses.length) return false;
+      for (const d of raw[0].lineStatuses) {
+        if (knownNonClosure(d)) continue;
+        if (![1,2,16].includes(d?.statusSeverity) || !['closed','suspended','not running'].includes(String(d.statusSeverityDescription||'').toLowerCase()) || !Array.isArray(d.validityPeriods) || !d.validityPeriods.length || d.disruption?.affectedRoutes !== undefined && (!Array.isArray(d.disruption.affectedRoutes) || d.disruption.affectedRoutes.length)) return false;
+        periods.push(...d.validityPeriods.map(w=>({...w,...(d.concernedLines===undefined?{}:{concernedLines:d.concernedLines})})));
+      }
+    } else {
+      for(const d of raw){if((d.stationAtcoCode||d.atcoCode)!==record.stationID || !['stationclosure','stopclosed','closed','closure'].includes(String(d.type||'').toLowerCase()))return false;periods.push(d);}
+    }
+    const expected=[];
+    for(const p of periods){
+      if(p.concernedLines!==undefined && (!Array.isArray(p.concernedLines) || !p.concernedLines.length || !p.concernedLines.some(v=>v?.id===record.lineID && (v.direction===undefined || typeof v.direction==='string' && !v.direction.trim()))))return false;
+      const validFrom=clock(p.fromDate),validUntil=clock(p.toDate);if(!Number.isFinite(validFrom)||!Number.isFinite(validUntil)||validFrom>=validUntil)return false;
+      if(validUntil<=at)continue;if(validFrom<=at || validFrom>=eligibilityCutoff(proof))return false;expected.push({validFrom,validUntil});
+    }
+    const order=(a,b)=>a.validFrom-b.validFrom||a.validUntil-b.validUntil;
+    return expected.length>0 && JSON.stringify(expected.sort(order))===JSON.stringify(windows(proof).map(w=>({validFrom:w.validFrom,validUntil:w.validUntil})).sort(order));
+  };
+  const serviceObservation=service.observation,stationObservation=station.observation;
+  const details=Array.isArray(service.value)&&service.value.length===1&&service.value[0]?.id===record.lineID ? service.value[0].lineStatuses:null;
+  const lineAllowed=current('lineStatus',serviceObservation) && Array.isArray(details) && details.length>0 && details.every(d=>Number.isInteger(d?.statusSeverity)) && (details.every(knownNonClosure) || future(service.value,'lineStatus',serviceObservation) || proofs.some(p=>p.sourceScope==='lineStatus' && p.observedAt===serviceObservation.observedAt && p.scheduledClockOnly===true && p.plannedUnavailable!==true && p.expiresAt>at && qualifiedAvailability(p,at)));
+  const stationAllowed=current('stationDisruptions',stationObservation) && Array.isArray(station.value) && (station.value.length===0 || future(station.value,'stationDisruptions',stationObservation));
+  const informationAllowed=informationPlannedApplicability(station.value,stationObservation,record,at,clock,authority);
+  return Boolean(lineAllowed && (stationAllowed || informationAllowed));
+}
+function informationPlannedApplicability(values,observation,record,at,clock,authority) {
+  if(!observation || observation.observedAt>at || observation.expiresAt<=at || observation.expiresAt>observation.observedAt+120000 || !Array.isArray(values)||!values.length)return false;
+  const modes=new Set(['tube','dlr','overground','national-rail','elizabeth-line','bus','coach','tram','river-bus','river-tour','cable-car']);
+  const allowed=new Set(['$type','atcoCode','stationAtcoCode','mode','type','fromDate','toDate','appearance','commonName','description','closureText']);
+  const restricted=new Set(['concernedLines','affectedRoutes','affectedStops','direction','cancellation','amendment']);
+  const empty=v=>v===null || typeof v==='string'&&!v.trim() || Array.isArray(v)&&!v.length || row(v)&&!Object.keys(v).length;
+  const membership=id=>authority.stationLines?.(id)||[];
+  const modeMatches=(line,mode)=>authority.lineMode?.(line)===mode || mode==='national-rail'&&authority.isRailLine?.(line);
+  for(const p of values){
+    if(!row(p) || ![p.stationAtcoCode,p.atcoCode].every(v=>typeof v==='string'&&v.length>0&&/^[A-Za-z0-9]+$/.test(v)) || !modes.has(p.mode) || typeof p.type!=='string' || ![p.fromDate,p.toDate].every(v=>typeof v==='string'&&/T.*(?:Z|[+-]\d{2}:\d{2})$/.test(v)) || Object.keys(p).some(k=>restricted.has(k)) || Object.entries(p).some(([k,v])=>!allowed.has(k)&&!empty(v)) || p.closureText!==undefined && !(typeof p.closureText==='string'&&!p.closureText.trim()) || ['$type','appearance','commonName','description'].some(k=>p[k]!==undefined&&typeof p[k]!=='string'))return false;
+    const start=clock(p.fromDate),end=clock(p.toDate);if(!Number.isFinite(start)||!Number.isFinite(end)||start>=end)return false;
+    const kind=p.type.trim().toLowerCase(),info=['information','interchange message'].includes(kind);if(!info&&!['closure','stationclosure','stopclosed','closed','part closure'].includes(kind))return false;
+    const lines=membership(p.stationAtcoCode);if(lines.length&&!lines.some(line=>modeMatches(line,p.mode)))return false;
+    const foreign=p.mode!==authority.mode && !(p.mode==='national-rail'&&authority.isRailLine?.(record.lineID)) && p.stationAtcoCode!==record.stationID&&p.atcoCode!==record.stationID && !membership(p.stationAtcoCode).includes(record.lineID)&&!membership(p.atcoCode).includes(record.lineID);
+    if(foreign)continue;
+    if(!info||p.atcoCode!==p.stationAtcoCode||!lines.length||!lines.some(line=>modeMatches(line,p.mode)))return false;
+  }
+  return true;
+}
