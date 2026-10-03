@@ -4,11 +4,12 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import {
   canonicalResource, handlePublicationResource, validatePublicationResource,
-  MAX_PROOF_BYTES, MAX_RESOURCE_BYTES
+  MAX_PROOF_BYTES, MAX_RESOURCE_BYTES, readPublicationAsset, PUBLICATION_ASSET_DIRECTORY
 } from '../server/timetable-publication-resource.js';
 
 const sha = 'a'.repeat(64);
@@ -120,4 +121,87 @@ test('malformed/oversized/symlink asset fails503 without body/path leakage', asy
   await fs.writeFile(path.join(directory, 'private-review.json'), canonicalResource(wrapper()));
   await fs.symlink(path.join(directory, 'private-review.json'), path.join(directory, sha + '.json'));
   assert.equal((await fetch(url)).status, 503);
+});
+
+// Synthetic transport fixture only: not a reviewed/current publisher proof or
+// a maintainer-selected production revision. Own exactly one exclusive file.
+test('default authority reader and configured HTTP resource share module-relative bytes outside project cwd', async (t) => {
+  const expectedDirectory = fileURLToPath(new URL('../server/timetable-publications/v1/', import.meta.url));
+  assert.equal(PUBLICATION_ASSET_DIRECTORY, expectedDirectory);
+  const originalCwd = process.cwd();
+  const changedCwd = await fs.mkdtemp(path.join(os.tmpdir(), 'tbproof-cwd-'));
+  const ownedSHA = hash(Buffer.from('tb085-default-directory-' + randomUUID()));
+  const absentSHA = hash(Buffer.from('tb085-absent-default-directory-' + randomUUID()));
+  const assetPath = path.join(PUBLICATION_ASSET_DIRECTORY, ownedSHA + '.json');
+  let ownsAsset = false;
+  const createdDirectories = []; // Bottom-up list of this test mkdir-created paths only.
+  let server;
+  t.after(async () => {
+    process.chdir(originalCwd);
+    const failures = [];
+    async function cleanup(action) { try { await action(); } catch (error) { failures.push(error); } }
+    if (server?.listening) await cleanup(() => new Promise((resolve, reject) => {
+      server.closeIdleConnections?.();
+      const timer = setTimeout(() => {
+        server.closeAllConnections?.();
+        reject(new Error('Owned loopback server close exceeded 10 seconds'));
+      }, 10_000);
+      server.close((error) => { clearTimeout(timer); error ? reject(error) : resolve(); });
+    }));
+    if (ownsAsset) await cleanup(() => fs.unlink(assetPath)); // Never remove/replace an existing asset.
+    for (const directory of createdDirectories) {
+      // Non-empty means unrelated data appeared: preserve it and fail teardown.
+      // Never recursively delete any server directory, including an existing one.
+      await cleanup(() => fs.rmdir(directory));
+    }
+    await cleanup(() => fs.rm(changedCwd, { recursive:true })); // Exclusively owned mkdtemp only.
+    assert.equal(failures.length, 0, failures.map((error) => error.message).join('; '));
+  });
+  const firstCreated = await fs.mkdir(PUBLICATION_ASSET_DIRECTORY, { recursive:true });
+  if (firstCreated !== undefined) {
+    const first = path.resolve(firstCreated);
+    let directory = path.resolve(PUBLICATION_ASSET_DIRECTORY);
+    const relative = path.relative(first, directory);
+    assert.ok(relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative)));
+    while (true) {
+      createdDirectories.push(directory);
+      if (directory === first) break;
+      directory = path.dirname(directory);
+    }
+  }
+  const data = Buffer.from(proof().toString().replaceAll(sha, ownedSHA));
+  const bytes = canonicalResource({ ...wrapper(data), publicationSHA256:ownedSHA });
+  const file = await fs.open(assetPath, 'wx');
+  ownsAsset = true;
+  try { await file.writeFile(bytes); } finally { await file.close(); }
+  process.chdir(changedCwd);
+  const local = await readPublicationAsset(ownedSHA); // Actual default, not injected temp directory.
+  assert.equal(local.identity.publicationSHA256, ownedSHA);
+  assert.equal(local.identity.proofBodySHA256, hash(data));
+  assert.deepEqual(local.proofBytes, data);
+  server = http.createServer(async (request, response) => {
+    const url = new URL(request.url, 'http://localhost');
+    // Exactly the directory exported to the ordinary server/index.js route.
+    if (!await handlePublicationResource(request, response, url, { directory:PUBLICATION_ASSET_DIRECTORY })) {
+      response.writeHead(404); response.end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}/api/timetable-publications/v1/${ownedSHA}`;
+  const get = await fetch(url, { redirect:'error', signal:AbortSignal.timeout(10_000) });
+  assert.equal(get.status, 200);
+  assert.equal(get.headers.get('etag'), local.etag);
+  assert.equal(get.headers.get('cache-control'), 'public, max-age=60, must-revalidate');
+  assert.deepEqual(Buffer.from(await get.arrayBuffer()), bytes);
+  const head = await fetch(url, { method:'HEAD', redirect:'error', signal:AbortSignal.timeout(10_000) });
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get('etag'), local.etag);
+  assert.equal(await head.text(), '');
+  const notModified = await fetch(url, { headers:{ 'if-none-match':local.etag }, redirect:'error', signal:AbortSignal.timeout(10_000) });
+  assert.equal(notModified.status, 304);
+  assert.equal(await notModified.text(), '');
+  await assert.rejects(readPublicationAsset(absentSHA), (error) => error.code === 'ENOENT');
+  const absent = await fetch(url.replace(ownedSHA, absentSHA), { redirect:'error', signal:AbortSignal.timeout(10_000) });
+  assert.equal(absent.status, 404);
+  assert.equal(absent.headers.get('cache-control'), 'no-store');
 });

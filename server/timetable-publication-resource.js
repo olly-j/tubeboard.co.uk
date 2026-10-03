@@ -3,6 +3,7 @@
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { TextDecoder } from 'node:util';
 
@@ -10,6 +11,7 @@ export const MAX_RESOURCE_BYTES = 2_000_000;
 export const MAX_PROOF_BYTES = 128 * 1024;
 export const MAX_PROOF_REVISION = Number.MAX_SAFE_INTEGER;
 export const PUBLICATION_RESOURCE_PREFIX = '/api/timetable-publications/v1/';
+export const PUBLICATION_ASSET_DIRECTORY = fileURLToPath(new URL('./timetable-publications/v1/', import.meta.url));
 const SHA = /^[a-f0-9]{64}$/;
 const validSHA = (value) => typeof value === 'string' && value.length === 64 && SHA.test(value);
 const SOURCE = 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip';
@@ -135,7 +137,7 @@ export async function handlePublicationResource(request, response, url, { direct
 }
 
 // Reuse exact reviewed local bytes; never call this server's public HTTP route.
-export async function readPublicationAsset(sha, directory = path.resolve('public/timetable-publications/v1')) {
+export async function readPublicationAsset(sha, directory = PUBLICATION_ASSET_DIRECTORY) {
   if (!validSHA(sha)) throw new Error('Invalid publication identity');
   const bytes = await readReviewedAsset(directory, sha);
   const tuple = validatePublicationResource(bytes, sha);

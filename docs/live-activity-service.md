@@ -321,7 +321,7 @@ that current publication assets or deployed renewal are available.
 
 TB-085 adds the fixed `GET`/`HEAD` route `/api/timetable-publications/v1/{publicationSHA256}`. The lowercase SHA identifies the independently observed official publication. Its bounded, canonical wrapper carries an ordered proof revision, exact proof-body SHA and base64 body; the app validates the body and applicable service calendars before adopting it. Exact ETags support conditional reads. Invalid or missing assets return `no-store` errors. Metadata, HEAD or 304 alone never renew a departure clock or the original timetable context TTL.
 
-The Docker image copies `public/timetable-publications/v1/`. This checkpoint contains only its directory marker: no current publication asset or running producer is supplied. The reviewed app-side packager uses atomic publication and increasing revisions. The TubeBoard engineering integration owner must review the generator proof, publish the exact wrapper atomically and maintain current assets and same-ZIP corrections. This is not an automatic producer or an arbitrary remote timetable proxy. Source now includes the bounded backend requalification path, but the empty asset directory cannot exercise it operationally. Publishing/maintaining assets, current source acceptance, installed-client adoption, authorized deployment and normal closed-app APNs expiry remain separate gates. Proof wrappers are capped at 2,000,000 bytes and decoded proof bodies at 128KiB; excess evidence is unavailable, never truncated.
+The local authority reader and HTTP route now use the same module-relative `server/timetable-publications/v1/` directory. The existing Docker `COPY server` includes that location without a new Dockerfile rule, and default reads remain independent of process working directory. The old `public/timetable-publications/v1/.gitkeep` is historical and is not the authoritative asset location. No current publication asset or running maintainer is installed. The reviewed app-side packager uses atomic publication and increasing revisions. The TubeBoard engineering integration owner must review the generator proof, publish the exact wrapper atomically and maintain current assets and same-ZIP corrections. This is not an automatic producer or an arbitrary remote timetable proxy. Source now includes the bounded backend requalification path, but the empty asset directory cannot exercise it operationally. Publishing/maintaining assets, current source acceptance, installed-client adoption, authorized deployment and normal closed-app APNs expiry remain separate gates. Proof wrappers are capped at 2,000,000 bytes and decoded proof bodies at 128KiB; excess evidence is unavailable, never truncated.
 
 For the preceding resource-only source slice, six focused loopback resource tests and all 240 repository tests passed, together with syntax, formal schema-shape and whitespace checks. The app and service resource schema bytes match. Required Fly configuration validation could not complete on 3 October 2026 because the local CLI had no access token. The workspace audit found the separately prepared v2 registration contract absent from service main; it does not establish a merged, deployed or production contract pass. PR #24 remains draft and this slice remains undeployed.
 
@@ -347,14 +347,27 @@ nine failures are unchanged website-deploy tests whose Python 3 subprocess is
 unavailable in that image (`spawnSync python3 ENOENT`); no timetable or publication
 authority test failed. This remains a failed full runtime check, separate from
 the passed host suite. The existing Service Quality workflow runs the full check
-under Node 22 on Ubuntu with Python 3 available; that candidate CI outcome is
-pending until the checkpoint is pushed. No test, workflow or Dockerfile was
+under Node 22 on Ubuntu with Python 3 available. For source22 checkpoint78061231,
+run37147980594/job111275752522 actually passed all264 tests under Nodev22.23.3,
+syntax and repository checks. Its Python Fly TOML parse passed independently of
+the unauthenticated flyctl result. This CI is not the exact22.21.1 image run. No test, workflow or Dockerfile was
 changed to bypass this result. These checks are not current HTTP,
 physical-station, native closed-surface or APNs acceptance.
 
 Current assets and maintenance, installed default-client adoption, 19-line
 current source coverage, native own/source expiry, capability ACK and real APNs,
-authenticated Fly validation, the full Node 22 CI/runtime gate and authorized
+authenticated Fly validation, the exact-image full runtime gate and authorized
 deployment remain explicit gates. No beta, deployment or release action follows
 this source pass. Service version remains 1.4.4; optional capabilities do not
 change the existing contract name or public version.
+
+The separate server-owned-directory adapter passed two syntax checks, all seven
+resource tests (six existing plus one default-reader/HTTP agreement regression),
+and all265 host tests, chained syntax/repository checks, whitespace and its exact
+three-path diff. The new test owns one exclusive synthetic asset and confirms
+matching default local bytes, HTTP GET/HEAD/304 and absent-asset rejection from a
+changed working directory; teardown preserves unrelated data. It does not install
+a maintained publication or renew any timetable clock. Its actual receipt is
+`1ebf1f7b70d1f0b39979a48a1ee1a12803d91c631c3b757f7c50464a8c1d3847`.
+The source22 CI and prior host264 evidence remain distinct; this later adapter
+checkpoint's CI and deployment are not established by those preceding checks.

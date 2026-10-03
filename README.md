@@ -27,13 +27,18 @@ TB-085 prepares optional typed station-board pushes with presentation capability
 reviewed local publication proof can qualify a bounded selected-station timetable
 read against the original official HEAD, service calendars and current controls;
 HEAD or a proof-resource cache hit alone never extends a departure's expiry.
-Legacy clients keep their existing contract. The fixed proof-resource directory
-currently contains no publication asset, so maintained assets, deployment and
-normal closed-app APNs acceptance remain required. Original-clock Swift-to-Node
-parity, 264 host checks and eight local endpoint checks passed. The exact Node
-22.21.1 image ran 264 tests: 255 passed, while nine website-deploy tests failed
-because Python 3 is absent from that slim image. Node 22 Service Quality CI and
-authenticated Fly validation remain pending. See
+Legacy clients keep their existing contract. The HTTP route and local authority
+reader share the module-relative `server/timetable-publications/v1/` directory,
+which the existing Docker `COPY server` includes independently of the working
+directory. No publication asset is installed or running maintainer established.
+The adapter passed seven focused resource tests and all 265 host tests. The
+preceding source22 checkpoint78061231 separately passed all 264 Service Quality
+CI tests under Node v22.23.3 with Python3; original-clock Swift-to-Node parity
+and eight local endpoint checks also passed. The exact Node22.21.1 slim image
+retains its 255/264 passes and nine missing-Python3 website-test failures.
+CI Fly TOML parsing passed; authenticated flyctl validation remains unresolved.
+Maintained current assets, deployment and normal closed-app APNs acceptance
+remain required. See
 `docs/live-activity-service.md` for qualification and compatibility boundaries.
 
 The public service also provides a server-rendered data-health page at

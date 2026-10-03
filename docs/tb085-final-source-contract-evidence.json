@@ -68,7 +68,7 @@
   "releaseActions": [],
   "publicationRenewalCheckpoint": {
     "serviceBase": "146a76fec599410d69150b354df97d1bf2b4c452",
-    "checkpointRevision": null,
+    "checkpointRevision": "7806123162f8be291689b9a93b559b5a94446094",
     "plannedPresentationVersion": 2,
     "timetablePublicationAuthorityVersion": 1,
     "behavior": [
@@ -78,7 +78,7 @@
       "Common min original HEAD/all required timetable/line/station Date-Age observation plus600s or London midnight; HEAD/resource304 never renews.",
       "Missing current assets do not qualify timetable renewal; independent Journey/live/incoming and original expiry remain separate."
     ],
-    "currentAssetDirectory": "public/timetable-publications/v1 contains only .gitkeep",
+    "currentAssetDirectory": "server/timetable-publications/v1 module-relative, shared by local reader and HTTP route; existing Docker COPY server includes it; no asset installed",
     "currentAssetPublished": false,
     "producerAutomation": false,
     "actualSwiftToNodeOriginalClockParity": {
@@ -148,7 +148,7 @@
         "failureScope": "All9 unchanged test/website-deploy.test.js subprocess calls failed spawnSync python3 ENOENT; no timetable/authority failures.",
         "sourceAndCustodyGuards": "passed unchanged stage8",
         "fullRuntimePassed": false,
-        "serviceQualityCI": "pending_after_push; existing full npm check under Node22 and Python3-available Ubuntu",
+        "serviceQualityCI": "Source22 currentCI passed underNodev22.23.3+Python3; exactproductionimage22.21.1 full failure remains.",
         "workflowDockerfileTestsChanged": false
       },
       "currentHTTP": false,
@@ -158,11 +158,48 @@
     "remaining": [
       "Review and maintain current publication assets; empty resource is not a renewal pass.",
       "Current all19 source controls, unsupported rail/branch coverage and normal installed default-client adoption remain explicit.",
-      "Full Node22 Service Quality CI/runtime gate and authenticated Fly validation remain pending; local endpoint/host source passes do not establish deployment.",
+      "Later adapter checkpoint CI, exactproductionimage full runtime and authenticated Fly validation remain pending; preceding source22 CI and local passes do not establish deployment.",
       "Normal capability ACK/APNs, physical and native closed-app rendered own/source expiry, authorized deployment and release remain gated."
     ],
     "deployed": false,
     "betaReady": false,
-    "releaseActions": []
+    "releaseActions": [],
+    "source22CI": {
+      "run": 37147980594,
+      "job": 111275752522,
+      "head": "7806123162f8be291689b9a93b559b5a94446094",
+      "status": "success",
+      "NodeVersion": "v22.23.3",
+      "passed": 264,
+      "failed": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "syntaxRepository": "passed",
+      "FlyTOML": "Python parse passed; authenticatedflyctl gate unresolved",
+      "receiptSHA256": "2c07d10484f96ccdcf95c42dd588558eb2b67dad5d12e5d0a8e396820f401a4e",
+      "logSHA256": "158a9e60a0d2c800ec5761cd813256a77115aa016e75e4d886b43894228d6e53",
+      "exactProductionImageEquivalent": false
+    },
+    "serverOwnedAssetDirectoryAdapter": {
+      "behavior": "Default local authority reader and HTTP route use identical module-relative server/timetable-publications/v1; existing Docker COPY server includes it, independent of process cwd.",
+      "receiptSHA256": "1ebf1f7b70d1f0b39979a48a1ee1a12803d91c631c3b757f7c50464a8c1d3847",
+      "sourceTreeSHA256": "c6895cf06d3dfb4c943483477523d37a0ea36b968d1bf1d2c85d9b5a156addc0",
+      "syntaxPassed": 2,
+      "focusedPassed": 7,
+      "fullPassed": 265,
+      "failed": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "chainedSyntaxRepositoryWhitespaceScopedDiff": "passed",
+      "scopedPaths": 3,
+      "terminalImmutableSourceCustody": "passed",
+      "maintainedAssetInstalled": false,
+      "checkpoint": "pending_exact6path_checkpoint",
+      "CI": "not_run_for_adapter_checkpoint",
+      "currentHTTP": false,
+      "native": false,
+      "realAPNs": false,
+      "deployed": false
+    }
   }
 }
