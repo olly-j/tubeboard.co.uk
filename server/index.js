@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SerialWorker } from './worker-lifecycle.js';
+import { handlePublicationResource } from './timetable-publication-resource.js';
 import {
   LiveActivityStore,
   TokenRateLimiter,
@@ -100,6 +101,12 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 400, { ok: false, error: 'Unexpected Host header' });
       return;
     }
+
+    // Public reviewed metadata only. Host/security validation above remains
+    // identical; no token, JWS, install ID, location or TfL query is involved.
+    if (await handlePublicationResource(request, response, url, {
+      directory: path.join(projectRoot, 'public', 'timetable-publications', 'v1')
+    })) return;
 
     if (request.method === 'POST' && url.pathname === '/api/live-activities/tokens') {
       await handleTokenRegistration(request, response);
