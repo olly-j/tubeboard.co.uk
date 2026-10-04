@@ -78,12 +78,12 @@ test('a nonce cannot qualify stale or invalid official Age and missing Age remai
   }
 });
 
-test('primary, status, disruption, planner and incoming rail URLs retain their original query and source authority', async () => {
+test('primary, disruption, planner and incoming rail URLs retain their source authority while selected Status gains one UUID', async () => {
   const r = {...record, stationID:'910GSHENFLD', lineID:'elizabeth'}, wire = [], config = {workerIntervalMs:90000, tflAppKey:'synthetic-nonce-key'};
   const incoming = {naptanId:r.stationID, lineId:r.lineID, destinationNaptanId:r.stationID, destinationName:'Shenfield', departureStatus:'OnTime', platformName:'6', estimatedTimeOfArrival:new Date(now+70000).toISOString(), scheduledTimeOfArrival:new Date(now+300000).toISOString()};
   const outgoing = {naptanId:r.stationID, lineId:r.lineID, destinationNaptanId:'910GPADTLL', destinationName:'Paddington', departureStatus:'OnTime', platformName:'2', scheduledTimeOfDeparture:new Date(now+420000).toISOString()};
   const state = await refreshStationBoard(r, {}, config, async (url, options) => {
-    const u = new URL(url); wire.push({url:String(url), method:options.method || 'GET'}); assert.equal(u.searchParams.has('tb085'), false); assert.equal(u.searchParams.get('app_key'), config.tflAppKey);
+    const u = new URL(url); wire.push({url:String(url), method:options.method || 'GET'}); if (u.pathname.endsWith('/Status')) assertNonce(u); else assert.equal(u.searchParams.has('tb085'), false); assert.equal(u.searchParams.get('app_key'), config.tflAppKey);
     if (u.pathname.endsWith('/ArrivalDepartures')) return reply([outgoing,incoming], now, {'cache-control':'max-age=90'});
     if (u.pathname.endsWith('/Status')) return reply([{id:r.lineID,lineStatuses:[{statusSeverity:10,statusSeverityDescription:'Good Service'}]}]);
     if (u.pathname.includes('/Journey/')) return reply({journeys:[]});
@@ -92,9 +92,34 @@ test('primary, status, disruption, planner and incoming rail URLs retain their o
   }, now, undefined, () => now);
   assert.equal(wire.length, 5); assert.ok(wire.every(v => v.method === 'GET'));
   const byPath = new Map(wire.map(v => { const u = new URL(v.url); return [u.pathname,u]; }));
-  for (const [path,query] of [[`/StopPoint/${r.stationID}/Arrivals`,[['app_key',config.tflAppKey]]],[`/StopPoint/${r.stationID}/ArrivalDepartures`,[['lineIds',r.lineID],['app_key',config.tflAppKey]]],[`/Line/${r.lineID}/Status`,[['detail','true'],['app_key',config.tflAppKey]]],[`/StopPoint/${r.stationID}/Disruption`,[['getFamily','true'],['includeRouteBlockedStops','true'],['flattenResponse','true'],['app_key',config.tflAppKey]]]]) { assert.equal(byPath.get(path).origin,'https://api.tfl.gov.uk'); assert.deepEqual([...byPath.get(path).searchParams],query); }
+  for (const [path,query] of [[`/StopPoint/${r.stationID}/Arrivals`,[['app_key',config.tflAppKey]]],[`/StopPoint/${r.stationID}/ArrivalDepartures`,[['lineIds',r.lineID],['app_key',config.tflAppKey]]],[`/Line/${r.lineID}/Status`,[['detail','true'],['app_key',config.tflAppKey]]],[`/StopPoint/${r.stationID}/Disruption`,[['getFamily','true'],['includeRouteBlockedStops','true'],['flattenResponse','true'],['app_key',config.tflAppKey]]]]) { assert.equal(byPath.get(path).origin,'https://api.tfl.gov.uk'); const params = [...byPath.get(path).searchParams].filter(([k]) => !path.endsWith('/Status') || k !== 'tb085'); assert.deepEqual(params,query); }
   const planner = wire.find(v => new URL(v.url).pathname.includes('/Journey/')); assert.equal(new URL(planner.url).searchParams.get('timeIs'), 'Departing'); assert.equal(new URL(planner.url).searchParams.get('useRealTimeLiveArrivals'), 'false');
   const rows = state.sources['rail-departures'].events; assert.equal(rows.length,2); const arrived = rows.find(e => e.kind === 'incomingArrival'), departed = rows.find(e => e.kind === 'outgoingDeparture');
   assert.equal(arrived.time, now+70000); assert.equal(arrived.scheduledArrival, now+300000); assert.equal(arrived.platform,'6'); assert.equal(arrived.timeEvidence,'arrivalPrediction'); assert.equal(departed.time,now+420000); assert.equal(departed.timeEvidence,'scheduledDeparture');
   assert.ok(rows.every(e => e.receivedAt === now && e.expiresAt === now+90000));
+});
+
+
+test('all19 selected Status scopes keep one canonical shared request and original30-second authority', async () => {
+  const { STATION_BOARD_LINES } = await import('../server/station-board-v2.js');
+  assert.equal(STATION_BOARD_LINES.size,19);
+  for (const [lineID,line] of STATION_BOARD_LINES) {
+    const r = {...record,lineID,stationID:line.boundedOriginID}, wire=[], shared=new Map(), config={workerIntervalMs:90000,tflAppKey:'synthetic-status-key'};
+    const fetchImpl=async(url,options)=>{const u=new URL(url);wire.push({url:String(url),method:options.method || 'GET'});return reply(u.pathname.endsWith('/Status')?[{id:lineID,lineStatuses:[{statusSeverity:10,statusSeverityDescription:'Good Service'}]}]:u.pathname.includes('/Journey/')?{journeys:[]}:[],now-5000);};
+    const states=await Promise.all([0,1].map(()=>refreshStationBoard(r,{},config,fetchImpl,now,undefined,()=>now,shared)));
+    const status=wire.filter(v=>new URL(v.url).pathname.endsWith('/Status'));assert.equal(status.length,1);const id=assertNonce(status[0].url);
+    const canonical=`https://api.tfl.gov.uk/Line/${lineID}/Status?detail=true&app_key=${config.tflAppKey}`;assert.equal(originalURL(status[0].url),canonical);assert.equal(shared.has('GET:'+canonical),true);assert.ok([...shared.keys()].every(k=>!k.includes('tb085=')));
+    for(const state of states){const p=state.availabilityProofs.find(p=>p.sourceScope==='lineStatus');assert.ok(p);assert.equal(p.stationID,r.stationID);assert.equal(p.lineID,lineID);assert.equal(p.observedAt,now-5000);assert.equal(p.expiresAt,now+25000);}
+    const later=[];const next=await refreshStationBoard(r,{},config,async(u,o)=>{later.push(String(u));return fetchImpl(u,o);},now+1000,undefined,()=>now+1000,new Map());const nextURL=later.find(u=>new URL(u).pathname.endsWith('/Status'));assert.notEqual(assertNonce(nextURL),id);assert.equal(next.availabilityProofs.find(p=>p.sourceScope==='lineStatus').observedAt,now-5000);assert.equal(next.availabilityProofs.find(p=>p.sourceScope==='lineStatus').expiresAt,now+25000);
+  }
+});
+
+test('selected Status missing-Age readback reuses exact URL without clock renewal', async()=>{
+  const wire=[], config={workerIntervalMs:90000};let count=0;
+  const state=await refreshStationBoard(record,{},config,async(url,options)=>{const u=new URL(url);wire.push(String(url));const value=reply(u.pathname.endsWith('/Status')?[{id:record.lineID,lineStatuses:[{statusSeverity:10,statusSeverityDescription:'Good Service'}]}]:u.pathname.includes('/Journey/')?{journeys:[]}:[],now-5000);if(u.pathname.endsWith('/Status')&&++count===1)value.headers.delete('age');return value;},now,undefined,()=>now);
+  const status=wire.filter(u=>new URL(u).pathname.endsWith('/Status'));assert.equal(status.length,2);assert.equal(status[0],status[1]);assertNonce(status[0]);const p=state.availabilityProofs.find(p=>p.sourceScope==='lineStatus');assert.equal(p.observedAt,now-5000);assert.equal(p.expiresAt,now+25000);
+});
+
+test('selected Status present malformed or stale Age does not retry; absent stops after one readback', async()=>{
+  for(const age of ['invalid','-1','601','31',null]){const wire=[];const state=await refreshStationBoard(record,{}, {workerIntervalMs:90000},async(url)=>{const u=new URL(url);wire.push(String(url));const value=reply(u.pathname.endsWith('/Status')?[{id:record.lineID,lineStatuses:[{statusSeverity:10,statusSeverityDescription:'Good Service'}]}]:u.pathname.includes('/Journey/')?{journeys:[]}:[],now-5000);if(u.pathname.endsWith('/Status')){if(age===null)value.headers.delete('age');else value.headers.set('age',age);}return value;},now,undefined,()=>now);const status=wire.filter(u=>new URL(u).pathname.endsWith('/Status'));assert.equal(status.length,age===null?2:1);assertNonce(status[0]);assert.ok(status.every(u=>u===status[0]));assert.equal(state.availabilityProofs.some(p=>p.sourceScope==='lineStatus'),false);}
 });

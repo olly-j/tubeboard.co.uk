@@ -397,7 +397,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   // Legacy per-record corroboration must inspect its original context even when
   // persistent HEAD authority removes that context before other source awaits.
   const legacyPublicationContext = record.timetablePublicationAuthorityVersion === 1 ? null : previous.sources?.timetable;
-  const request = (inputURL, method = 'GET', boundedTT = false) => {
+  const request = (inputURL, method = 'GET', boundedTT = false, lineStatusReadback = false) => {
     const url = new URL(inputURL);
     if (config.tflAppKey && url.hostname === 'api.tfl.gov.uk') url.searchParams.set('app_key', config.tflAppKey);
     const requestKey = `${method}:${url.href}`;
@@ -406,9 +406,9 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
       // and size limit belong to this one public request, including failures.
       publicResponses.set(requestKey, (async () => {
         try {
-          // Match the APP's official timetable cache readback: one UUID belongs
+          // Match the APP's official publication/TT/Status readback: one UUID belongs
           // to this canonical shared request, not to each consumer or retry.
-          if (boundedTT || method === 'HEAD' && url.href === 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip') url.searchParams.set('tb085', crypto.randomUUID());
+          if (boundedTT || lineStatusReadback || method === 'HEAD' && url.href === 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip') url.searchParams.set('tb085', crypto.randomUUID());
           const options = { signal, includeHeaders: true, method, ...(boundedTT ? { bodyLimitBytes: 2000000, decodeJSON: bytes => parseBoundedJSON(bytes) } : {}) };
           let response = await fetchJsonResponse(url, fetchImpl, options);
           if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, fetchImpl, options);
@@ -463,7 +463,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   const arrivalTask = request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`)).catch(() => ({ ok: false }));
   const railTask = rail ? request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/ArrivalDepartures?lineIds=${record.lineID}`)).catch(() => ({ ok: false })) : Promise.resolve({ ok: false });
   const [service, station] = await Promise.all([
-    request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Status?detail=true`)),
+    request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Status?detail=true`), 'GET', false, true),
     request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Disruption?getFamily=true&includeRouteBlockedStops=true&flattenResponse=true`))
   ]);
   const authority = { mode: STATION_BOARD_LINES.get(record.lineID)?.mode, stationName: (id) => validBoard(id, record.lineID) ? STATION_BOARD_STATIONS.get(id)?.stationName : null, stationLines: id => STATION_BOARD_STATIONS.get(id)?.lineIDs || [], lineMode: line => STATION_BOARD_LINES.get(line)?.mode, isRailLine: line => STATION_BOARD_LINES.get(line)?.qualifiedRailDepartureSource === true };
