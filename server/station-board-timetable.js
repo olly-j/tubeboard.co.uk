@@ -277,7 +277,7 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
         const departure=londonClock(serviceDay+'T'+String(Math.floor(minute/60)).padStart(2,'0')+':'+String(minute%60).padStart(2,'0')+':00');if(!Number.isFinite(departure))fail('unsupportedCalendar');
         if(departure<at || departure<londonClock(today+'T00:00:00') || departure>=tomorrow)continue;
         const destinationID=r.path.at(-1), destination=STATION_BOARD_STATIONS.get(destinationID);
-        if(destinationID===record.stationID || !validBoard(destinationID,record.lineID) || r.path.some(id=>!validBoard(id,record.lineID)) || stationNames.has(destinationID) && names(stationNames.get(destinationID))!==names(destination.stationName))fail();
+        if(destinationID===record.stationID && !r.path.slice(0,-1).some(id=>id!==record.stationID && validBoard(id,record.lineID)) || !validBoard(destinationID,record.lineID) || r.path.some(id=>!validBoard(id,record.lineID)) || stationNames.has(destinationID) && names(stationNames.get(destinationID))!==names(destination.stationName))fail();
         const bank=r.path.includes('940GZZLUBNK'),cross=r.path.includes('940GZZLUCHX');if(record.lineID==='northern' && bank && cross)fail();const via=record.lineID==='northern' ? bank?'Bank':cross?'Charing Cross':null : null;
         const id=`schedule:${record.lineID}:${record.stationID}:${day}:${r.routeIndex}:${r.scheduleIndex}:${scope.direction===null?'':scope.direction+'.'}${r.journeyIndex}`;
         const directionFields=scope.direction===null?{}:{publicationDirection:scope.direction};
