@@ -1,9 +1,17 @@
+import { observePublication, observeRevision, applyPublicationAuthority, publicationGeneration, scopedSeedMatchesAsset, normalizedPublicationAuthority } from './station-board-publication.js';
+import { readPublicationAsset } from './timetable-publication-resource.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
 import { TransactionalJsonStore } from './transactional-json-store.js';
+import { admitPlannedSeed } from './station-board-seed.js';
+import { STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, buildStationBoardState } from './station-board-v2.js';
 
+// Never log this tuple: it includes token custody and exact selected scope.
+export function registrationTuple(record) {
+  return JSON.stringify(['environment','activityID','tokenUpdatedAt','pushTokenHex','stationID','lineID','selectionMode','platformID','platformHeading','platformLabel','platformDirection','activityStartedAt','activityEndsAt','contentStateContract','plannedPresentationVersion','timetablePublicationAuthorityVersion'].map((k) => record[k] ?? null));
+}
 export const TUBE_LINES = new Map([
   ['bakerloo', 'Bakerloo'],
   ['central', 'Central'],
@@ -64,15 +72,42 @@ export function loadConfig(env = process.env) {
 }
 
 export class LiveActivityStore extends TransactionalJsonStore {
-  constructor(filePath) {
+  constructor(filePath, { publicationLoader = readPublicationAsset } = {}) {
     super(filePath, { records: [] }, (parsed) => ({
-      records: Array.isArray(parsed.records) ? parsed.records : []
+      records: Array.isArray(parsed.records) ? parsed.records : [],
+      ...(parsed.publicationAuthority === undefined ? {} : { publicationAuthority: normalizedPublicationAuthority(parsed.publicationAuthority) })
     }));
+    this.publicationLoader = publicationLoader;
   }
 
+  readPublicationAsset(sha) { return this.publicationLoader(sha); }
+  publicationAuthority() { return this.snapshot(state => state.publicationAuthority || {}); }
+  async observeOfficialPublication(input) {
+    return this.transaction(state => {
+      state.publicationAuthority = observePublication(state.publicationAuthority, input);
+      for (const record of state.records) if (record.stationBoardCache) record.stationBoardCache = applyPublicationAuthority(record.stationBoardCache, state.publicationAuthority);
+      return { value: state.publicationAuthority };
+    });
+  }
+  async observePublicationRevision(identity) {
+    return this.transaction(state => {
+      state.publicationAuthority = observeRevision(state.publicationAuthority, identity);
+      for (const record of state.records) if (record.stationBoardCache) record.stationBoardCache = applyPublicationAuthority(record.stationBoardCache, state.publicationAuthority);
+      return { value: state.publicationAuthority };
+    });
+  }
   async upsertToken(payload, now = new Date()) {
+    // Only fixed reviewed local assets may create revision authority. Seed
+    // references never create it; no HTTP or qualification occurs under lock.
+    const assets = new Map(), revisions = [];
+    for (const context of payload.plannedContextSeed?.contexts || []) if (context.publication?.sha256) {
+      try { const asset = await this.readPublicationAsset(context.publication.sha256); assets.set(context.publication.sha256, asset); revisions.push(asset.identity); } catch { /* unavailable */ }
+    }
     return this.transaction((state) => {
       const nowIso = now.toISOString();
+      const oldAuthorityGeneration = publicationGeneration(state.publicationAuthority);
+      for (const revision of revisions) state.publicationAuthority = observeRevision(state.publicationAuthority, revision);
+      const authorityChanged = oldAuthorityGeneration !== publicationGeneration(state.publicationAuthority);
       const matchIndex = state.records.findIndex((record) => {
         return record.environment === payload.environment
           && record.activityID === payload.activityID;
@@ -80,6 +115,31 @@ export class LiveActivityStore extends TransactionalJsonStore {
 
       const previous = matchIndex >= 0 ? state.records[matchIndex] : {};
       const isSameActivity = previous.activityID === payload.activityID;
+      // An older token registration cannot downgrade an already negotiated
+      // activity or change its selected board behind a newer observation.
+      if (isSameActivity && (previous.contentStateContract === STATION_BOARD_CONTRACT || payload.contentStateContract === STATION_BOARD_CONTRACT) && Date.parse(payload.tokenUpdatedAt) < Date.parse(previous.tokenUpdatedAt)) return { changed: authorityChanged, value: { ...redactRecord(previous), registrationAccepted: false } };
+      if (isSameActivity && previous.contentStateContract === STATION_BOARD_CONTRACT && Date.parse(payload.tokenUpdatedAt) === Date.parse(previous.tokenUpdatedAt)) {
+        // Equal observations cannot establish a different board/token contract.
+        let capabilityChanged = false;
+        const equalScope = registrationTuple({ ...payload, plannedPresentationVersion: previous.plannedPresentationVersion, timetablePublicationAuthorityVersion: previous.timetablePublicationAuthorityVersion }) === registrationTuple(previous);
+        if (!equalScope) return { changed: authorityChanged, value: { ...redactRecord(previous), registrationAccepted: false } };
+        if (previous.timetablePublicationAuthorityVersion !== payload.timetablePublicationAuthorityVersion) {
+          if (previous.timetablePublicationAuthorityVersion === undefined && payload.timetablePublicationAuthorityVersion === 1
+            && previous.plannedPresentationVersion === 2 && payload.plannedPresentationVersion === 2) {
+            // Exact equal token/scope may monotonically gain the optional
+            // interpreter. Its tuple changes, so old callbacks cannot publish.
+            previous.timetablePublicationAuthorityVersion = 1; delete previous.lastBoardContentDigest; capabilityChanged = true;
+          } else return { value: { ...redactRecord(previous), registrationAccepted: false } };
+        }
+        if (previous.plannedPresentationVersion !== payload.plannedPresentationVersion) {
+          if (payload.plannedPresentationVersion === undefined) { delete previous.plannedPresentationVersion; delete previous.lastBoardContentDigest; }
+          return { value: { ...redactRecord(previous), registrationAccepted: payload.plannedPresentationVersion === undefined } };
+        }
+        const seed = admitPlannedSeed(payload.plannedContextSeed, previous, now.getTime());
+        if (!seed.errors.length && (Object.keys(seed.sources).length || seed.availabilityProofs?.length)) previous.stationBoardCache = applyPublicationAuthority(mergeContexts(applyPublicationAuthority(previous.stationBoardCache, state.publicationAuthority), { ...seed, sources: Object.fromEntries(Object.entries(seed.sources).filter(([source]) => source !== 'timetable' || (payload.plannedContextSeed.contexts.filter(c => ['timetable','unified-timetable'].includes(c.sourceID)).every(c => scopedSeedMatchesAsset(c, assets.get(c.publication.sha256), previous))))) }, previous, now.getTime()), state.publicationAuthority);
+        return { changed: authorityChanged || capabilityChanged || payload.plannedContextSeed !== undefined, value: { ...redactRecord(previous), registrationAccepted: true } };
+      }
+      if (previous.contentStateContract === STATION_BOARD_CONTRACT && (!validBoard(payload.stationID, payload.lineID))) return { changed: authorityChanged, value: { ...redactRecord(previous), registrationAccepted: false } };
       const record = {
         ...previous,
         installID: payload.installID,
@@ -115,6 +175,17 @@ export class LiveActivityStore extends TransactionalJsonStore {
         backoffReason: null
       };
 
+      if (payload.contentStateContract === STATION_BOARD_CONTRACT || previous.contentStateContract === STATION_BOARD_CONTRACT) {
+        record.contentStateContract = STATION_BOARD_CONTRACT;
+        if (payload.timetablePublicationAuthorityVersion === 1) record.timetablePublicationAuthorityVersion = 1;
+        else delete record.timetablePublicationAuthorityVersion;
+        if (payload.plannedPresentationVersion === 2) record.plannedPresentationVersion = 2;
+        else delete record.plannedPresentationVersion;
+        if (isSameActivity && registrationTuple(previous) !== registrationTuple(record)) delete record.lastBoardContentDigest;
+        if (previous.stationID !== payload.stationID || previous.lineID !== payload.lineID) delete record.stationBoardCache;
+        const seed = admitPlannedSeed(payload.plannedContextSeed, record, now.getTime());
+        if (!seed.errors.length && (Object.keys(seed.sources).length || Object.keys(seed.closureSources).length || seed.availabilityProofs?.length)) record.stationBoardCache = applyPublicationAuthority(mergeContexts(applyPublicationAuthority(record.stationBoardCache, state.publicationAuthority), { sources: Object.fromEntries(Object.entries(seed.sources).filter(([source]) => source !== 'timetable' || payload.plannedContextSeed.contexts.filter(c => ['timetable','unified-timetable'].includes(c.sourceID)).every(c => scopedSeedMatchesAsset(c, assets.get(c.publication.sha256), record)))), closureSources: seed.closureSources, availabilityProofs: seed.availabilityProofs }, record, now.getTime()), state.publicationAuthority);
+      }
       if (matchIndex >= 0) {
         state.records[matchIndex] = record;
       } else {
@@ -138,7 +209,7 @@ export class LiveActivityStore extends TransactionalJsonStore {
         }
       }
 
-      return { value: redactRecord(record) };
+      return { value: { ...redactRecord(record), ...(record.contentStateContract === STATION_BOARD_CONTRACT ? { registrationAccepted: true } : {}) } };
     });
   }
 
@@ -183,10 +254,19 @@ export class LiveActivityStore extends TransactionalJsonStore {
     }));
   }
 
+  async retainStationBoard(activityID, environment, incoming, now = new Date(), expectedTuple = null) {
+    return this.transaction((state) => {
+      const record = this.findByActivity(activityID, environment, state);
+      if (!record || record.active === false || record.contentStateContract !== STATION_BOARD_CONTRACT || expectedTuple !== null && registrationTuple(record) !== expectedTuple) return { changed: false, value: null };
+      record.stationBoardCache = applyPublicationAuthority(mergeContexts(applyPublicationAuthority(record.stationBoardCache, state.publicationAuthority), incoming, record, now.getTime()), state.publicationAuthority);
+      return { value: record.stationBoardCache };
+    });
+  }
+
   async markPushed(activityID, environment, info, now = new Date()) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || info.expectedTuple !== undefined && registrationTuple(record) !== info.expectedTuple || info.expectedPublicationGeneration !== undefined && publicationGeneration(state.publicationAuthority) !== info.expectedPublicationGeneration) {
         return { changed: false };
       }
 
@@ -198,15 +278,20 @@ export class LiveActivityStore extends TransactionalJsonStore {
         record.lastStationName = info.contentState.stationName;
         record.lastLineName = info.contentState.lineName;
         record.lastPlatform = info.contentState.platform;
+        if (record.contentStateContract === STATION_BOARD_CONTRACT) {
+          record.lastBoardContentDigest = info.contentDigest;
+          record.nextBoardBoundaryAt = info.contentState.nextBoardBoundaryAt;
+        }
       }
       record.backoffUntil = null;
     });
   }
 
-  async markBackoff(activityID, environment, delayMs, reason, now = new Date()) {
+  async markBackoff(activityID, environment, delayMs, reason, now = new Date(), expectedTuple = null, expectedPublicationGeneration = null) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || expectedTuple !== null && registrationTuple(record) !== expectedTuple
+        || expectedPublicationGeneration !== null && publicationGeneration(state.publicationAuthority) !== expectedPublicationGeneration) {
         return { changed: false };
       }
 
@@ -216,10 +301,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
     });
   }
 
-  async markPaused(activityID, environment, now = new Date()) {
+  async markPaused(activityID, environment, now = new Date(), expectedTuple = null) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || expectedTuple !== null && registrationTuple(record) !== expectedTuple) {
         return { changed: false };
       }
 
@@ -232,10 +317,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
     });
   }
 
-  async markDurationEnded(activityID, environment, now = new Date()) {
+  async markDurationEnded(activityID, environment, now = new Date(), expectedTuple = null) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || expectedTuple !== null && registrationTuple(record) !== expectedTuple) {
         return { changed: false };
       }
 
@@ -246,10 +331,11 @@ export class LiveActivityStore extends TransactionalJsonStore {
     });
   }
 
-  async deactivate(activityID, environment, reason, now = new Date()) {
+  async deactivate(activityID, environment, reason, now = new Date(), expectedTuple = null, expectedPublicationGeneration = null) {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
-      if (!record) {
+      if (!record || expectedTuple !== null && registrationTuple(record) !== expectedTuple
+        || expectedPublicationGeneration !== null && publicationGeneration(state.publicationAuthority) !== expectedPublicationGeneration) {
         return { changed: false };
       }
 
@@ -452,7 +538,7 @@ export class TokenRateLimiter {
   }
 }
 
-export function validateTokenPayload(input) {
+export function validateTokenPayload(input, now = new Date()) {
   const payload = input && typeof input === 'object' ? input : {};
   const errors = [];
   const requiredStringFields = [
@@ -478,10 +564,17 @@ export function validateTokenPayload(input) {
     errors.push('stationID is invalid');
   }
 
-  if (typeof payload.lineID === 'string' && !LIVE_ACTIVITY_LINES.has(payload.lineID)) {
+  const v2 = payload.contentStateContract === STATION_BOARD_CONTRACT;
+  if (payload.timetablePublicationAuthorityVersion !== undefined && (!v2 || payload.plannedPresentationVersion !== 2 || payload.timetablePublicationAuthorityVersion !== 1)) errors.push('timetablePublicationAuthorityVersion is unsupported');
+  if (payload.plannedPresentationVersion !== undefined && (!v2 || payload.plannedPresentationVersion !== 2)) errors.push('plannedPresentationVersion is unsupported');
+  if (payload.contentStateContract !== undefined && !v2) errors.push('contentStateContract is unsupported');
+  if (v2 && !validBoard(payload.stationID, payload.lineID)) errors.push('stationID is not on the selected station-board line');
+  if (typeof payload.lineID === 'string' && !(v2 ? STATION_BOARD_LINES : LIVE_ACTIVITY_LINES).has(payload.lineID)) {
     errors.push('lineID is not a supported Live Activity line');
   }
 
+  if (payload.plannedContextSeed !== undefined && !v2) errors.push('plannedContextSeed requires station-board-v2');
+  if (v2) errors.push(...admitPlannedSeed(payload.plannedContextSeed, payload, now.getTime()).errors);
   const explicitSelectionMode = optionalString(payload.selectionMode);
   const selectionMode = inferSelectionMode(payload);
   if (explicitSelectionMode && !['platform', 'allPlatforms'].includes(explicitSelectionMode)) {
@@ -534,7 +627,8 @@ export function validateTokenPayload(input) {
       appBundleID: String(payload.appBundleID || '').trim(),
       appVersion: String(payload.appVersion || '').trim(),
       buildNumber: String(payload.buildNumber || '').trim(),
-      environment: String(payload.environment || '').trim()
+      environment: String(payload.environment || '').trim(),
+      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(payload.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}), ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
     }
   };
 }
@@ -672,12 +766,16 @@ export function buildContentState(record, arrivals, statuses, now = new Date()) 
 }
 
 export function buildApnsPayload(contentState, now = new Date()) {
-  const staleAt = new Date(now.getTime() + LIVE_ACTIVITY_STALE_BUFFER_MS);
+  const staleAt = contentState.contentStateContract === STATION_BOARD_CONTRACT
+    ? new Date((contentState.staleAt * 1000) + APPLE_REFERENCE_UNIX_SECONDS * 1000)
+    : new Date(now.getTime() + LIVE_ACTIVITY_STALE_BUFFER_MS);
   return {
     aps: {
       timestamp: toUnixSeconds(now),
       event: 'update',
-      'content-state': contentState,
+      'content-state': contentState.contentStateContract === STATION_BOARD_CONTRACT
+        ? Object.fromEntries(Object.entries(contentState).filter(([field]) => field !== 'nextBoardBoundaryAt'))
+        : contentState,
       'stale-date': toUnixSeconds(staleAt)
     }
   };
@@ -751,7 +849,7 @@ export async function pushLiveActivityUpdate(record, payload, config, options = 
   throw error;
 }
 
-export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal }) {
+export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal, cacheOnly = false, clock = () => Date.now() }) {
   signal?.throwIfAborted();
   await store.expireOld(now, config);
   const records = await store.listActive(now, config);
@@ -768,27 +866,32 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       continue;
     }
 
+    const expectedTuple = record.contentStateContract === STATION_BOARD_CONTRACT ? registrationTuple(record) : null;
     try {
+      if (expectedTuple !== null) {
+        const current = (await store.listActive(now, config)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
+        if (!current || registrationTuple(current) !== expectedTuple) continue;
+      }
       const pausedAt = Date.parse(record.pausedAt || '');
       if (!Number.isFinite(pausedAt)) {
         const pushResult = await pushImpl(record, buildPausedApnsPayload(record, now), config, { signal });
-        await store.markPaused(record.activityID, record.environment, now);
+        await store.markPaused(record.activityID, record.environment, now, expectedTuple);
         logger.info(`Live Activity paused after its selected duration: APNs ${pushResult?.status || 200}`);
         continue;
       }
 
       if (now.getTime() - pausedAt >= config.pauseGraceMs) {
         const pushResult = await pushImpl(record, buildEndApnsPayload(record, now), config, { signal });
-        await store.markDurationEnded(record.activityID, record.environment, now);
+        await store.markDurationEnded(record.activityID, record.environment, now, expectedTuple);
         logger.info(`Live Activity ended after its pause grace period: APNs ${pushResult?.status || 200}`);
       }
     } catch (error) {
       signal?.throwIfAborted();
       if (error.permanent) {
-        await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now);
+        await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now, expectedTuple);
         logger.warn(`Live Activity deactivated after permanent APNs error: ${error.reason || error.message}`);
       } else {
-        await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
+        await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now, expectedTuple);
         logger.warn(`Live Activity duration transition backed off: ${error.message}`);
       }
     }
@@ -798,12 +901,53 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
     return;
   }
 
+  const publicResponses = new Map();
+  for (const record of liveRecords.filter((record) => record.contentStateContract === STATION_BOARD_CONTRACT)) {
+    signal?.throwIfAborted();
+    const expectedTuple = registrationTuple(record);
+    let expectedPublicationGeneration;
+    try {
+      let cache = record.stationBoardCache || {};
+      if (!cacheOnly && !(cache.nextRefreshAt > now.getTime())) {
+        // Only public HTTP reads are shared. Each activity qualifies those
+        // immutable receipts against its own selection and retained context.
+        cache = await refreshStationBoard(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, store);
+      }
+      const effectiveNow = new Date(clock());
+      cache = await store.retainStationBoard(record.activityID, record.environment, cache, effectiveNow, expectedTuple);
+      if (!cache) continue;
+      const publicationAuthority = store.publicationAuthority();
+      cache = applyPublicationAuthority(cache, publicationAuthority);
+      expectedPublicationGeneration = publicationGeneration(publicationAuthority);
+      const contentState = buildStationBoardState(record, cache, effectiveNow.getTime());
+      const digestInput = { ...contentState }; delete digestInput.updatedAt; delete digestInput.nextBoardBoundaryAt;
+      const contentDigest = crypto.createHash('sha256').update(JSON.stringify(digestInput)).digest('hex');
+      if (contentDigest !== record.lastBoardContentDigest) {
+        const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
+        if (!current || registrationTuple(current) !== expectedTuple || publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;
+        await pushImpl(current, buildApnsPayload(contentState, effectiveNow), config, { signal });
+        await store.markPushed(record.activityID, record.environment, { emptyArrivals: contentState.arrivals.length === 0, contentState, contentDigest, expectedTuple, expectedPublicationGeneration }, effectiveNow);
+        logger.info(`Live Activity station-board update pushed, arrivals ${contentState.arrivals.length}`);
+      }
+      const retainedRecord = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
+      if (retainedRecord && registrationTuple(retainedRecord) === expectedTuple && publicationGeneration(store.publicationAuthority()) === expectedPublicationGeneration && typeof scheduleRolloverPush === 'function') scheduleRolloverPush(retainedRecord, contentState, effectiveNow, config.workerIntervalMs);
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (expectedPublicationGeneration !== undefined && publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;
+      if (error.permanent) await store.deactivate(record.activityID, record.environment, error.reason || 'permanentApnsError', now, expectedTuple, expectedPublicationGeneration ?? null);
+      else await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120000, 'stationBoardPushFailed', now, expectedTuple, expectedPublicationGeneration ?? null);
+      logger.warn('Live Activity station-board update could not be delivered');
+    }
+  }
+  // A typed cache boundary never admits new legacy source reads.
+  const legacyRecords = cacheOnly ? [] : liveRecords.filter((record) => record.contentStateContract !== STATION_BOARD_CONTRACT);
+  if (!legacyRecords.length) return;
   let statuses = [];
   try {
     statuses = await fetchTfLStatuses(config, fetchImpl, { signal });
   } catch (error) {
     signal?.throwIfAborted();
-    for (const record of liveRecords) {
+    for (const record of legacyRecords) {
       await store.markBackoff(record.activityID, record.environment, error.backoffMs || 120_000, error.message, now);
     }
     logger.warn(`Live Activity worker backed off all records: ${error.message}`);
@@ -812,7 +956,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
 
   const arrivalsByStation = new Map();
 
-  for (const record of liveRecords) {
+  for (const record of legacyRecords) {
     signal?.throwIfAborted();
     try {
       if (!arrivalsByStation.has(record.stationID)) {
@@ -862,6 +1006,10 @@ function shouldBackoffEmptyArrivals(record, contentState) {
 }
 
 export function getRolloverDelayMs(contentState, now = new Date(), workerIntervalMs = 90_000) {
+  if (contentState.contentStateContract === STATION_BOARD_CONTRACT) {
+    const delay = contentState.nextBoardBoundaryAt - now.getTime();
+    return Number.isFinite(contentState.nextBoardBoundaryAt) && delay > 0 && delay < workerIntervalMs ? delay : null;
+  }
   const firstExpectedArrival = contentState.arrivals?.[0]?.expectedArrival;
   if (typeof firstExpectedArrival !== 'number') {
     return null;

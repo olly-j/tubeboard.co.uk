@@ -1,0 +1,93 @@
+[
+  {
+    "lineID": "elizabeth",
+    "stationID": "910GSHENFLD",
+    "receivedAt": "2026-10-01T21:56:40.913451+00:00",
+    "filename": "elizabeth-incoming-raw.json",
+    "sha256": "1d4ac59d24444d5a551cc87d17967a59f9a0f28c3ead8b66d49f944c8b00d93c",
+    "originalURL": "https://api.tfl.gov.uk/StopPoint/910GSHENFLD/ArrivalDepartures?lineIds=elizabeth",
+    "headers": {
+      "date": "Thu, 01 Oct 2026 21:56:40 GMT",
+      "age": "0",
+      "cache-control": "public, must-revalidate, max-age=30, s-maxage=60"
+    }
+  },
+  {
+    "lineID": "liberty",
+    "stationID": "910GROMFORD",
+    "receivedAt": "2026-10-01T21:56:42.556748+00:00",
+    "filename": "liberty-incoming-raw.json",
+    "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "originalURL": "https://api.tfl.gov.uk/StopPoint/910GROMFORD/ArrivalDepartures?lineIds=liberty",
+    "headers": {
+      "date": "Thu, 01 Oct 2026 21:56:42 GMT",
+      "age": "0",
+      "cache-control": "public, must-revalidate, max-age=30, s-maxage=60"
+    }
+  },
+  {
+    "lineID": "lioness",
+    "stationID": "910GWATFJDC",
+    "receivedAt": "2026-10-01T21:56:44.206646+00:00",
+    "filename": "lioness-incoming-raw.json",
+    "sha256": "3b9bb37478ecc87d6a942565a7c4cb944b19639c6511ad2a1b63441f4b40ca5b",
+    "originalURL": "https://api.tfl.gov.uk/StopPoint/910GWATFJDC/ArrivalDepartures?lineIds=lioness",
+    "headers": {
+      "date": "Thu, 01 Oct 2026 21:56:44 GMT",
+      "age": "0",
+      "cache-control": "public, must-revalidate, max-age=30, s-maxage=60"
+    }
+  },
+  {
+    "lineID": "mildmay",
+    "stationID": "910GWLSDJHL",
+    "receivedAt": "2026-10-01T21:56:45.880763+00:00",
+    "filename": "mildmay-incoming-raw.json",
+    "sha256": "240c343d5f7780799fc6a96b9c659042e4dd26652775683a936605498addb8c4",
+    "originalURL": "https://api.tfl.gov.uk/StopPoint/910GWLSDJHL/ArrivalDepartures?lineIds=mildmay",
+    "headers": {
+      "date": "Thu, 01 Oct 2026 21:56:45 GMT",
+      "age": "0",
+      "cache-control": "public, must-revalidate, max-age=30, s-maxage=60"
+    }
+  },
+  {
+    "lineID": "suffragette",
+    "stationID": "910GBARKRIV",
+    "receivedAt": "2026-10-01T21:56:47.557160+00:00",
+    "filename": "suffragette-incoming-raw.json",
+    "sha256": "3ba8147675d4a33d1963d567efe9e1669886c2121a776370caf35f53157d9bbe",
+    "originalURL": "https://api.tfl.gov.uk/StopPoint/910GBARKRIV/ArrivalDepartures?lineIds=suffragette",
+    "headers": {
+      "date": "Thu, 01 Oct 2026 21:56:47 GMT",
+      "age": "0",
+      "cache-control": "public, must-revalidate, max-age=30, s-maxage=60"
+    }
+  },
+  {
+    "lineID": "weaver",
+    "stationID": "910GENFLDTN",
+    "receivedAt": "2026-10-01T21:56:49.300941+00:00",
+    "filename": "weaver-incoming-raw.json",
+    "sha256": "ee87815f3293e9cb6adda2b2fc88ad9cd4e3485d3a4bb62d38dd6f5bc4391f5f",
+    "originalURL": "https://api.tfl.gov.uk/StopPoint/910GENFLDTN/ArrivalDepartures?lineIds=weaver",
+    "headers": {
+      "date": "Thu, 01 Oct 2026 21:56:49 GMT",
+      "age": "0",
+      "cache-control": "public, must-revalidate, max-age=30, s-maxage=60"
+    }
+  },
+  {
+    "lineID": "windrush",
+    "stationID": "910GDALS",
+    "receivedAt": "2026-10-01T22:01:57.912316+00:00",
+    "filename": "windrush-incoming-raw.json",
+    "sha256": "d520e821e398e32ff18085765b97345d9dd8ac4ef08de6fd68738a50146b658f",
+    "originalURL": "https://api.tfl.gov.uk/StopPoint/910GDALS/ArrivalDepartures?lineIds=windrush",
+    "headers": {
+      "date": "Thu, 01 Oct 2026 22:01:57 GMT",
+      "age": "0",
+      "cache-control": "public, must-revalidate, max-age=30, s-maxage=60"
+    }
+  }
+]

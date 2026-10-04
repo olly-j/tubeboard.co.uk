@@ -1,0 +1,157 @@
+{
+  "scheduled": {
+    "aps": {
+      "timestamp": 1790859600,
+      "event": "update",
+      "content-state": {
+        "contentStateContract": "station-board-v2",
+        "stationName": "Edgware",
+        "lineName": "Northern",
+        "platform": "All platforms",
+        "arrivals": [
+          {
+            "id": "plan",
+            "destination": "Morden",
+            "expectedArrival": 812552580,
+            "countdownText": "3 min",
+            "timeEvidence": "scheduledDeparture",
+            "via": "Bank",
+            "reportedPlatform": null,
+            "expiresAt": 812552520,
+            "isCached": false
+          }
+        ],
+        "status": "Status unavailable",
+        "statusReason": null,
+        "isDisrupted": false,
+        "updatedAt": 812552400,
+        "staleAt": 812552520
+      },
+      "stale-date": 1790859720
+    }
+  },
+  "estimated": {
+    "aps": {
+      "timestamp": 1790859600,
+      "event": "update",
+      "content-state": {
+        "contentStateContract": "station-board-v2",
+        "stationName": "Edgware",
+        "lineName": "Northern",
+        "platform": "All platforms",
+        "arrivals": [
+          {
+            "id": "plan",
+            "destination": "Morden",
+            "expectedArrival": 812552580,
+            "countdownText": "3 min",
+            "timeEvidence": "estimatedDeparture",
+            "via": null,
+            "reportedPlatform": "Platform 2",
+            "expiresAt": 812552520,
+            "isCached": false
+          }
+        ],
+        "status": "Status unavailable",
+        "statusReason": null,
+        "isDisrupted": false,
+        "updatedAt": 812552400,
+        "staleAt": 812552520
+      },
+      "stale-date": 1790859720
+    }
+  },
+  "untimed": {
+    "aps": {
+      "timestamp": 1790859600,
+      "event": "update",
+      "content-state": {
+        "contentStateContract": "station-board-v2",
+        "stationName": "Edgware",
+        "lineName": "Northern",
+        "platform": "All platforms",
+        "arrivals": [
+          {
+            "id": "plan",
+            "destination": "Morden",
+            "expectedArrival": null,
+            "countdownText": "--",
+            "timeEvidence": "destinationOnly",
+            "via": null,
+            "reportedPlatform": "Platform 3",
+            "expiresAt": 812552520,
+            "isCached": false
+          }
+        ],
+        "status": "Status unavailable",
+        "statusReason": null,
+        "isDisrupted": false,
+        "updatedAt": 812552400,
+        "staleAt": 812552520
+      },
+      "stale-date": 1790859720
+    }
+  },
+  "incoming": {
+    "aps": {
+      "timestamp": 1790859600,
+      "event": "update",
+      "content-state": {
+        "contentStateContract": "station-board-v2",
+        "stationName": "Edgware",
+        "lineName": "Northern",
+        "platform": "All platforms",
+        "arrivals": [
+          {
+            "id": "plan",
+            "destination": "Edgware",
+            "expectedArrival": 812552580,
+            "countdownText": "3 min",
+            "timeEvidence": "reportedIncomingArrival",
+            "via": null,
+            "reportedPlatform": null,
+            "expiresAt": 812552520,
+            "isCached": false
+          }
+        ],
+        "status": "Status unavailable",
+        "statusReason": null,
+        "isDisrupted": false,
+        "updatedAt": 812552400,
+        "staleAt": 812552520
+      },
+      "stale-date": 1790859720
+    }
+  },
+  "through": {
+    "aps": {
+      "timestamp": 1790859600,
+      "event": "update",
+      "content-state": {
+        "contentStateContract": "station-board-v2",
+        "stationName": "Edgware",
+        "lineName": "Northern",
+        "platform": "All platforms",
+        "arrivals": [
+          {
+            "id": "plan",
+            "destination": "Morden",
+            "expectedArrival": 812552580,
+            "countdownText": "3 min",
+            "timeEvidence": "throughArrivalPrediction",
+            "via": null,
+            "reportedPlatform": null,
+            "expiresAt": 812552520,
+            "isCached": false
+          }
+        ],
+        "status": "Status unavailable",
+        "statusReason": null,
+        "isDisrupted": false,
+        "updatedAt": 812552400,
+        "staleAt": 812552520
+      },
+      "stale-date": 1790859720
+    }
+  }
+}

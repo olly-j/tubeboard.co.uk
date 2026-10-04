@@ -7,7 +7,7 @@
     "start": "node server/index.js",
     "dev": "LIVE_ACTIVITY_WORKER_ENABLED=false node server/index.js",
     "test": "node --test",
-    "check": "npm test && node --check server/index.js && node --check server/live-activity.js && node --check server/transactional-json-store.js && node --check server/disruption-alerts.js && node --check server/notification-transport.js && node --check server/worker-lifecycle.js && node --check server/status-monitor.js && node --check server/version.js && node --check site-20260724.js && scripts/check-repository.sh"
+    "check": "npm test && node --check server/index.js && node --check server/live-activity.js && node --check server/station-board-v2.js && node --check server/station-board-availability.js && node --check server/station-board-seed.js && node --check server/transactional-json-store.js && node --check server/disruption-alerts.js && node --check server/notification-transport.js && node --check server/worker-lifecycle.js && node --check server/status-monitor.js && node --check server/version.js && node --check site-20260724.js && node --check server/bounded-json.js && node --check server/station-board-timetable.js && scripts/check-repository.sh"
   },
   "engines": {
     "node": ">=20"

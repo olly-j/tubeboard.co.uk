@@ -4,6 +4,7 @@ export class SerialWorker {
   #active = null;
   #controller = null;
   #pending = false;
+  #pendingCacheOnly = true;
   #stopped = false;
   #started = false;
   #timers = new Map();
@@ -24,16 +25,19 @@ export class SerialWorker {
     this.#scheduleInterval();
   }
 
-  trigger() {
+  trigger({ cacheOnly = false } = {}) {
     if (this.#stopped) return Promise.resolve();
     this.#pending = true;
+    this.#pendingCacheOnly &&= cacheOnly;
     if (this.#active) return this.#active;
     this.#active = Promise.resolve().then(async () => {
       while (this.#pending && !this.#stopped) {
         this.#pending = false;
+        const cacheOnly = this.#pendingCacheOnly;
+        this.#pendingCacheOnly = true;
         this.#controller = new AbortController();
         try {
-          await this.run(this.#controller.signal);
+          await this.run(this.#controller.signal, { cacheOnly });
         } catch (error) {
           if (!this.#stopped) this.onError(error);
         } finally {
@@ -43,15 +47,15 @@ export class SerialWorker {
     }).finally(() => {
       this.#active = null;
       // A trigger can arrive between the last run settling and this cleanup.
-      if (this.#pending && !this.#stopped) return this.trigger();
+      if (this.#pending && !this.#stopped) return this.trigger({ cacheOnly: this.#pendingCacheOnly });
     });
     return this.#active;
   }
 
-  scheduleRerun(key, delayMs) {
+  scheduleRerun(key, delayMs, options = {}) {
     const timerKey = `rollover:${key}`;
     this.#clear(timerKey);
-    if (delayMs !== null) this.#schedule(timerKey, delayMs, () => this.trigger());
+    if (delayMs !== null) this.#schedule(timerKey, delayMs, () => this.trigger(options));
   }
 
   async stop() {
