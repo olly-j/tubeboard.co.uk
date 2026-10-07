@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "status": "PRIVATE DRAFT INPUT MAP ONLY; ACTUAL GENERATION AND SWIFT/Node CHECKS NOT RUN",
+  "rawFixtures": [
+    {
+      "lineID": "bakerloo",
+      "stationID": "940GZZLUHAW",
+      "publicationDirection": null,
+      "rawBodySHA256": "fb66a1c2d2d7b1a86b0a7b165077b158e5f4f4cdc892e6180c21871ff1832d2a",
+      "rawBodyBytes": 113547
+    },
+    {
+      "lineID": "central",
+      "stationID": "940GZZLUEPG",
+      "publicationDirection": null,
+      "rawBodySHA256": "79dd94af2164eda812e135bd4a0355c05f69c8836e4a74f49c0d8177274db44a",
+      "rawBodyBytes": 231203
+    },
+    {
+      "lineID": "district",
+      "stationID": "940GZZLUERC",
+      "publicationDirection": null,
+      "rawBodySHA256": "7a11bf0642e31aeb0dc654b933dde0997f2aecaa4f414903a45bff3c0f585212",
+      "rawBodyBytes": 184351
+    },
+    {
+      "lineID": "district",
+      "stationID": "940GZZLUUPM",
+      "publicationDirection": null,
+      "rawBodySHA256": "e9901538b845162e9ceac6bd3496f513097e23e9e7ed746cce650ec61ccc6b4b",
+      "rawBodyBytes": 240456
+    },
+    {
+      "lineID": "dlr",
+      "stationID": "940GZZDLBNK",
+      "publicationDirection": null,
+      "rawBodySHA256": "787da195da1212e842bc7998eb2609d5c4b6c8e6fb7523eb065bd945baec747c",
+      "rawBodyBytes": 210483
+    },
+    {
+      "lineID": "dlr",
+      "stationID": "940GZZDLLEW",
+      "publicationDirection": null,
+      "rawBodySHA256": "ea5a9d6a17df1e505dcafad223627ec3a87b270df852649a73d63620183c6e5e",
+      "rawBodyBytes": 166215
+    },
+    {
+      "lineID": "jubilee",
+      "stationID": "940GZZLUSTM",
+      "publicationDirection": null,
+      "rawBodySHA256": "289686d5337ff7d1d23ce07c4b313b8bda583c8f9c10725d01d692b290584b8d",
+      "rawBodyBytes": 248213
+    },
+    {
+      "lineID": "metropolitan",
+      "stationID": "940GZZLUAMS",
+      "publicationDirection": null,
+      "rawBodySHA256": "774e6d4416f29661b6f8320125371f43b04277507758a05ce245e6a0dd65e895",
+      "rawBodyBytes": 130438
+    },
+    {
+      "lineID": "northern",
+      "stationID": "940GZZLUEGW",
+      "publicationDirection": null,
+      "rawBodySHA256": "8448f3209c0e655150642a0095c6797401e40c40c0fb41d0e23634a83da70b29",
+      "rawBodyBytes": 321373
+    },
+    {
+      "lineID": "northern",
+      "stationID": "940GZZLUMDN",
+      "publicationDirection": null,
+      "rawBodySHA256": "93b1d1ca205ddb008f6a4c2698e7d95313ba3335f68b429db296e938f9a91b6c",
+      "rawBodyBytes": 362733
+    },
+    {
+      "lineID": "northern",
+      "stationID": "940GZZLUMHL",
+      "publicationDirection": null,
+      "rawBodySHA256": "44346cb9e101c64d1ccfb90b52f960bb2c93e72b2a044e9a9290e88057ae75a8",
+      "rawBodyBytes": 183231
+    },
+    {
+      "lineID": "piccadilly",
+      "stationID": "940GZZLUHR4",
+      "publicationDirection": null,
+      "rawBodySHA256": "382c5e3c3844abbc1fd9b3276f087887ff2ca352e321687287b0adf82e88b305",
+      "rawBodyBytes": 190668
+    },
+    {
+      "lineID": "victoria",
+      "stationID": "940GZZLUBXN",
+      "publicationDirection": null,
+      "rawBodySHA256": "211c43d64c3e3e8c3f3a6dd2a588ef97aa193771f59c8d88c901391d3ef7a44b",
+      "rawBodyBytes": 325405
+    },
+    {
+      "lineID": "northern",
+      "stationID": "940GZZLUGDG",
+      "publicationDirection": "inbound",
+      "rawBodySHA256": "833615861ece1014374058174d39b44371a51cfd67a7230b7345db2ef148045f",
+      "rawBodyBytes": 321080
+    },
+    {
+      "lineID": "northern",
+      "stationID": "940GZZLUGDG",
+      "publicationDirection": "outbound",
+      "rawBodySHA256": "f4dc6c10884b0f05fcc9660145e2910adea271925b79098bcf34f5cad2a62b70",
+      "rawBodyBytes": 324640
+    }
+  ],
+  "requiredActualFixture": "actual-swift-parity.json",
+  "requiredActualFixturePresent": false,
+  "qualification": "Retained API captures alone do not establish publisher/calendar/profile qualification. Synthetic API-derived test proofs are explicitly synthetic. Actual generated proof, original HTTP envelopes and freshly executed Swift output must be supplied byte-bound before parity tests can pass."
+}

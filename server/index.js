@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SerialWorker } from './worker-lifecycle.js';
+import { handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from './timetable-publication-resource.js';
 import {
   LiveActivityStore,
   TokenRateLimiter,
@@ -80,6 +81,9 @@ const server = http.createServer(async (request, response) => {
         ok: true,
         serviceVersion: SERVICE_VERSION,
         contractVersion: LIVE_ACTIVITY_CONTRACT_VERSION,
+        contentStateContracts: ['station-board-v2'],
+        plannedPresentationVersion: 2,
+        timetablePublicationAuthorityVersion: 1,
         disruptionAlertContractVersion: DISRUPTION_ALERT_CONTRACT_VERSION,
         disruptionAlertWorkerEnabled: disruptionAlertConfig.workerEnabled,
         sourceRevision: SOURCE_REVISION
@@ -98,6 +102,12 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 400, { ok: false, error: 'Unexpected Host header' });
       return;
     }
+
+    // Public reviewed metadata only. Host/security validation above remains
+    // identical; no token, JWS, install ID, location or TfL query is involved.
+    if (await handlePublicationResource(request, response, url, {
+      directory: PUBLICATION_ASSET_DIRECTORY
+    })) return;
 
     if (request.method === 'POST' && url.pathname === '/api/live-activities/tokens') {
       await handleTokenRegistration(request, response);
@@ -199,7 +209,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(port, () => {
-  console.log(`TubeBoard service listening on http://localhost:${port}`);
+  console.log(`TubeBoard service listening on http://localhost:${server.address().port}`);
   console.log(`Serving static site from ${siteDir}`);
   statusMonitor.start();
 });
@@ -210,13 +220,14 @@ if (config.workerEnabled) {
     initialDelayMs: 2_000,
     intervalMs: config.workerIntervalMs,
     onError: (error) => console.error(`Live Activity worker cycle failed: ${error.message}`),
-    run: (signal) => runLiveActivityWorkerCycle({
+    run: (signal, { cacheOnly }) => runLiveActivityWorkerCycle({
       store,
       config,
       signal,
+      cacheOnly,
       scheduleRolloverPush: (record, contentState, now, workerIntervalMs) => {
         const delayMs = getRolloverDelayMs(contentState, now, workerIntervalMs);
-        worker.scheduleRerun(`${record.environment}:${record.activityID}`, delayMs);
+        worker.scheduleRerun(`${record.environment}:${record.activityID}`, delayMs, { cacheOnly: record.contentStateContract === 'station-board-v2' });
         if (delayMs !== null) {
           console.log(`Live Activity rollover refresh scheduled in ${Math.round(delayMs / 1000)}s`);
         }
@@ -280,8 +291,8 @@ async function handleTokenRegistration(request, response) {
     return;
   }
 
-  await store.upsertToken(validation.value);
-  sendJson(response, 200, { ok: true });
+  const accepted = await store.upsertToken(validation.value);
+  sendJson(response, 200, { ok: accepted.registrationAccepted !== false, ...(accepted.contentStateContract === 'station-board-v2' ? { contentStateContract: 'station-board-v2', ...(accepted.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(accepted.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}) } : {}) });
 }
 
 async function handleActivityEnd(request, response) {
@@ -474,6 +485,7 @@ function getStaticRelativePath(cleanPath) {
     '/train-20260830-v2.css',
     '/train-20260830-v2.js',
     '/contracts/live-activity-registration-v1.schema.json',
+    '/contracts/live-activity-registration-v2.schema.json',
     '/contracts/disruption-alert-registration-v1.schema.json',
     '/contracts/disruption-alert-registration-v2.schema.json',
     '/contracts/tubeboard-status-v1.schema.json',

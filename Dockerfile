@@ -14,6 +14,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY server ./server
 COPY contracts ./contracts
+COPY public/timetable-publications ./public/timetable-publications
 COPY certificates ./certificates
 COPY assets/fonts ./assets/fonts
 COPY assets/product ./assets/product

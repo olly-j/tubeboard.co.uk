@@ -1,0 +1,67 @@
+{
+  "task": "TB-085/#298 shared system surfaces #618",
+  "state": "reviewed source checkpoint, undeployed",
+  "baseHEAD": "09dfbff5665bcce3f1d857481dcfea1820ab729d",
+  "appReferenceHEAD": "d0b2a05bffd59abdb6cafbf42eef38db19badd8c",
+  "sourceSHA256": {
+    "server/station-board-v2.js": "f55783f04d89d1c95af727b7eef5e55b1de638c0ddebff3a1f94d35621aae982",
+    "test/station-board-v2.test.js": "df4e448ed462efd2d67df6f53fc5dff7ef186ce4bdbd7479a96aaaf9baf9588c",
+    "test/station-board-owner-ux.test.js": "fd86cd8f2cd92e0d851cf9d353baebbb6cc083d0698bb999f56ba5842446b3e9"
+  },
+  "sourceReceiptSHA256": "9ae9f3d74b5bf967e884564623deece3cd5bdb5140dc3cd28db345ef102b0512",
+  "independentReviewSHA256": "726c38030458816c11656e6b61c5ebc2fc569d65adab54af43b3fc9254a18dd9",
+  "implemented": [
+    "Fresh eligible outgoingDestinationOnly with whole unambiguous physical platform first after existing board/selection/availability/source gates and before compact limits.",
+    "Current known typed destination-only nil-clock row TBC; original source expiry/invalid evidence --. No-row remains an empty arrivals array.",
+    "No change to real countdown rounding/minute/Due/strict elapsed, source admission, raw3/9 budget, masks/contexts, original clocks, nextBoundary, registration/schema/cap2/v1/duration/cadence."
+  ],
+  "actualChecks": {
+    "focusedNode": {
+      "tests": 57,
+      "pass": 57,
+      "failure": 0,
+      "skip": 0,
+      "exitCode": 0
+    },
+    "fullNpmCheck": {
+      "tests": 234,
+      "pass": 234,
+      "failure": 0,
+      "skip": 0,
+      "exitCode": 0,
+      "repositoryAndAllSyntaxChecks": 0
+    },
+    "actualSwiftWire": {
+      "cases": 57,
+      "assertions": 1672,
+      "compileExit": 0,
+      "replayExit": 0,
+      "scope": "Actual service states generated for all19 \u00d7 cap2/older-v2/platform selection, decoded/reencoded and per-date selected/formatted by exact frozen APP Foundation ContentState/row implementation. No OS/APNs proof."
+    },
+    "diff": 0
+  },
+  "allLineCoverage": "Synthetic parser inputs on actual19 catalogue lines; retained production source fixtures unaffected. No current source capability/operational or physical coverage claim.",
+  "compatibility": "Full existing v1/v2/capability/tuple-duration/source-clock/restart/HTTP isolation tests passed. Legacy v1 builder unchanged. Older v2 receives already-eligible compact3 with supported destinationOnly field and TBC string.",
+  "preservedFailure": {
+    "SHA256": "06855a0d3e9db2213d4edfd773edb404594bed0442acb458150cd817a448a6b4",
+    "result": "56pass/1fail of57; new test mistakenly expected incoming elapsed+1ms to be earliest while original planned minute boundary was1ms earlier. Corrected exact existing earliest boundary expectation, no production boundary change."
+  },
+  "unrunGates": [
+    "Current external TfL/health/network acceptance",
+    "Fly configuration/deployment",
+    "Actual APNs and closed-host OS rendering, original expiry promotion",
+    "Normal APP/Night/visionOS/Watch rendered acceptance, including closed system surfaces."
+  ],
+  "schemaUnchanged": true,
+  "betaReady": false,
+  "deployed": false,
+  "releaseActions": false,
+  "separateAPPNative": {
+    "sourceHEAD": "d0b2a05bffd59abdb6cafbf42eef38db19badd8c",
+    "jobSHA256": "430c68dcdeeb028de5456908c2f467084538428eecd89cd0f6309392c25cf634",
+    "methods": 266,
+    "failures": 0,
+    "skips": 0,
+    "scope": "Separate signed APP batch includes four real Store refresh tests and pure Night/spatial policies. Not run by SERVICE writer; no OS pixels/APNs/closed-surface acceptance."
+  }
+}

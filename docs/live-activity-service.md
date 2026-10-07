@@ -26,6 +26,7 @@ The service listens on `http://localhost:4173` locally by default. On Fly.io, `f
 - `POST /api/disruption-alerts/registrations`
 - `DELETE /api/disruption-alerts/registrations`
 - `GET /healthz`
+- `GET`/`HEAD /api/timetable-publications/v1/{publicationSHA256}`
 - `GET /status`
 - `GET /api/status/v1`
 - `GET /api/status/v2`
@@ -266,3 +267,114 @@ configuration except image. The permanent adapter follows that successful
 path; it never rebuilds or silently retries an ambiguous update. Production
 readback on 22 September confirmed both pricing HTML hashes, unchanged backend
 1.4.2 and identical environment, services, machine sizing and encrypted volume.
+
+### Optional station-board-v2 contract (source prepared, deployment pending)
+
+New clients opt in using `contentStateContract: "station-board-v2"` on the existing token endpoint. The separate v2 registration schema requires this value and an exact station/line membership from the public app catalogue. It supports the 11 Underground lines, Elizabeth, the six named Overground lines and DLR. The existing district-circle combined app board remains outside system-surface registration. The v1 schema, 17-line allowlist, content state and worker behavior remain unchanged for installed clients without negotiation. The health response advertises contentStateContracts, plannedPresentationVersion:2 and the optional timetablePublicationAuthorityVersion:1. Authority1 registration requires presentation2; malformed or unsupported capability values fail validation. New publication-aware consumers require the advertised literal capabilities and an acknowledgement with ok:true and the accepted typed contract/capabilities. The acknowledgement describes retained accepted state, including an ignored older request; it does not echo unaccepted request capabilities. New consumers register the optional literal capability 2 only after this advertisement and require ok:true, the typed contract and capability 2 in the acknowledgement. The acknowledgement reflects the accepted stored registration, not an ignored request. Older v2 absence remains supported. Clients must confirm capability before registering with an older deployment that might ignore unknown fields; the unchanged v1 acknowledgement remains {ok:true}. Unknown contracts fail validation. An older registration cannot change a negotiated activity. At equal token observations capability absence wins; selected-tuple conflicts are not adopted. A strictly newer registration may change the compatible presentation capability. An equal original token/selection tuple may gain authority1 from absence, but cannot downgrade it; an older observation cannot change it. Async source retention, push dispatch and acknowledgement recheck the original registration tuple without logging it. Typed delivery-failure callbacks also compare the publication generation inside their queued storage mutation, so a newer publication cannot be backed off or deactivated by an obsolete failure.
+
+V2 pushes retain the established content-state fields and Apple reference-epoch Date numbers. Each row additionally carries `timeEvidence` (`reportedIncomingArrival`, `throughArrivalPrediction`, `estimatedDeparture`, `scheduledDeparture`, or `destinationOnly`), optional `via`, `reportedPlatform`, original `expiresAt` and `isCached:false`. Capability2 original outgoing scheduled rows carry optional `plannedSourceID` (`timetable`, `journey-planner` or `rail-departures`). Older v2 receives only already-eligible single-context compact rows, without the rail tag or new availability overlay; incompatible masked raw rows never cross that boundary. Legacy absence remains compatible. Destination-only rows have no clock. A planned clock always stays scheduled, uses whole minutes and becomes Due at the existing minute boundary; strict elapsed departure/estimated incoming arrival and source expiry remove the row. Incoming rail requires its own estimatedTimeOfArrival; scheduledTimeOfArrival stays metadata and is never promoted to a prediction. Neither zero, legacy DepartTime, downstream arrivals nor record disappearance establishes a departure.
+
+Selected-station Unified arrivals are classified individually using validated endpoint IDs and names. Explicit ordered repeated-stop evidence can retain a through service. Contradictory endpoints are withheld; source-local platform alternatives are collapsed without inventing a boarding platform or clock. Elizabeth and all six Overground lines retain the qualified ArrivalDepartures adapter, preferring its explicit estimated departure clock and allowing an explicitly scheduled on-time row. Delayed rows without an estimate, ambiguous alternatives and unsupported statuses are withheld. All19 lines use at most one bounded Journey request per admitted selected board, alongside the independently qualified feed on the seven rail lines, validating its own first transport leg, exact origin/line, explicit scheduled clock, route and current leg disruption fields. The queried endpoint does not supply the service destination. Line-wide at-station facts independently support destination/via/reported platform only when both provider clocks and HTTP freshness qualify.
+
+Source caches hold only typed facts for the already registered board and scoped rejection markers; no network-wide vehicle tracking or additional personal/location data is stored. HTTP Date/Age use the larger apparent age and never renew clocks from an old response. Source contexts merge by their original observations; transient failures retain only original unexpired content. Publication/calendar/profile rejection applies only to publication plans. Original scoped availability masks scheduled context without installing a permanent closure rejection or deleting raw source rows. All outgoing scheduled clocks, including scheduled rail rows, are withheld under applicable fresh closure evidence. Qualified predicted rail and arrival observations retain their own separate capabilities. Original availability checks retain exact disjoint windows, source scope and HTTP expiry. A fresh strictly newer same-scope ordinary observation supersedes protected history; a newer clock-only restriction never establishes an open board or clears an independent full closure/barrier; an expired open or closed response cannot erase independently retained active or pending evidence. Announced windows beginning before original authority expiry plus 600 seconds retain bounded planned eligibility through that original cutoff. After authority expires this is an eligibility barrier, never a fresh physical closure claim. Scheduled own clocks intersecting an announced interval are also masked before activation, while useful preclosure clocks remain visible. Independent nonredundant proofs are bounded to eight per selected board; unrepresentable overflow withholds planned context using an original scoped observation/expiry rather than truncating windows or inventing continuous closure. Platform/direction eligibility precedes source choice. Eligible publication plans take priority over bounded Journey alternatives. That chosen context competes with scheduled rail by its first useful original clock, with a stable context tie; this is source choice, never train matching or a completeness claim. Qualified selected rail replaces overlapping through-arrival interpretation only within the actual eligible board scope. Distinct rows within the chosen source remain distinct. Compact surfaces order eligible outgoing clocks before incoming arrivals, then apply the three-row limit. A capability2 Activity carries at most nine original rows: up to three per original planned context and three independently qualified nonplanned rows. If more than nine candidates exist, active compact plans and useful nonplanned rows take priority, then deterministic original alternatives fill remaining slots, with optional plannedAvailability. Within each context currently eligible rows take priority over masked backups. Both original planned contexts remain separately tagged even without availability, so expiry or a known gap can recover useful original alternatives without a new source read. The shared renderer must apply original expiry and exact availability before choosing one tagged planned source (publication over Journey within that family, then first useful clock against scheduled rail) and before its three-row display limit. It must never concatenate overlapping planned contexts; live and legacy capabilities remain independent. Bounded transport is not coverage of omitted alternatives. Complete content-state availability is bounded to 3500 bytes, with an actual 4096-byte APNs envelope guard; overflow drops planned context and keeps useful live/untimed rows. Original availability starts, ends, authority expiry and eligibility cutoffs drive cache-only boundary pushes, including dormant future activation, without admitting extra HTTP reads.
+
+The existing SerialWorker owns both 90-second source admissions and cache-only boundary timers. Minute/Due, strict elapsed and original source-expiry boundaries recompute the saved board without TfL reads; restart restores the same persisted contexts. A cache-only trigger cannot admit v1 or v2 feed requests. Cache/markers commit atomically before sending, and the delivered transition is acknowledged only after APNs succeeds. The APNs stale-date follows original row expiry, rather than gaining five minutes at each push. Duration, backoff, permanent-token failure, environment and 24-hour retention behavior are retained. The existing absolute 15-second transport deadlines cover all new requests. A missing HTTP Age may trigger one bounded same-URL readback within an admitted refresh; it never qualifies missing freshness evidence.
+
+The optional bounded plannedContextSeed carries original client-qualified publication or Journey plans, separately preserving per-row originating serviceDay/profile/fingerprint/weekdays/serviceMinute, ordered calls and exact departure dates. Publication source identity is distinct from an itinerary response digest. Calendar ambiguities, unknown destinations/routes/via, physical platform/live-clock fields and an arbitrary publication URL are rejected. An explicit via must name one selected-line station. Full publication plans require it in the complete calls (Northern Bank/Charing Cross must exactly match the path, other current publication adapters report no via). A bounded Journey leg may alight before its reported destination/via; its original ordered prefix stays unchanged and no stop is appended. Unsupported or contradictory via seed data is withheld rather than reinterpreted. At most two sources/32 rows each and 24KiB are admitted within the unchanged 32KiB endpoint limit. Original expiry is capped by 600/120 seconds and London midnight. The service attempts independent publication HEAD validation at the exact official URL before unrelated endpoints within an admitted refresh. A verified matching SHA corroborates publication identity; a verified changed SHA immediately rejects older timetable context, even when other endpoints are offline. If HEAD is unavailable or the current read admission has not elapsed, original client-qualified context may remain only until its original TTL. This HEAD-only path never renews original observations, clocks or expiry, and a matching HEAD does not qualify rows/profiles. Authority1 can renew a context only through the separate complete raw timetable qualification described below. Optional original closureEvidence carries up to eight shared lineStatus/stationDisruptions proofs, explicit optional closureWindows or legacy single periods plannedUnavailable and strict optional scheduledClockOnly. Fresh/expired original eligibility is validated without renewal; a client seed cannot clear newer independent scoped evidence. Raw admitted scheduled rows remain separate from their temporary availability mask. Known named nonclosure statuses (Good Service, Minor Delays, Severe Delays, Reduced Service) qualify planning applicability only; Part Closure, Bus Service, unknown labels and directional/affected-route restrictions do not become whole-board open or closed proof. A seed remains original client qualification: its claimed proof reference cannot create server authority. Authority1 seeds bind the exact publication ZIP, reviewed proof revision/body and independent original HEAD observation; declared publication directions and each row's originating service-day/profile must match that reviewed local body. Well-shaped obsolete publication plans are omitted at their source while independent Journey/live/arrival context and normal registration acknowledgement remain available; malformed wire fails validation. Clients without authority1 retain legacy seed behavior and cannot submit adopted-reference or scoped-direction seeds. Bounded Journey own-leg disruption guards are unchanged. Its Journey context is explicitly bounded and may omit other branches, later departures or a line whose own leg fields do not qualify. Missing sources remain coverage gaps. Source-capture replays and deterministic worker tests are separate from current operational, physical-station and real-device APNs acceptance. Deployment, app negotiation, physical expiry/render evidence and rollout approval remain integration-owner gates.
+
+ServiceClosed20 is distinct from physical station closure. An originally fresh exact parent-line/mode response with literal validity and fully validated outgoing-origin entire sections restricts scheduled own clocks inside those periods. Unsupported relevant scope remains conservative clock-only unavailable; malformed/unverifiable authority cannot qualify a new planned read or become open evidence. Predicted live clocks and untimed facts remain independent. Line/status and selected station controls finish before the one Journey query. Only this read's fresh complete exact terminal clock-only authority, with every still-relevant period represented, may move that query past the connected restriction containing actual dispatch. Overlap/adjacency are respected; disjoint later gaps are not skipped. The query clock/searchCriteria differ from actual HTTP dispatch/completion clocks, which alone govern original expiry and London midnight. Expired, partial or persisted-only authority cannot authorize a shift. No second query, new target, reopening or first-operating-train claim follows an empty result.
+
+### Original-clock timetable renewal and negative authority
+
+During an admitted 90-second refresh, an authority1/presentation2 board may read
+its exact selected-station timetable only when the current official ZIP identity
+has a reviewed local proof entry for that station and actual line. Origin entries
+use one GET; an entry declaring inbound/outbound definitions uses at most two
+scoped GETs, both required before one complete combined context is admitted.
+No existing seed is required. Qualification checks the needed yesterday/today
+originating service days, holiday/date-range coverage, profile multiplicities,
+whole ordered calling paths, destination identity and exact scoped direction.
+Unknown or incomplete evidence cannot qualify an empty timetable. Raw response
+bodies are bounded to 2,000,000 bytes. Final line/station controls must still
+qualify before admission; this does not relax Journey disruption guards or
+availability masks.
+
+The shared timetable clock is the minimum original Date/Age-derived observation
+from official HEAD, every required timetable response and the line/station
+controls. Expiry remains that observation plus 600 seconds, capped at London
+midnight. Neither completion order nor a resource/metadata/304 read restamps it.
+Only a newly complete qualifying source read creates a new context. Transient
+failure retains useful prior context until its original expiry; an authoritative
+publication/profile rejection removes only the affected timetable source.
+Cache-only row/source boundary pushes do not admit feed or timetable reads.
+
+Independent original HEAD identity and proof revision/body conflicts are stored
+transactionally with the registrations. A same-ZIP corrected body can invalidate
+old plans without waiting for their row clock, expiry or an app update. Stale
+observations and queued callbacks cannot undo newer negative authority. The
+legacy per-record rejection marker still uses that record's original context in
+either worker order; global authority filtering cannot transfer another board's
+proof or erase its rejection evidence. These are source behavior, not a claim
+that current publication assets or deployed renewal are available.
+
+### Timetable publication proof resource (source prepared, deployment pending)
+
+TB-085 adds the fixed `GET`/`HEAD` route `/api/timetable-publications/v1/{publicationSHA256}`. The lowercase SHA identifies the independently observed official publication. Its bounded, canonical wrapper carries an ordered proof revision, exact proof-body SHA and base64 body; the app validates the body and applicable service calendars before adopting it. Exact ETags support conditional reads. Invalid or missing assets return `no-store` errors. Metadata, HEAD or 304 alone never renew a departure clock or the original timetable context TTL.
+
+The local authority reader and HTTP route now use the same module-relative `server/timetable-publications/v1/` directory. The existing Docker `COPY server` includes that location without a new Dockerfile rule, and default reads remain independent of process working directory. The old `public/timetable-publications/v1/.gitkeep` is historical and is not the authoritative asset location. At the preceding directory-adapter checkpoint no publication asset or running maintainer was installed. The 7 October source package below adds the reviewed f97 resource; production hosting and an operational maintainer remain unverified. The reviewed app-side packager uses atomic publication and increasing revisions. The TubeBoard engineering integration owner must review the generator proof, publish the exact wrapper atomically and maintain current assets and same-ZIP corrections. This is not an automatic producer or an arbitrary remote timetable proxy. Source includes the bounded backend requalification path and the f97 resource below; source/local-read tests do not establish deployed or ordinary-provider operation. Publishing/maintaining assets, current source acceptance, installed-client adoption, authorized deployment and normal closed-app APNs expiry remain separate gates. Proof wrappers are capped at 2,000,000 bytes and decoded proof bodies at 128KiB; excess evidence is unavailable, never truncated.
+
+For the preceding resource-only source slice, six focused loopback resource tests and all 240 repository tests passed, together with syntax, formal schema-shape and whitespace checks. The app and service resource schema bytes match. Required Fly configuration validation could not complete on 3 October 2026 because the local CLI had no access token. The workspace audit found the separately prepared v2 registration contract absent from service main; it does not establish a merged, deployed or production contract pass. PR #24 remains draft and this slice remains undeployed.
+
+The timetable-renewal verification consumed actual Swift-produced original-clock
+fixtures for all 13 legacy proof entries and the complete Goodge Street
+two-direction context, including its exact 32-row registration seed. Stage 8
+passed three preparatory syntax checks, all 79 focused tests, all 264 repository
+tests, 11 formal checks, whitespace and the complete 19-path scoped diff; its
+exact source was independently reviewed. The preceding stage-7 run remains
+retained: 259/264 tests passed, five failed, and the test failure prevented the
+chained production syntax checks and diff from running. Its preparatory syntax
+and formal checks had passed. The minimal stage-8 corrections preserve legacy
+restart shape, per-record rejection evidence and original publication
+corroboration in the closure fixture.
+
+All eight local endpoint checks passed after an initial seven-of-eight failure
+was corrected by an explicit Node HTTP Host transport. Authenticated Fly
+configuration validation remains blocked by the local CLI's missing session;
+this is not a demonstrated configuration defect. The exact Node 22.21.1 slim
+image was acquired and its Linux arm64 version verified. Its isolated runtime
+run reported 255 passes and nine failures out of 264 tests, with no skips. All
+nine failures are unchanged website-deploy tests whose Python 3 subprocess is
+unavailable in that image (`spawnSync python3 ENOENT`); no timetable or publication
+authority test failed. This remains a failed full runtime check, separate from
+the passed host suite. The existing Service Quality workflow runs the full check
+under Node 22 on Ubuntu with Python 3 available. For source22 checkpoint78061231,
+run37147980594/job111275752522 actually passed all264 tests under Nodev22.23.3,
+syntax and repository checks. Its Python Fly TOML parse passed independently of
+the unauthenticated flyctl result. This CI is not the exact22.21.1 image run. No test, workflow or Dockerfile was
+changed to bypass this result. These checks are not current HTTP,
+physical-station, native closed-surface or APNs acceptance.
+
+Current assets and maintenance, installed default-client adoption, 19-line
+current source coverage, native own/source expiry, capability ACK and real APNs,
+authenticated Fly validation, the exact-image full runtime gate and authorized
+deployment remain explicit gates. No beta, deployment or release action follows
+this source pass. Service version remains 1.4.4; optional capabilities do not
+change the existing contract name or public version.
+
+The separate server-owned-directory adapter passed two syntax checks, all seven
+resource tests (six existing plus one default-reader/HTTP agreement regression),
+and all265 host tests, chained syntax/repository checks, whitespace and its exact
+three-path diff. The new test owns one exclusive synthetic asset and confirms
+matching default local bytes, HTTP GET/HEAD/304 and absent-asset rejection from a
+changed working directory; teardown preserves unrelated data. It does not install
+a maintained publication or renew any timetable clock. Its actual receipt is
+`1ebf1f7b70d1f0b39979a48a1ee1a12803d91c631c3b757f7c50464a8c1d3847`.
+The source22 CI and prior host264 evidence remain distinct; this later adapter
+checkpoint's CI and deployment are not established by those preceding checks.
+
+
+## Reviewed f97 resource preparation, 7 October 2026
+
+The owner’s current takeover resumes the existing app/service workspaces serially, preserving prior source and failures. The previously empty module-relative asset directory now contains the first reviewed resource for `f97de0fa662df0d693a7b27d03eccc914daf540434e5d6fa649db3a951b31457`, revision1, exact50,022-byte proof `82aa1930…` and66,927-byte wrapper `ed5ca462…`. [Resource scope and maintenance](../server/timetable-publications/v1/README.md) retain the13 original needed-day passes, current Amersham gap, historical other16 scopes and all live qualification requirements. This supersedes only the earlier empty-source-directory statement; it does not change the historical no-deployment observations.
+
+`npm run check` passed278 tests with zero failures/skips, plus syntax/repository checks. Five actual local HTTP controls (GET, HEAD, strong-ETag304, query rejection, method rejection) and the default local reader verified the same exact resource/body. No external request or APNs ran in those checks. Fresh `flyctl status --app tubeboard-co-uk --json` is blocked because this host has no access token. No credential was exposed or changed. Deployment retains the explicit owner authorization and clean protected-main guards. Current production remains separate; no new deployed revision, operational source/adoption, normal ACK/APNs, closed-host rendering or TestFlight readiness follows from this package.
