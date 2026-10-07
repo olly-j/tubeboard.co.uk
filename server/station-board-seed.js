@@ -104,7 +104,13 @@ export function admitPlannedSeed(seed, record, now) {
       }
       if (normalized === 'timetable') {
         const bank = row.routeStationIDs.includes('940GZZLUBNK'), cross = row.routeStationIDs.includes('940GZZLUCHX');
-        if ((record.lineID === 'northern' && ((bank && cross) || nameKey(row.via) !== (bank ? 'bank' : cross ? 'charing cross' : ''))) || (record.lineID !== 'northern' && row.via != null)) { errors.push('planned seed full-timetable route/via conflicts'); continue; }
+        const circleReturn = record.lineID === 'circle' && row.destinationID === record.stationID;
+        const onwardID = circleReturn ? row.routeStationIDs.slice(0,-1).find(id => id !== record.stationID) : null;
+        const circleVia = circleReturn ? STATION_BOARD_STATIONS.get(onwardID)?.stationName : null;
+        // Older Circle seeds may omit via; any present value must be the exact
+        // first distinct known onward call, never a route identity or terminus.
+        if ((record.lineID === 'northern' && ((bank && cross) || nameKey(row.via) !== (bank ? 'bank' : cross ? 'charing cross' : '')))
+          || (record.lineID !== 'northern' && row.via != null && (!circleReturn || row.via !== circleVia))) { errors.push('planned seed full-timetable route/via conflicts'); continue; }
       }
       if (normalized !== 'timetable' && row.originatingServiceDateRanges !== undefined) { errors.push('planner seed cannot carry timetable date ranges'); continue; }
       seenRows.add(row.id); const departure = iso(row.departure);

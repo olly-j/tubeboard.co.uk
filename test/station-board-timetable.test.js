@@ -2651,3 +2651,38 @@ test('circleSeedRouteCalendarExpiryAndPlannerSelfRejectionRemainStrict',()=>{
   const jp=structuredClone(seed),source=jp.contexts[0];source.sourceID='journey-planner';source.sourceSHA256='a'.repeat(64);source.expiresAt=new Date(circleObserved+120000).toISOString();delete source.publication;
   const row=source.rows[0];for(const key of ['serviceDay','profileName','profileSHA256','weekdays','serviceMinute','isBankHoliday','originatingServiceDateRanges'])delete row[key];assert.ok(admitPlannedSeed(jp,circleRecord,circleAt).errors.length);
 });
+
+
+test('circleReturnViaUsesKnownFirstCallAndStrictSeedCompatibility',()=>{
+  const context=circleQualify(),loop=context.events.find(e=>e.destinationStationID===circleRecord.stationID);
+  assert.ok(loop);assert.equal(loop.via,'Paddington');assert.equal(loop.destination,'Edgware Road (Circle Line) Underground Station');
+  assert.deepEqual(loop.routeStationIDs,circlePath);assert.equal(loop.time,Date.parse('2026-10-01T23:05:00Z'));
+  assert.equal(loop.receivedAt,circleObserved);assert.equal(loop.expiresAt,circleObserved+600000);assert.equal(loop.platform,null);
+  const seed=circleSeed(context);seed.contexts[0].rows[0].via=loop.via;
+  const admitted=admitPlannedSeed(seed,circleRecord,circleAt);assert.deepEqual(admitted.errors,[]);
+  assert.equal(admitted.sources.timetable.events[0].via,'Paddington');
+  const legacy=structuredClone(seed);delete legacy.contexts[0].rows[0].via;
+  const legacyResult=admitPlannedSeed(legacy,circleRecord,circleAt);assert.deepEqual(legacyResult.errors,[]);assert.equal(legacyResult.sources.timetable.events[0].via,null);
+  for(const via of ['Baker Street','Hammersmith','paddington']){
+    const wrong=structuredClone(seed);wrong.contexts[0].rows[0].via=via;assert.ok(admitPlannedSeed(wrong,circleRecord,circleAt).errors.length);
+  }
+  const notReturning=structuredClone(seed);Object.assign(notReturning.contexts[0].rows[0],{destinationID:'940GZZLUHSC',destination:'Hammersmith',routeStationIDs:['940GZZLUPAC','940GZZLUHSC']});
+  assert.ok(admitPlannedSeed(notReturning,circleRecord,circleAt).errors.length);
+  const conflicting=circleRaw();conflicting.stations=conflicting.stations.filter(s=>s.id!=='940GZZLUPAC');conflicting.stations.push({id:'940GZZLUPAC',name:'Wrong onward station'});
+  assert.throws(()=>circleQualify(conflicting,circleAsset(conflicting)));
+});
+
+test('circleReturnViaKeepsRepeatedAndSameFirstCallPathsDistinct',()=>{
+  const repeatedPath=[circleRecord.stationID,circleRecord.stationID,'940GZZLUPAC',circleRecord.stationID,'940GZZLUBST',circleRecord.stationID];
+  const repeated=circlePathMutation(repeatedPath),repeatedLoop=circleQualify(repeated,circleAsset(repeated)).events.find(e=>e.destinationStationID===circleRecord.stationID);
+  assert.equal(repeatedLoop.via,'Paddington');assert.deepEqual(repeatedLoop.routeStationIDs,repeatedPath);
+  const raw=circleRaw(),otherPath=['940GZZLUPAC','940GZZLUBST',circleRecord.stationID],route=raw.timetable.routes[1];
+  assert.ok(route.stationIntervals.every(i=>String(i.id)!=='2'));
+  route.stationIntervals.push({id:'2',intervals:otherPath.map(stopId=>({stopId}))});
+  for(const schedule of route.schedules)schedule.knownJourneys.push({hour:'24',minute:'5',intervalId:2});
+  const context=circleQualify(raw,circleAsset(raw)),loops=context.events.filter(e=>e.destinationStationID===circleRecord.stationID);
+  assert.equal(loops.length,2);assert.equal(new Set(loops.map(e=>e.id)).size,2);
+  assert.deepEqual(loops.map(e=>e.routeStationIDs),[circlePath,otherPath]);
+  assert.ok(loops.every(e=>e.via==='Paddington'&&e.time===Date.parse('2026-10-01T23:05:00Z')&&e.platform===null));
+  assert.equal(context.observedAt,circleObserved);assert.equal(context.expiresAt,circleObserved+600000);
+});

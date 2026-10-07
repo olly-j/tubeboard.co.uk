@@ -278,7 +278,12 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
         if(departure<at || departure<londonClock(today+'T00:00:00') || departure>=tomorrow)continue;
         const destinationID=r.path.at(-1), destination=STATION_BOARD_STATIONS.get(destinationID);
         if(destinationID===record.stationID && !r.path.slice(0,-1).some(id=>id!==record.stationID && validBoard(id,record.lineID)) || !validBoard(destinationID,record.lineID) || r.path.some(id=>!validBoard(id,record.lineID)) || stationNames.has(destinationID) && names(stationNames.get(destinationID))!==names(destination.stationName))fail();
-        const bank=r.path.includes('940GZZLUBNK'),cross=r.path.includes('940GZZLUCHX');if(record.lineID==='northern' && bank && cross)fail();const via=record.lineID==='northern' ? bank?'Bank':cross?'Charing Cross':null : null;
+        const bank=r.path.includes('940GZZLUBNK'),cross=r.path.includes('940GZZLUCHX');if(record.lineID==='northern' && bank && cross)fail();let via=record.lineID==='northern' ? bank?'Bank':cross?'Charing Cross':null : null;
+        if(record.lineID==='circle' && destinationID===record.stationID){
+          const onwardID=r.path.slice(0,-1).find(id=>id!==record.stationID),onward=STATION_BOARD_STATIONS.get(onwardID);
+          if(!onward || !validBoard(onwardID,record.lineID) || stationNames.has(onwardID) && names(stationNames.get(onwardID))!==names(onward.stationName))fail();
+          via=onward.stationName;
+        }
         const id=`schedule:${record.lineID}:${record.stationID}:${day}:${r.routeIndex}:${r.scheduleIndex}:${scope.direction===null?'':scope.direction+'.'}${r.journeyIndex}`;
         const directionFields=scope.direction===null?{}:{publicationDirection:scope.direction};
         events.push({id,stationID:record.stationID,lineID:record.lineID,sourceID:'timetable',kind:'outgoingDeparture',timeEvidence:'scheduledDeparture',destination:stationNames.get(destinationID)||destination.stationName,destinationStationID:destinationID,routeStationIDs:r.path,via,time:departure,platform:null,direction:null,providerDirection:scope.direction,...directionFields});
