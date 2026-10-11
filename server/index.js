@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SerialWorker } from './worker-lifecycle.js';
+import { startOperatorObservation, selectedPresence } from './operator-observation.js';
 import { handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from './timetable-publication-resource.js';
 import {
   LiveActivityStore,
@@ -65,8 +66,30 @@ const disruptionAlertRateLimiter = new TokenRateLimiter({
   windowMs: 60_000
 });
 const port = Number.parseInt(process.env.PORT || '4173', 10);
+let operatorObservation = null;
+function observeStoreCompletion(work, kind) {
+  const observation = operatorObservation;
+  if (observation) void work.then(() => { try { observation.loaded(kind); } catch {} }, () => {}).catch(() => {});
+  return work;
+}
+if (process.env.TUBEBOARD_OPERATOR_OBSERVATION_CONFIG) {
+  void startOperatorObservation({ configPath: process.env.TUBEBOARD_OPERATOR_OBSERVATION_CONFIG,
+    servedRoots: [projectRoot, siteDir], selection: (ownedInstallID, known) => selectedPresence({
+      activities: store, alerts: disruptionAlertStore, ownedInstallID, known })
+  }).then((observation) => { operatorObservation = observation; if (shuttingDown) observation?.close(); }).catch(() => {});
+}
 
 const server = http.createServer(async (request, response) => {
+  const observation = operatorObservation;
+  if (observation) {
+    observation.http('accepted');
+    let observedFinished = false;
+    const observeFinished = () => {
+      if (observedFinished) return; observedFinished = true;
+      observation.http(response.writableFinished ? 'finished' : 'aborted');
+    };
+    response.once('finish', observeFinished); response.once('close', observeFinished);
+  }
   setSecurityHeaders(response);
 
   try {
@@ -220,7 +243,8 @@ if (config.workerEnabled) {
     initialDelayMs: 2_000,
     intervalMs: config.workerIntervalMs,
     onError: (error) => console.error(`Live Activity worker cycle failed: ${error.message}`),
-    run: (signal, { cacheOnly }) => runLiveActivityWorkerCycle({
+    onObserve: process.env.TUBEBOARD_OPERATOR_OBSERVATION_CONFIG ? (event, state) => operatorObservation?.worker('activities', event, state) : null,
+    run: (signal, { cacheOnly }) => observeStoreCompletion(runLiveActivityWorkerCycle({
       store,
       config,
       signal,
@@ -232,7 +256,7 @@ if (config.workerEnabled) {
           console.log(`Live Activity rollover refresh scheduled in ${Math.round(delayMs / 1000)}s`);
         }
       }
-    })
+    }), 'activities')
   });
   notificationWorkers.push(worker);
   worker.start();
@@ -243,11 +267,12 @@ if (disruptionAlertConfig.workerEnabled) {
     initialDelayMs: 4_000,
     intervalMs: disruptionAlertConfig.workerIntervalMs,
     onError: (error) => console.error(`Disruption alert worker cycle failed: ${error.message}`),
-    run: (signal) => runDisruptionAlertWorkerCycle({
+    onObserve: process.env.TUBEBOARD_OPERATOR_OBSERVATION_CONFIG ? (event, state) => operatorObservation?.worker('alerts', event, state) : null,
+    run: (signal) => observeStoreCompletion(runDisruptionAlertWorkerCycle({
       store: disruptionAlertStore,
       config: disruptionAlertConfig,
       signal
-    })
+    }), 'alerts')
   });
   notificationWorkers.push(worker);
   worker.start();
@@ -257,19 +282,22 @@ let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
+  operatorObservation?.http('shutdown');
   // Give in-progress persistence and HTTP handlers five seconds to settle.
   // Notification network work is aborted immediately by each owner's stop().
   const deadline = setTimeout(() => {
+    operatorObservation?.http('deadline');
     server.closeAllConnections();
     process.exit(1);
   }, 5_000);
   deadline.unref();
   statusMonitor.stop();
   await Promise.all([
-    new Promise((resolve) => server.close(resolve)),
+    new Promise((resolve) => server.close(() => { operatorObservation?.http('drained'); resolve(); })),
     ...notificationWorkers.map((worker) => worker.stop())
   ]);
   clearTimeout(deadline);
+  operatorObservation?.close(); // Never join observation cleanup into business drain.
   process.exit(0);
 }
 process.once('SIGTERM', () => { void shutdown(); });
@@ -292,6 +320,7 @@ async function handleTokenRegistration(request, response) {
   }
 
   const accepted = await store.upsertToken(validation.value);
+  operatorObservation?.loaded('activities');
   sendJson(response, 200, { ok: accepted.registrationAccepted !== false, ...(accepted.contentStateContract === 'station-board-v2' ? { contentStateContract: 'station-board-v2', ...(accepted.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(accepted.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}) } : {}) });
 }
 
@@ -305,6 +334,7 @@ async function handleActivityEnd(request, response) {
   }
 
   await store.endActivity(validation.value);
+  operatorObservation?.loaded('activities');
   sendJson(response, 200, { ok: true });
 }
 
@@ -339,6 +369,7 @@ async function handleDisruptionAlertRegistration(request, response) {
     return;
   }
   const result = await disruptionAlertStore.upsert(validation.value, entitlement);
+  operatorObservation?.loaded('alerts');
   sendJson(response, 200, { ok: true, active: true, expiresAt: result.expiresAt });
 }
 
@@ -357,6 +388,7 @@ async function handleDisruptionAlertDeletion(request, response) {
   }
 
   await disruptionAlertStore.deleteByInstallID(validation.value.installID);
+  operatorObservation?.loaded('alerts');
   sendJson(response, 200, { ok: true, active: false });
 }
 
