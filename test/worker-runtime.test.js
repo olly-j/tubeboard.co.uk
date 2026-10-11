@@ -10,6 +10,35 @@ import { fetchJsonResponse, sendApnsRequest, NOTIFICATION_REQUEST_TIMEOUT_MS } f
 import { LiveActivityStore, runLiveActivityWorkerCycle, loadConfig } from '../server/live-activity.js';
 import { runDisruptionAlertWorkerCycle } from '../server/disruption-alerts.js';
 
+test('operator observes actual blocked coalescing and cancellation without owning the run', async () => {
+  const events = []; const entered = deferred(); let actualActive = 0; let actualMaximum = 0;
+  const worker = new SerialWorker({ onObserve: (event, state) => events.push({ event, state }),
+    run: async (signal) => { actualMaximum = Math.max(actualMaximum, ++actualActive); entered.resolve();
+      await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true })); actualActive -= 1; } });
+  const work = worker.trigger(); await entered.promise;
+  for (let index = 0; index < 10; index += 1) assert.equal(worker.trigger(), work);
+  await worker.stop(); await work;
+  assert.equal(actualMaximum, 1); assert.equal(actualActive, 0);
+  assert.ok(events.some(({ event, state }) => event === 'cycle-start' && state.running === 1));
+  assert.ok(events.some(({ state }) => state.pending === true));
+  assert.ok(events.some(({ event, state }) => event === 'cycle-complete' && state.aborted === 1));
+});
+
+for (const mode of ['throws', 'rejects', 'stalls']) {
+  test(`operator hook that ${mode} cannot delay cycles or change their return/cadence`, async () => {
+    const clock = manualClock(); let runs = 0; const errors = [];
+    const worker = new SerialWorker({ ...clock.options, initialDelayMs: 2, intervalMs: 10,
+      onError: (error) => errors.push(error), onObserve: () => {
+        if (mode === 'throws') throw new Error('private-observation-canary');
+        return mode === 'rejects' ? Promise.reject(new Error('private-observation-canary')) : new Promise(() => {});
+      }, run: async () => { runs += 1; } });
+    worker.start(); assert.equal(clock.size(), 2);
+    await clock.advance(2); assert.equal(runs, 1);
+    assert.equal(await worker.trigger(), undefined); assert.equal(runs, 2);
+    await worker.stop(); assert.equal(clock.size(), 0); assert.deepEqual(errors, []);
+  });
+}
+
 test('overlapping triggers coalesce into one follow-up without concurrent cycles', async () => {
   const first = deferred();
   let runs = 0;

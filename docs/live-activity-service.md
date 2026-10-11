@@ -103,6 +103,61 @@ source behavior until an authorized deployment reports the exact reviewed
 revision in `/healthz`. Rollback uses the previous recorded healthy source and
 the same persistent volume, without a data migration or volume replacement.
 
+## Bounded Private Operator Observation
+
+TB-114/TB-115 operational acceptance can use a short, read-only local observation
+of the existing workers and HTTP drain. This source addition is disabled unless
+`TUBEBOARD_OPERATOR_OBSERVATION_CONFIG` names a private configuration file. It
+adds no public endpoint, health field, registration field or business command.
+Default operation retains the existing worker schedules, transport deadlines,
+retry rules, persistence and shutdown deadline.
+
+The configuration contains only `ownedInstallID` and `expiresAt`. Supply the
+verified QA installation's actual UUID privately; never post it, a token or a
+StoreKit transaction on GitHub. Expiry must be an absolute UTC time no more than
+90 seconds ahead. The canonical configuration file must belong to the running
+OS user with mode `0600`, inside an exclusively controlled `0700` directory
+outside both the project and the actual served site roots. Aliases, symlinks,
+public locations, excessive input and an existing socket path are rejected.
+Invalid configuration leaves normal service operation unaffected.
+
+This channel trusts processes running as the same OS user; it is not a sandbox
+against that operator. Keep its dedicated directory exclusive throughout the
+lease. Node removes a pathname socket when its server closes, so do not replace
+the socket path while the observation is active. Existing path collisions do
+not authorize deleting or replacing the existing file. See [Node IPC lifecycle
+documentation](https://nodejs.org/api/net.html#identifying-paths-for-ipc-connections).
+
+The socket accepts read-only consumers, with bounded connections, frames,
+buffered writes and total output. Incoming commands close the consumer. The
+absolute lease ends after at most 90 seconds; errors or backpressure cannot own
+delivery, persistence or the five-second HTTP drain. Observer cleanup is never
+awaited by business shutdown. Frames contain only allowlisted worker activity,
+pending/timer/cancellation counters, aggregate HTTP/drain state and selected
+registration/queue presence booleans. They contain no raw or hashed installation
+identity, token, transaction, station, customer payload or private path.
+
+Observation never loads, purges or mutates registration stores. A store becomes
+known only after its existing successful business operation; initial, failed or
+unobserved state remains unknown. Positive observations are tracked separately
+for each store. A Live Activity observation cannot establish that an alert
+registration existed, and an empty or idle result cannot establish operational
+acceptance.
+
+Local synthetic tests qualify this diagnostic source, not production behavior.
+Actual acceptance still requires trusted owned Premium work, positive original
+registration evidence, exact deployed source/image/volume and rollback binding,
+durable opt-out/restart readback and real active-cycle cancellation/HTTP-drain
+observations. Deployment, private production configuration, shared restart and
+owned registration actions require their separately approved concrete operation.
+No production action follows from the source merge.
+
+The 11 October 2026 source checkpoint passed 34 focused tests and all 291
+repository tests with zero failures or skips on Node 26.10.0, syntax/repository
+checks and Fly configuration validation. Independent source review found no
+findings; original failures are retained. Node 22 hosted compatibility, source
+integration and actual owned production observations remain separate gates.
+
 The Premium disruption-alert endpoint accepts both versioned registration
 contracts. Contract v1 remains Underground-only for installed v1.1 clients;
 contract v2 adds Liberty, Lioness, Mildmay, Suffragette, Weaver and Windrush
