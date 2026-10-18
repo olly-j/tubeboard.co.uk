@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tubeboard.co.uk/contracts/primary-arrivals-source-v1.schema.json",
+  "title": "Fixed TrackerNet primary-arrivals source transport v1",
+  "description": "Original source transport only. No semantic XML, row-role, clock, coverage or currentness assertion. UTF8byte/encoded-envelope bounds enforced independently of JSONschema string bounds.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "sourceID",
+        "stationID",
+        "lineID",
+        "status",
+        "bodyUTF8",
+        "bodySHA256",
+        "upstream",
+        "requestStartedAt",
+        "receivedAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "sourceID": {
+          "const": "trackernet-arrivals-v1"
+        },
+        "stationID": {
+          "const": "940GZZLUWOF"
+        },
+        "lineID": {
+          "const": "central"
+        },
+        "status": {
+          "const": "source"
+        },
+        "bodyUTF8": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "bodySHA256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "upstream": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "date",
+            "age",
+            "cacheControl",
+            "contentType"
+          ],
+          "properties": {
+            "date": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1024
+            },
+            "age": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1024
+            },
+            "cacheControl": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1024
+            },
+            "contentType": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 1024
+            }
+          }
+        },
+        "requestStartedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "sourceID",
+        "stationID",
+        "lineID",
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "sourceID": {
+          "const": "trackernet-arrivals-v1"
+        },
+        "stationID": {
+          "const": "940GZZLUWOF"
+        },
+        "lineID": {
+          "const": "central"
+        },
+        "status": {
+          "const": "unavailable"
+        },
+        "reason": {
+          "enum": [
+            "disabled",
+            "missingKey",
+            "rateLimited",
+            "upstreamFailed",
+            "timeout",
+            "invalidResponse",
+            "unsupportedSelection",
+            "unsupportedMethod",
+            "unsupportedQuery"
+          ]
+        }
+      }
+    }
+  ]
+}

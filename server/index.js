@@ -3,6 +3,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SerialWorker } from './worker-lifecycle.js';
+import { PrimaryArrivalsSource, loadPrimaryArrivalsConfig, handlePrimaryArrivalsSource } from './primary-arrivals-source.js';
 import { startOperatorObservation, selectedPresence } from './operator-observation.js';
 import { handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from './timetable-publication-resource.js';
 import {
@@ -38,6 +39,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 const config = loadConfig();
+const primaryArrivalsSource = new PrimaryArrivalsSource(loadPrimaryArrivalsConfig());
 const siteDir = path.resolve(projectRoot, process.env.SITE_DIR || '.');
 const dataFile = path.resolve(projectRoot, config.dataFile);
 const store = new LiveActivityStore(dataFile);
@@ -125,6 +127,9 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 400, { ok: false, error: 'Unexpected Host header' });
       return;
     }
+
+    // Fixed public provider source only; no token/store/APNs or client URL input.
+    if (await handlePrimaryArrivalsSource(request, response, url, primaryArrivalsSource)) return;
 
     // Public reviewed metadata only. Host/security validation above remains
     // identical; no token, JWS, install ID, location or TfL query is involved.

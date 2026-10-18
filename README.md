@@ -56,3 +56,5 @@ association. The bounded selection stays in the URL fragment, so it is never
 sent in the HTTP request. The page validates it locally, displays only its line
 and expiry state, and offers the live App Store listing; it stores no journey,
 device, account, purchase or recipient data.
+
+A fixed optional `GET /api/primary-arrivals/v1/central/940GZZLUWOF` source proxy is prepared for the UF269 correction (central app Issue618/TB150). It remains disabled unless explicitly configured and privately provisioned. It preserves bounded original XML/HTTP/request/receipt evidence for the client decoder; HTTP200 is not a semantic train-count or freshness assertion. Existing Unified, rail, registration and APNs paths remain unchanged. See the new provider section in `docs/live-activity-service.md`.
