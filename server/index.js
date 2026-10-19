@@ -10,6 +10,7 @@ import {
   LiveActivityStore,
   TokenRateLimiter,
   getRolloverDelayMs,
+  getStationArrivalsRefreshDelayMs,
   loadConfig,
   runLiveActivityWorkerCycle,
   validateEndPayload,
@@ -249,11 +250,15 @@ if (config.workerEnabled) {
     intervalMs: config.workerIntervalMs,
     onError: (error) => console.error(`Live Activity worker cycle failed: ${error.message}`),
     onObserve: process.env.TUBEBOARD_OPERATOR_OBSERVATION_CONFIG ? (event, state) => operatorObservation?.worker('activities', event, state) : null,
-    run: (signal, { cacheOnly }) => observeStoreCompletion(runLiveActivityWorkerCycle({
+    run: (signal, { cacheOnly, sourceOnly }) => observeStoreCompletion(runLiveActivityWorkerCycle({
       store,
       config,
       signal,
       cacheOnly,
+      sourceOnly,
+      scheduleSourceRefresh: (record, cache, now, workerIntervalMs) => {
+        worker.scheduleRerun(`${record.environment}:${record.activityID}:station-arrivals`, getStationArrivalsRefreshDelayMs(cache, now, workerIntervalMs), { sourceOnly: true });
+      },
       scheduleRolloverPush: (record, contentState, now, workerIntervalMs) => {
         const delayMs = getRolloverDelayMs(contentState, now, workerIntervalMs);
         worker.scheduleRerun(`${record.environment}:${record.activityID}`, delayMs, { cacheOnly: record.contentStateContract === 'station-board-v2' });

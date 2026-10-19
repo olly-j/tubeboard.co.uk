@@ -448,3 +448,65 @@ One shared in-flight request serves the fixed source, with at most one upstream 
 Transport allows no redirects, at most65536 decoded body bytes/1024 bytes per published header, strict UTF8 and at most524288 encoded envelope bytes. DTD/entity declarations, invalid/residual compressed bytes, key reflection in bounded decoded representations and overflows fail closed. Published headers are the four contract fields only; raw errors/headers/URLs and private credentials are never returned. Downstream responses are no-store so proxy delivery clocks cannot masquerade as official observations. No user IDs/station histories or raw provider bodies are persisted in a new data store. The fixed source is already represented by public station selection, not a new device/location collection.
 
 Before production: complete exact-source independent/security review, injected transport/clock tests and local HTTP controls, `npm run check`, production-compatible Node22 tests and `flyctl config validate --config fly.toml`. Privately stage the existing owned-product key; do not expose it to source/artifacts. Existing owner-approved guarded deployment uses clean protected main and `scripts/deploy-production.sh --confirm-production`, preserving Fly volume, APNs secrets/environments, token stores and workers. Retain prior source/service/Fly revision as rollback, verify actual health source and one fixed sanitized owned-product response, then enable client qualification only after the reviewed source-clock gate. Disable new capability or revert this provider route to stop new reads; existing Unified fallback remains. Merge, transport HTTP200 and deployment are not owner-phone/complete-line/public acceptance. Service version allocation and final deployment evidence remain integration-owner work.
+
+
+## UF276: Timestamped Live Activity Source Renewal (1.4.6)
+
+This source correction addresses a captured HTTP200 station-arrivals response
+with Age51/max-age30 and valid original train timestamps about78 seconds old.
+The earlier generic HTTP cache qualifier rejected those timestamped predictions,
+while the 90-second full-board cycle could also exceed their remaining lifetime.
+The sanitized clock reconstruction retains exactly41.52 seconds at its original
+receipt; it is not a replay of the private nine-row response.
+
+Only newly received HTTP200 station-arrivals predictions use the dedicated
+qualifier: finite original Date, explicit nonnegative integer Age, at most60
+seconds apparent HTTP age, exact station/line/destination and existing row-clock
+checks. Each fact expires120 seconds after the earlier original HTTP observation
+or provider timestamp. The earlier observation is never replaced by dispatch,
+push receipt, a repeated body or a newer HTTP Date. Max-age/no-cache/no-store/
+must-revalidate keep their response-cache meaning; no completed response body is
+retained as an HTTP cache hit or used to stand in for a new read. A still-valid
+timestamped fact is not a claim that an HTTP-stale response became HTTP-fresh.
+The generic HTTP qualifier for status, closure, timetable, Journey, rail and
+clockless destination facts remains unchanged.
+
+A genuinely complete empty station response has no provider row clock and keeps
+the generic strict HTTP expiry (for example, Age0/max-age30 expires30 seconds
+later). Failure, malformed input and an HTTP-stale empty response cannot erase a
+live source. The single original empty context retains its observation as an
+ordering floor after expiry, without becoming current evidence or renewing its
+expiry; an older delayed positive cannot revive trains. A strictly newer
+qualified source can recover. This bounded context has the existing activity
+record lifecycle and adds no client identity or wire field.
+
+The ordinary full worker stays at90 seconds. Source-only opportunities target
+15 seconds before original station-arrivals expiry, subject to a shared30-second
+logical-attempt floor per actual official URL. The same URL coalesces across
+full/source-only cycles and multiple registrations; completed bodies are not
+cached between cycles. Normal operation permits at most2 logical requests/min;
+the existing one missing-Age retry permits at most4 HTTP requests/min. Source-only
+work makes no extra status, closure, Journey or timetable request. Saved source
+cooldowns are primed across all active records, including records in APNs
+backoff, so record order or a restarted reader cannot bypass them. HTTP429 honors
+Retry-After with the existing five-minute minimum; source5xx/transport failures
+back off two minutes. Cancellation keeps only the admitted floor and does not
+become a retry or successful observation.
+
+Full, source-only and cache-only triggers share the existing single SerialWorker,
+with priority in that order and at most one pending rerun. Countdown/expiry
+cache-only callbacks remain network-free. Source timers are installed only after
+the existing post-await registration/publication guard, using the actual retained
+cache. Earlier accepted source expiry can shorten a timer; an old scheduling
+value cannot push it back beyond that deadline. APNs semantics, environment,
+registration compatibility, token custody, volume, existing pause/end behavior
+and default full-worker configuration are unchanged.
+
+The floor/deadline balance cannot guarantee continuous data when the provider
+stops advancing original clocks or source/APNs latency exceeds the remaining
+window. Rows still expire honestly. Source review, deterministic sustained tests
+and HTTP200/APNs acceptance do not prove phone delivery, all-station correctness
+or a physical thirty-minute session. Protected-main/Node22 checks, separately
+authorized exact-main deployment with preserved image/volume rollback, automatic
+live-source/push observation over several original120-second boundaries and
+owner physical confirmation remain release/operational gates.

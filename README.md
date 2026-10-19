@@ -58,3 +58,13 @@ and expiry state, and offers the live App Store listing; it stores no journey,
 device, account, purchase or recipient data.
 
 A fixed optional `GET /api/primary-arrivals/v1/central/940GZZLUWOF` source proxy is prepared for the UF269 correction (central app Issue618/TB150). It remains disabled unless explicitly configured and privately provisioned. It preserves bounded original XML/HTTP/request/receipt evidence for the client decoder; HTTP200 is not a semantic train-count or freshness assertion. Existing Unified, rail, registration and APNs paths remain unchanged. See the new provider section in `docs/live-activity-service.md`.
+
+UF276 prepares service **1.4.6** for the existing Live Activity backend. Newly
+received timestamped station arrivals retain their original provider/HTTP clocks
+and 120-second prediction bound; HTTP cache max-age is not used as a replacement
+prediction lifetime. Clockless empty/status/planning/closure authority stays
+strict. A shared station-Arrivals admission floor permits at most two logical
+reads per minute per actual URL, with source-only renewal before expiry through
+the existing serialized worker. Full supplemental reads remain on the 90-second
+cadence. This is source preparation, not deployment or physical-device acceptance;
+see `docs/live-activity-service.md` for the exact bounds and rollout gates.

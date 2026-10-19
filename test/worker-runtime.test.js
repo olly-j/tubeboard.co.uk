@@ -497,3 +497,16 @@ function fakeConnection() {
   request.end = (body) => { request.body = body; };
   return { client, request, connect: () => client };
 }
+
+test('UF276 pending full and source-only triggers dominate cache-only without concurrent owners', async () => {
+  for (const pending of [[{ cacheOnly: true }, { sourceOnly: true }, { cacheOnly: true }], [{ sourceOnly: true }, {}, { sourceOnly: true }]]) {
+    const gate = deferred(), modes = []; let active = 0, maximum = 0;
+    const worker = new SerialWorker({ run: async (_, mode) => { modes.push(mode); maximum = Math.max(maximum, ++active); if (modes.length === 1) await gate.promise; active--; } });
+    const work = worker.trigger({ cacheOnly: true }); await turn();
+    for (const mode of pending) worker.trigger(mode);
+    gate.resolve(); await work;
+    assert.equal(maximum, 1); assert.equal(modes.length, 2);
+    assert.deepEqual(modes[1], pending.some(p => !p.cacheOnly && !p.sourceOnly) ? { cacheOnly: false } : { cacheOnly: false, sourceOnly: true });
+    await worker.stop();
+  }
+});
