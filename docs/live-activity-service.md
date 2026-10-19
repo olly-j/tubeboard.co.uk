@@ -539,3 +539,97 @@ device receipt. The1.4.6 private observer's raw digest reconstruction is not val
 for1.4.7; a new observer must bind the reviewed normalization and exact source/version.
 Merge/deployment/physical acceptance remain separate, with explicit authorization
 required for a production rollout.
+
+
+## UF278 optional WidgetKit push transport — source 1.4.8
+
+`PUT /api/widgets/token` accepts exactly the copied widget-push-registration-v1
+contract: schemaVersion1, lowercase even-length token (2–512 hex characters),
+sandbox/production APNs environment, sorted unique allowlisted widget kinds,
+positive JavaScript-safe revision and ephemeral transactionJWS (at most24576
+UTF-8 bytes). DELETE accepts only schemaVersion/token/environment/revision.
+Neither request contains an installation ID, station, widget configuration,
+location or history. The encoded body limit is32768 bytes. The app and service
+retain byte-identical schema/fixture copies. Older endpoints/contracts remain
+unchanged; without explicit widget enablement this route returns503 and creates
+no widget store or worker.
+
+The untrusted JWS environment hint chooses the existing official Apple verifier
+only; signature, bundle, product, revocation and expiry checks remain mandatory.
+Subscription proofs additionally require finite expiry. TestFlight's sandbox
+StoreKit proof can authorize its independent production APNs route. No JWS,
+product identifier or transaction is persisted. A successful lease ends at the
+earlier of commit time+24hours and verified subscription expiry. Equal-revision
+identical operational state can renew after fresh verification, including after
+ordinary lease expiry. Equal altered state and equal/older explicitly deleted or
+invalid-token revisions return409. A new internal generation also fences stale
+verification and APNs completions; wire revision need not change on renewal.
+PUT200 is exactly schemaVersion/revision/expiresAt; DELETE200 is exactly
+schemaVersion/revision/deleted:true. A non200 never acknowledges registration.
+
+Widget admission is separate from existing consumers:32 retained handler owners,
+5-second body read,20-second logical handler response deadline, four retained
+Apple-verification owners and15-second proof response timeout. Apple's verifier
+may finish after cancellation; its slot remains occupied until actual settlement
+and a late result cannot register. IP/token maps each have at most4096 keys,
+12 IP requests/minute,6 token-route requests/minute,120 global requests/minute
+and60 proof starts/minute. Denied requests do not append timestamps. These
+finite global controls also bound work when caller IP claims change. No raw IP,
+token, JWS, response body or arbitrary error text is logged. Failed stores and
+bounded parser errors produce fixed response enums. Persisted input is read
+through a nofollow regular-file descriptor into a fixed buffer plus one-byte
+growth sentinel, at most8MiB, with bounded depth, duplicate-key rejection and
+strict record/field validation. The shared store's optional loader defaults to
+its original behavior for every other consumer.
+
+The existing volume holds only `/data/widget-push.json`, with atomic0600 writes
+and AES-256-GCM tokens using the existing alert encryption key. At most1024
+active encrypted entries fit within4096 total route entries. Of those entries,
+at most256 are fences created by previously unknown, unverified DELETE requests;
+3840 remain reserved for verified routes and their fences. A persisted boolean
+operational-origin marker survives proofless deletion/revision updates and is
+cleared only by a newly verified higher-revision PUT. This is not persisted
+purchase evidence. Unknown-delete quota exhaustion rejects further new unknown
+deletes without evicting fences or blocking a new verified route's reserved
+capacity. Accepted unknown deletion still fences any in-flight proof completion.
+Reload validates the marker's type/state and both quota bounds; finite cleanup
+reclaims expired classes. Deleting a known
+active route converts its entry in place even at capacity; unknown additions
+cannot evict an anti-replay fence. Ordinary expiry removes ciphertext at the
+next normal cycle/start/request cleanup, retaining only operational hash,
+revision/kinds and delivery timing. Deleted/invalid fences reject equal/older
+revisions; ordinary-expired fences permit identical fresh-proof renewal.
+Hash-only fences expire after seven days at the next operating cleanup. Finite
+anti-replay retention is not indefinite authority, and cleanup cannot execute
+while the service is stopped. Restart loads the same original clocks/floors;
+loading is not proof renewal. Privacy copy describes these actual limits.
+
+One new SerialWorker sends serial, nonoverlapping hints without TfL polling.
+It wakes every5seconds by default (configuration bounded1–60seconds), admits at
+most16 hints within a15-second cycle, and caps each APNs transport at the
+smaller of5seconds and remaining cycle budget. Due ordering uses original
+created/last-attempt times, so newly arriving routes do not starve older due
+routes. Durable admission before transport establishes a60-second floor per
+environment/token; renewal preserves this floor and backoff.429 backs off five
+minutes, transient failures two minutes increasing to at most one hour, and
+configuration errors at least ten minutes. Invalid tokens remove ciphertext and
+retain the revision fence. Stop aborts the sole in-flight request and clears
+timers. Publication/lease generation is checked after every relevant await;
+an obsolete completion cannot acknowledge, retire or back off a newer route.
+
+Each payload is exactly `{"aps":{"content-changed":true}}`, with push type
+`widgets`, fixed containing-app topic
+`OllyJ.My-Train-Times.push-type.widgets`, fixed collapse ID and APNs expiration
+no later than the lease or one minute. Priority is omitted: the retained
+WidgetKit documentation establishes no widget-specific priority mandate;
+normal APNs default behavior applies. Existing Live Activity priority/cadence,
+source freshness, disruption/status workers and all old consumers are unchanged.
+One hint/minute/token is a send upper bound, not a delivery promise. APNs200
+means service acceptance, not phone receipt or a guaranteed WidgetKit refresh.
+
+This source includes merged undeployed1.4.7 digest behavior. Source preparation,
+mocked checks and protected-main integration do not establish deployment.
+Required gates remain independent review, Node22 hosted Service Quality, Fly
+configuration validation, explicit exact-source production approval, existing
+volume/image rollback, signed widget APS/topic verification and actual supported
+physical-device proof/token/renewal/push-triggered closed-host reload acceptance.

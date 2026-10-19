@@ -1,5 +1,17 @@
 # TubeBoard Website
 
+Service 1.4.8 adds the optional Premium widget registration endpoint
+`PUT/DELETE /api/widgets/token`. It verifies ephemeral Apple purchase proof,
+encrypts the operational token and sends collapsed WidgetKit reload hints;
+it adds no TfL polling or station/configuration collection. A lease lasts at
+most 24 hours and is capped by subscription expiry. Equal-revision identical
+registrations can renew with newly verified proof; deleted revisions cannot
+revive. A 256-entry unknown-delete partition cannot consume the 3840 entries
+reserved for verified routes and their fences. See `docs/live-activity-service.md`
+for finite capacity, retention, request deadlines and rollout gates. This source also includes the previously
+merged 1.4.7 countdown-digest correction; neither source preparation nor a merge
+establishes production deployment or device delivery.
+
 Production website and Live Activity service for [tubeboard.co.uk](https://tubeboard.co.uk/).
 
 The static website is served by the Node service that also runs the Live

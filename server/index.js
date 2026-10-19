@@ -20,6 +20,7 @@ import {
 } from './live-activity.js';
 import {
   LIVE_ACTIVITY_CONTRACT_VERSION,
+  WIDGET_PUSH_CONTRACT_VERSION,
   SERVICE_VERSION,
   SOURCE_REVISION
 } from './version.js';
@@ -117,8 +118,8 @@ const server = http.createServer(async (request, response) => {
         timetablePublicationAuthorityVersion: 1,
         disruptionAlertContractVersion: DISRUPTION_ALERT_CONTRACT_VERSION,
         disruptionAlertWorkerEnabled: disruptionAlertConfig.workerEnabled,
-        widgetPushContractVersion: 1,
-        widgetPushWorkerEnabled: widgetPushConfig.enabled,
+        widgetPushContractVersion: WIDGET_PUSH_CONTRACT_VERSION,
+        widgetPushWorkerEnabled: widgetPushConfig.enabled && widgetPushConfig.encryptionKey?.length === 32,
         sourceRevision: SOURCE_REVISION
       });
       return;

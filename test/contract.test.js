@@ -6,6 +6,7 @@ import {
   validateRegistrationPayload
 } from '../server/disruption-alerts.js';
 import { validateTokenPayload } from '../server/live-activity.js';
+import { validateWidgetPushPayload, WIDGET_KINDS } from '../server/widget-push.js';
 import { LIVE_ACTIVITY_CONTRACT_VERSION } from '../server/version.js';
 import {
   appStoreFallbackPresentation,
@@ -36,6 +37,15 @@ const v12ProductAssets = [
   'disruption-widget-v1-2-20260905103957',
   'next-departures-v1-2-20260905103957'
 ];
+
+test('widget contract copy pins the exact optional operational registration fields', async () => {
+  const schema = JSON.parse(await fs.readFile(new URL('../contracts/widget-push-registration-v1.schema.json', import.meta.url), 'utf8'));
+  const fixture = JSON.parse(await fs.readFile(new URL('../contracts/fixtures/widget-push-registration-v1.json', import.meta.url), 'utf8'));
+  assert.deepEqual(Object.keys(fixture).sort(), schema.$defs.put.required.slice().sort());
+  assert.equal(schema.$defs.put.additionalProperties, false);
+  assert.deepEqual(schema.$defs.put.properties.kinds.items.enum, WIDGET_KINDS);
+  assert.deepEqual(validateWidgetPushPayload('PUT', fixture), fixture);
+});
 
 test('versioned registration fixture matches the service validator', async () => {
   const schema = JSON.parse(await fs.readFile(schemaPath, 'utf8'));

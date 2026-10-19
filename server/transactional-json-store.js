@@ -7,14 +7,16 @@ import path from 'node:path';
 export class TransactionalJsonStore {
   #state;
   #normalize;
+  #loadJSON;
   #loaded = false;
   #loading = null;
   #transactions = Promise.resolve();
 
-  constructor(filePath, initialState, normalize) {
+  constructor(filePath, initialState, normalize, loadJSON = async file => JSON.parse(await fs.readFile(file, 'utf8'))) {
     this.filePath = filePath;
     this.#state = structuredClone(initialState);
     this.#normalize = normalize;
+    this.#loadJSON = loadJSON;
   }
 
   get state() {
@@ -31,8 +33,7 @@ export class TransactionalJsonStore {
     if (!this.#loading) {
       this.#loading = (async () => {
         try {
-          const raw = await fs.readFile(this.filePath, 'utf8');
-          this.#state = this.#normalize(JSON.parse(raw));
+          this.#state = this.#normalize(await this.#loadJSON(this.filePath));
         } catch (error) {
           if (error.code !== 'ENOENT') throw error;
         }

@@ -1,14 +1,17 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
+import fs from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { parseBoundedJSON } from './bounded-json.js';
 import { TransactionalJsonStore } from './transactional-json-store.js';
-import { encryptToken, decryptToken, verifyPremiumTransaction } from './disruption-alerts.js';
+import { encryptToken, decryptToken, verifyPremiumTransaction, PREMIUM_PRODUCT_IDS } from './disruption-alerts.js';
 import { createApnsJwt } from './live-activity.js';
 import { sendApnsRequest } from './notification-transport.js';
 
 export const WIDGET_PUSH_PATH = '/api/widgets/token';
 export const WIDGET_KINDS = ['TubeBoardFavouriteWidget', 'TubeBoardLineStatusWidget', 'TubeBoardPlatformWidget'];
 export const WIDGET_LIMITS = Object.freeze({ leaseMs: 86_400_000, floorMs: 60_000,
-  retentionMs: 604_800_000, active: 1024, routes: 4096, buckets: 4096,
+  retentionMs: 604_800_000, active: 1024, routes: 4096, unknownDeletes: 256, buckets: 4096,
   handlers: 32, proofOwners: 4, bodyBytes: 32768, proofBytes: 24576,
   bodyMs: 5000, handlerMs: 20000, proofMs: 15000, cycleMs: 15000, cycleCount: 16 });
 const fail = (status, code) => Object.assign(new Error(code), { status, code });
@@ -16,6 +19,7 @@ const sameKinds = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const validKinds = a => Array.isArray(a) && a.length > 0 && a.length <= 3
   && a.every((v, i) => WIDGET_KINDS.includes(v) && (i === 0 || a[i - 1] < v));
 const current = (r, now) => r?.state === 'active' && r.leaseExpiresAt > now;
+const unknownQuota = limits => Math.min(limits.unknownDeletes ?? WIDGET_LIMITS.unknownDeletes, Math.max(0, limits.routes - 1));
 
 export function loadWidgetPushConfig(env = process.env, alertConfig) {
   const interval = Number(env.WIDGET_PUSH_WORKER_INTERVAL_MS || 5000);
@@ -26,6 +30,7 @@ export function loadWidgetPushConfig(env = process.env, alertConfig) {
 }
 
 export function validateWidgetPushPayload(method, value) {
+  if (!['PUT', 'DELETE'].includes(method)) throw fail(400, 'invalid-body');
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw fail(400, 'invalid-body');
   const fields = method === 'PUT' ? ['schemaVersion', 'token', 'environment', 'revision', 'kinds', 'transactionJWS']
     : ['schemaVersion', 'token', 'environment', 'revision'];
@@ -44,8 +49,8 @@ export function widgetStoreEnvironment(jws) {
   if (segments.length !== 3 || !segments[1] || !/^[A-Za-z0-9_-]+$/.test(segments[1])) throw fail(403, 'invalid-proof');
   let value;
   try { value = JSON.parse(Buffer.from(segments[1], 'base64url').toString('utf8')); } catch { throw fail(403, 'invalid-proof'); }
-  if (value.environment === 'Sandbox') return 'sandbox';
-  if (value.environment === 'Production') return 'production';
+  if (value?.environment === 'Sandbox') return 'sandbox';
+  if (value?.environment === 'Production') return 'production';
   throw fail(403, 'invalid-proof');
 }
 
@@ -82,48 +87,88 @@ export class WidgetPushAdmission {
 }
 
 function clean(state, now) {
+  let changed = false;
   for (const r of state.records) if (r.state === 'active' && r.leaseExpiresAt <= now) {
+    changed = true;
     r.state = 'expired'; delete r.encryptedToken; r.claim = null;
     r.retainUntil = r.leaseExpiresAt + WIDGET_LIMITS.retentionMs;
   }
+  const count = state.records.length;
   state.records = state.records.filter(r => r.state === 'active' || r.retainUntil > now);
+  return changed || count !== state.records.length;
 }
+const STORE_BYTES = 8 * 1024 * 1024;
+async function loadWidgetJSON(file) {
+  let descriptor;
+  try {
+    descriptor = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const before = await descriptor.stat();
+    if (!before.isFile() || before.size < 1 || before.size > STORE_BYTES) throw fail(503, 'invalid-store');
+    const buffer = Buffer.alloc(before.size + 1); let size = 0;
+    while (size < buffer.length) {
+      const read = await descriptor.read(buffer, size, buffer.length - size, null);
+      if (read.bytesRead === 0) break; size += read.bytesRead;
+    }
+    const after = await descriptor.stat();
+    if (size !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw fail(503, 'invalid-store');
+    return parseBoundedJSON(buffer.subarray(0, size), STORE_BYTES, 8, true);
+  } catch (e) { if (e.code === 'ENOENT') throw e; throw fail(503, 'invalid-store'); }
+  finally { await descriptor?.close(); }
+}
+const finiteDate = n => Number.isSafeInteger(n) && n >= 0;
+const base64 = (text, max) => typeof text === 'string' && text.length <= max && Buffer.from(text, 'base64').toString('base64') === text;
 function normalize(value) {
-  if (!value || value.schemaVersion !== 1 || !Array.isArray(value.records) || value.records.length > WIDGET_LIMITS.routes) throw fail(503, 'invalid-store');
+  if (!value || Object.keys(value).sort().join() !== 'records,schemaVersion' || value.schemaVersion !== 1
+      || !Array.isArray(value.records) || value.records.length > WIDGET_LIMITS.routes) throw fail(503, 'invalid-store');
+  const allowed = new Set(['key', 'environment', 'revision', 'generation', 'state', 'kinds', 'encryptedToken',
+    'createdAt', 'leaseExpiresAt', 'retainUntil', 'lastAttemptAt', 'nextAttemptAt', 'failures', 'claim', 'lastSuccessAt', 'unknownDelete']);
   const keys = new Set(); let active = 0;
   for (const r of value.records) {
-    if (!r || !/^[0-9a-f]{64}$/.test(r.key) || keys.has(r.key) || !['sandbox', 'production'].includes(r.environment)
+    if (!r || Object.keys(r).some(k => !allowed.has(k)) || !/^[0-9a-f]{64}$/.test(r.key) || keys.has(r.key) || !['sandbox', 'production'].includes(r.environment)
         || !Number.isSafeInteger(r.revision) || r.revision < 1 || typeof r.generation !== 'string'
-        || r.generation.length > 64 || !['active', 'expired', 'deleted'].includes(r.state)
-        || !Number.isFinite(r.nextAttemptAt) || !Number.isFinite(r.lastAttemptAt)
+        || !/^[a-f0-9-]{36}$/.test(r.generation) || !Array.isArray(r.kinds) || !['active', 'expired', 'deleted'].includes(r.state)
+        || typeof r.unknownDelete !== 'boolean' || (r.unknownDelete && r.state !== 'deleted')
+        || !finiteDate(r.createdAt) || !finiteDate(r.nextAttemptAt) || !finiteDate(r.lastAttemptAt)
+        || (r.lastSuccessAt !== undefined && !finiteDate(r.lastSuccessAt))
+        || (r.claim !== null && (typeof r.claim !== 'string' || !/^[a-f0-9-]{36}$/.test(r.claim)))
         || !Number.isSafeInteger(r.failures) || r.failures < 0 || r.failures > 12
-        || (r.state === 'active' && (!validKinds(r.kinds) || !Number.isFinite(r.leaseExpiresAt)
-          || r.encryptedToken?.algorithm !== 'aes-256-gcm'))
-        || (r.state !== 'active' && (r.encryptedToken || !Number.isFinite(r.retainUntil)))) throw fail(503, 'invalid-store');
+        || (r.state === 'active' && (!validKinds(r.kinds) || !finiteDate(r.leaseExpiresAt)
+          || r.encryptedToken?.algorithm !== 'aes-256-gcm'
+          || Object.keys(r.encryptedToken).sort().join() !== 'algorithm,ciphertext,iv,tag'
+          || !base64(r.encryptedToken.iv, 16) || Buffer.from(r.encryptedToken.iv, 'base64').length !== 12
+          || !base64(r.encryptedToken.tag, 24) || Buffer.from(r.encryptedToken.tag, 'base64').length !== 16
+          || !base64(r.encryptedToken.ciphertext, 684) || Buffer.from(r.encryptedToken.ciphertext, 'base64').length < 2))
+        || (r.state !== 'active' && (r.encryptedToken || !finiteDate(r.retainUntil)
+          || (r.state === 'expired' && !validKinds(r.kinds)) || (r.state === 'deleted' && r.kinds.length !== 0 && !validKinds(r.kinds))))) throw fail(503, 'invalid-store');
     keys.add(r.key); if (r.state === 'active') active++;
   }
   if (active > WIDGET_LIMITS.active) throw fail(503, 'invalid-store');
+  const unknown = value.records.filter(r => r.unknownDelete).length;
+  if (unknown > unknownQuota(WIDGET_LIMITS)
+      || value.records.length - unknown > WIDGET_LIMITS.routes - unknownQuota(WIDGET_LIMITS)) throw fail(503, 'invalid-store');
   return value;
 }
 
 export class WidgetPushStore extends TransactionalJsonStore {
   constructor(filePath, encryptionKey, limits = WIDGET_LIMITS) {
-    super(filePath, { schemaVersion: 1, records: [] }, normalize);
+    super(filePath, { schemaVersion: 1, records: [] }, normalize, loadWidgetJSON);
     this.encryptionKey = encryptionKey; this.limits = limits;
   }
   key(payload) { return crypto.createHmac('sha256', this.encryptionKey).update(`${payload.environment}:${payload.token}`).digest('hex'); }
   async prepare(payload, now) {
     return this.transaction(state => {
-      clean(state, now);
+      const changed = clean(state, now);
       const r = state.records.find(r => r.key === this.key(payload));
       this.checkPut(state, r, payload);
-      return { value: r?.generation || null };
+      return { changed, value: r?.generation || null };
     });
   }
   checkPut(state, r, payload) {
     if (r && (payload.revision < r.revision || (payload.revision === r.revision
         && (r.state === 'deleted' || !sameKinds(r.kinds, payload.kinds))))) throw fail(409, 'stale-registration');
     if (!r && state.records.length >= this.limits.routes) throw fail(503, 'capacity');
+    if (r?.unknownDelete !== false && state.records.filter(r => !r.unknownDelete).length
+        >= this.limits.routes - unknownQuota(this.limits)) throw fail(503, 'capacity');
     if (r?.state !== 'active' && state.records.filter(r => r.state === 'active').length >= this.limits.active) throw fail(503, 'capacity');
   }
   async put(payload, entitlement, expectedGeneration, now, signal) {
@@ -133,35 +178,40 @@ export class WidgetPushStore extends TransactionalJsonStore {
       if ((previous?.generation || null) !== expectedGeneration) throw fail(409, 'stale-registration');
       this.checkPut(state, previous, payload);
       const expiry = entitlement.expiresAt === null ? now + WIDGET_LIMITS.leaseMs : Date.parse(entitlement.expiresAt);
-      if (!Number.isFinite(expiry) || expiry <= now || (!entitlement.productID.endsWith('.lifetime') && entitlement.expiresAt === null)) throw fail(403, 'invalid-proof');
+      if (!PREMIUM_PRODUCT_IDS.has(entitlement.productID) || !Number.isFinite(expiry) || expiry <= now
+          || (!entitlement.productID.endsWith('.lifetime') && entitlement.expiresAt === null)) throw fail(403, 'invalid-proof');
       const leaseExpiresAt = Math.min(now + WIDGET_LIMITS.leaseMs, expiry);
       const record = { key, environment: payload.environment, revision: payload.revision, kinds: [...payload.kinds],
-        generation: crypto.randomUUID(), state: 'active', encryptedToken: encryptToken(payload.token, this.encryptionKey), leaseExpiresAt,
-        lastAttemptAt: previous?.lastAttemptAt || 0, nextAttemptAt: previous?.nextAttemptAt || 0, failures: previous?.failures || 0, claim: null };
+        generation: crypto.randomUUID(), state: 'active', unknownDelete: false,
+        encryptedToken: encryptToken(payload.token, this.encryptionKey), leaseExpiresAt,
+        createdAt: previous?.createdAt ?? now, lastAttemptAt: previous?.lastAttemptAt || 0,
+        nextAttemptAt: previous?.nextAttemptAt || 0, failures: previous?.failures || 0, claim: null };
       state.records = state.records.filter(r => r.key !== key); state.records.push(record);
       return { value: { schemaVersion: 1, revision: record.revision, expiresAt: new Date(leaseExpiresAt).toISOString() } };
     });
   }
   async remove(payload, now, signal) {
     return this.transaction(state => {
-      signal?.throwIfAborted(); clean(state, now);
+      signal?.throwIfAborted(); const changed = clean(state, now);
       const key = this.key(payload), r = state.records.find(r => r.key === key);
       if (r && payload.revision < r.revision) throw fail(409, 'stale-registration');
-      if (r?.state === 'deleted' && payload.revision === r.revision) return { changed: false, value: { schemaVersion: 1, revision: r.revision, deleted: true } };
+      if (r?.state === 'deleted' && payload.revision === r.revision) return { changed, value: { schemaVersion: 1, revision: r.revision, deleted: true } };
       if (!r && state.records.length >= this.limits.routes) throw fail(503, 'capacity');
+      if (!r && state.records.filter(r => r.unknownDelete).length >= unknownQuota(this.limits)) throw fail(503, 'capacity');
       state.records = state.records.filter(r => r.key !== key);
       state.records.push({ key, environment: payload.environment, revision: payload.revision, kinds: [],
-        generation: crypto.randomUUID(), state: 'deleted', retainUntil: now + WIDGET_LIMITS.retentionMs,
-        lastAttemptAt: r?.lastAttemptAt || 0, nextAttemptAt: r?.nextAttemptAt || 0, failures: 0, claim: null });
+        generation: crypto.randomUUID(), state: 'deleted', unknownDelete: r?.unknownDelete ?? true,
+        retainUntil: now + WIDGET_LIMITS.retentionMs,
+        createdAt: r?.createdAt ?? now, lastAttemptAt: r?.lastAttemptAt || 0, nextAttemptAt: r?.nextAttemptAt || 0, failures: 0, claim: null });
       return { value: { schemaVersion: 1, revision: payload.revision, deleted: true } };
     });
   }
   async takeDue(now) {
     return this.transaction(state => {
-      clean(state, now);
+      const changed = clean(state, now);
       const r = state.records.filter(r => current(r, now) && r.nextAttemptAt <= now)
-        .sort((a, b) => a.lastAttemptAt - b.lastAttemptAt || a.key.localeCompare(b.key))[0];
-      if (!r) return { value: null };
+        .sort((a, b) => (a.lastAttemptAt || a.createdAt) - (b.lastAttemptAt || b.createdAt) || a.key.localeCompare(b.key))[0];
+      if (!r) return { changed, value: null };
       r.lastAttemptAt = now; r.nextAttemptAt = now + WIDGET_LIMITS.floorMs;
       r.claim = crypto.randomUUID(); return { value: r };
     });
@@ -171,9 +221,9 @@ export class WidgetPushStore extends TransactionalJsonStore {
   }
   async finish(claim, result, now) {
     return this.transaction(state => {
-      clean(state, now);
+      const changed = clean(state, now);
       const r = state.records.find(r => r.key === claim.key);
-      if (!r || r.generation !== claim.generation || r.claim !== claim.claim || !current(r, now)) return { changed: false };
+      if (!r || r.generation !== claim.generation || r.claim !== claim.claim || !current(r, now)) return { changed };
       r.claim = null;
       if (result === 'accepted') { r.failures = 0; r.lastSuccessAt = now; }
       else if (result === 'invalid-token') {
@@ -219,7 +269,7 @@ export async function runWidgetPushWorkerCycle({ store, config, signal, pushImpl
       let result = 'cancelled';
       try {
         ownedSignal.throwIfAborted();
-        if (store.owns(claim, clock())) result = await pushImpl(claim, decryptToken(claim.encryptedToken, store.encryptionKey), config,
+        if (monotonic() < end && store.owns(claim, clock())) result = await pushImpl(claim, decryptToken(claim.encryptedToken, store.encryptionKey), config,
           { signal: ownedSignal, timeoutMs: Math.max(1, Math.min(5000, end - monotonic())), isCurrent: () => store.owns(claim, clock()) });
         ownedSignal.throwIfAborted();
       } catch { result = ownedSignal.aborted ? 'cancelled' : 'transient'; }
@@ -241,16 +291,25 @@ function bounded(work, signal, ms, code) {
 }
 async function readBody(request, signal, limits) {
   if (!(request.headers['content-type'] || '').toLowerCase().startsWith('application/json')) throw fail(400, 'invalid-content-type');
-  const read = (async () => {
-    const chunks = []; let bytes = 0;
-    for await (const chunk of request) {
-      signal.throwIfAborted(); bytes += chunk.length;
-      if (bytes > limits.bodyBytes) throw fail(413, 'body-too-large'); chunks.push(chunk);
-    }
-    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw fail(400, 'invalid-json'); }
-  })();
-  try { return await bounded(read, signal, limits.bodyMs, 'body-timeout'); }
-  catch (error) { if (!request.complete) request.destroy(); throw error; }
+  const read = new Promise((resolve, reject) => {
+    const chunks = []; let bytes = 0, finished = false;
+    const finish = (failure, value) => {
+      if (finished) return; finished = true;
+      request.removeListener('data', data); request.removeListener('end', end);
+      request.removeListener('error', error); request.removeListener('aborted', aborted);
+      signal.removeEventListener('abort', aborted);
+      if (failure) { request.pause(); reject(failure); } else resolve(value);
+    };
+    const data = chunk => { bytes += chunk.length;
+      if (bytes > limits.bodyBytes) finish(fail(413, 'body-too-large')); else chunks.push(chunk); };
+    const end = () => { try { finish(null, parseBoundedJSON(Buffer.concat(chunks), limits.bodyBytes, 8, true)); }
+      catch { finish(fail(400, 'invalid-json')); } };
+    const error = () => finish(fail(400, 'invalid-body'));
+    const aborted = () => finish(signal.reason || fail(408, 'request-aborted'));
+    request.on('data', data); request.once('end', end); request.once('error', error); request.once('aborted', aborted);
+    signal.addEventListener('abort', aborted, { once: true }); if (signal.aborted) aborted();
+  });
+  return await bounded(read, signal, limits.bodyMs, 'body-timeout');
 }
 
 export async function handleWidgetPushRegistration(request, response, { config, store, admission, ip = '',
@@ -282,5 +341,6 @@ export async function handleWidgetPushRegistration(request, response, { config, 
   })().finally(() => { leave(); request.removeListener('aborted', abort); response.removeListener('close', abort); });
   try { send(200, await bounded(work, controller.signal, limits.handlerMs, 'handler-timeout')); }
   catch (e) { controller.abort(fail(408, 'request-aborted')); send([400, 403, 409, 413, 429, 503, 504].includes(e.status) ? e.status : 503,
-    { error: ['invalid-body', 'invalid-proof', 'stale-registration', 'capacity', 'admission-limited', 'verification-busy', 'body-too-large', 'invalid-json', 'invalid-content-type', 'handler-timeout', 'proof-timeout', 'body-timeout'].includes(e.code) ? e.code : 'unavailable' }); }
+    { error: ['invalid-body', 'invalid-proof', 'stale-registration', 'capacity', 'admission-limited', 'verification-busy', 'body-too-large', 'invalid-json', 'invalid-content-type', 'handler-timeout', 'proof-timeout', 'body-timeout'].includes(e.code) ? e.code : 'unavailable' });
+    if (!request.complete) setImmediate(() => request.destroy()); }
 }

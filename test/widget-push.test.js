@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { SerialWorker } from '../server/worker-lifecycle.js';
+import { TransactionalJsonStore } from '../server/transactional-json-store.js';
 import { WIDGET_LIMITS, WIDGET_KINDS, WidgetPushStore, WidgetPushAdmission,
   validateWidgetPushPayload, widgetStoreEnvironment, runWidgetPushWorkerCycle, pushWidgetHint } from '../server/widget-push.js';
 
@@ -34,6 +35,7 @@ test('strict widget contract rejects extra/private fields and malformed primitiv
   assert.throws(() => validateWidgetPushPayload('DELETE', { ...deletion, kinds: [] }));
   assert.equal(widgetStoreEnvironment(payload().transactionJWS), 'sandbox');
   assert.throws(() => widgetStoreEnvironment('a.e30.b'), { status: 403 });
+  assert.throws(() => widgetStoreEnvironment('a.bnVsbA.b'), { status: 403 });
 });
 
 test('same revision renewal needs fresh proof, is capped, and stores neither token nor proof', async t => {
@@ -77,6 +79,36 @@ test('capacity reserves in-place deletion; finite cleanup removes only expired f
   assert.equal(store.state.records.length, 0);
 });
 
+test('unknown-delete quota cannot exhaust verified capacity and preserves pending-proof fences across reload and cleanup', async t => {
+  const limits = { ...WIDGET_LIMITS, active: 2, routes: 5, unknownDeletes: 2 };
+  const store = await fixture(t, limits);
+  for (const token of ['01', '02']) await store.remove(payload({ token }), now);
+  await assert.rejects(store.remove(payload({ token: '03' }), now), { status: 503 });
+  await put(store, payload({ token: 'aa' })); await put(store, payload({ token: 'bb' }));
+  await store.remove(payload({ token: 'aa', revision: 2 }), now + 1);
+  await put(store, payload({ token: '01', revision: 2 }), now + 1);
+  assert.equal(store.state.records.filter(r => r.unknownDelete).length, 1, 'only verified PUT releases an unknown-delete slot');
+  await store.remove(payload({ token: '03' }), now + 1);
+  assert.equal(store.state.records.length, 5);
+  await store.remove(payload({ token: 'bb', revision: 2 }), now + 1); // Known deletion remains possible at full capacity.
+  const reloaded = new WidgetPushStore(store.filePath, key, limits); await reloaded.load();
+  await reloaded.remove(payload({ token: '02', revision: 2 }), now + 2);
+  assert.equal(reloaded.state.records.filter(r => r.unknownDelete).length, 2, 'proofless revision updates preserve origin');
+  await assert.rejects(reloaded.remove(payload({ token: '04' }), now + 2), { status: 503 });
+  await reloaded.takeDue(now + WIDGET_LIMITS.leaseMs + WIDGET_LIMITS.retentionMs + 10);
+  assert.equal(reloaded.state.records.length, 0);
+  await reloaded.remove(payload({ token: '04' }), now + WIDGET_LIMITS.leaseMs + WIDGET_LIMITS.retentionMs + 11);
+  assert.equal(reloaded.state.records[0].unknownDelete, true);
+
+  const pending = await fixture(t, limits); const p = payload({ token: 'cc' });
+  const generation = await pending.prepare(p, now); assert.equal(generation, null);
+  await pending.remove({ ...p, revision: 2 }, now + 1);
+  await assert.rejects(pending.put(p, proof, generation, now + 2), { status: 409 });
+  await assert.rejects(put(pending, { ...p, revision: 2 }, now + 2), { status: 409 });
+  await put(pending, { ...p, revision: 3 }, now + 3);
+  assert.equal(pending.state.records[0].unknownDelete, false);
+});
+
 test('admission has bounded keys/counts and does not release noncooperative proof ownership at timeout', async t => {
   let clock = now;
   const limits = { ...WIDGET_LIMITS, buckets: 2, handlers: 2, proofOwners: 1, proofMs: 5 };
@@ -108,6 +140,72 @@ test('serial fair cycles bound count and send frequency across renewal and resta
   assert.equal(await restarted.takeDue(clock), null);
   clock = now + 60000; await cycle(); assert.equal(sent.length, 8); assert.equal(fetching, 0);
   assert.ok(sent.slice(6).every(([k, at]) => at - sent.find(v => v[0] === k)[1] >= 60000));
+  const firstRoutes = new Set(sent.slice(0, 6).map(v => v[0]));
+  for (let i = 128; i < 132; i++) { await put(store, payload({ token: i.toString(16) }), clock); await cycle(); }
+  assert.ok(sent.slice(6, 12).every(v => firstRoutes.has(v[0])), 'continuously arriving new routes cannot preempt older due routes');
+});
+
+test('bounded widget loader rejects oversized, symlinked, duplicate and malformed persisted authority', async t => {
+  for (const shape of ['oversize', 'symlink', 'duplicate', 'bad-record', 'extra-private-field',
+    'origin-string', 'active-unknown-origin', 'missing-origin', 'unknown-over-quota', 'known-over-reserve']) await t.test(shape, async t => {
+    const store = await fixture(t);
+    if (shape === 'oversize') { await fs.writeFile(store.filePath, 'x'); await fs.truncate(store.filePath, 8 * 1024 * 1024 + 1); }
+    if (shape === 'symlink') { await fs.writeFile(store.filePath + '.owned', '{}'); await fs.symlink(store.filePath + '.owned', store.filePath); }
+    if (shape === 'duplicate') await fs.writeFile(store.filePath, '{"schemaVersion":1,"schemaVersion":1,"records":[]}');
+    if (shape === 'bad-record') await fs.writeFile(store.filePath, '{"schemaVersion":1,"records":[{}]}');
+    if (shape === 'extra-private-field') await fs.writeFile(store.filePath, '{"schemaVersion":1,"records":[],"transactionJWS":"synthetic"}');
+    if (['origin-string', 'active-unknown-origin', 'missing-origin'].includes(shape)) {
+      await put(store); const data = store.state;
+      if (shape === 'origin-string') data.records[0].unknownDelete = 'false';
+      if (shape === 'active-unknown-origin') data.records[0].unknownDelete = true;
+      if (shape === 'missing-origin') delete data.records[0].unknownDelete;
+      await fs.writeFile(store.filePath, JSON.stringify(data));
+    }
+    if (['unknown-over-quota', 'known-over-reserve'].includes(shape)) {
+      const unknownDelete = shape === 'unknown-over-quota';
+      const count = unknownDelete ? WIDGET_LIMITS.unknownDeletes + 1 : WIDGET_LIMITS.routes - WIDGET_LIMITS.unknownDeletes + 1;
+      const records = Array.from({ length: count }, (_, i) => ({ key: i.toString(16).padStart(64, '0'), environment: 'production',
+        revision: 1, generation: '00000000-0000-0000-0000-000000000000', state: 'deleted', kinds: [], unknownDelete,
+        createdAt: now, retainUntil: now + WIDGET_LIMITS.retentionMs, lastAttemptAt: 0, nextAttemptAt: 0, failures: 0, claim: null }));
+      await fs.writeFile(store.filePath, JSON.stringify({ schemaVersion: 1, records }));
+    }
+    await assert.rejects(new WidgetPushStore(store.filePath, key).load(), { status: 503 });
+  });
+});
+
+test('fixed-buffer loader detects growth and optional shared loader preserves original default consumers', async t => {
+  const store = await fixture(t); await fs.writeFile(store.filePath, '{"schemaVersion":1,"records":[]}');
+  const original = fs.open;
+  fs.open = async (...args) => {
+    const descriptor = await original(...args); let changed = false;
+    return { stat: () => descriptor.stat(), close: () => descriptor.close(), read: async (...readArgs) => {
+      if (!changed) { changed = true; await fs.appendFile(store.filePath, ' '); }
+      return descriptor.read(...readArgs);
+    } };
+  };
+  try { await assert.rejects(store.load(), { status: 503 }); } finally { fs.open = original; }
+  let loads = 0;
+  const custom = new TransactionalJsonStore(store.filePath, {}, x => x, async () => { loads++; return { synthetic: true }; });
+  await custom.load(); await custom.load(); assert.equal(loads, 1); assert.deepEqual(custom.state, { synthetic: true });
+  await fs.writeFile(store.filePath, '{"original":true}');
+  const unchanged = new TransactionalJsonStore(store.filePath, {}, x => x); await unchanged.load();
+  assert.deepEqual(unchanged.state, { original: true });
+});
+
+test('idle cycles perform no writes while real expiry cleanup commits once', async t => {
+  const store = await fixture(t); await put(store); await store.takeDue(now);
+  const before = await fs.stat(store.filePath); let writes = 0;
+  const original = fs.writeFile;
+  fs.writeFile = async (file, ...args) => { if (String(file).startsWith(store.filePath + '.')) writes++; return original(file, ...args); };
+  try {
+    for (let i = 0; i < 5; i++) assert.equal(await store.takeDue(now + 1000), null);
+    assert.equal(writes, 0); assert.equal((await fs.stat(store.filePath)).mtimeMs, before.mtimeMs);
+    const expiredAt = now + WIDGET_LIMITS.leaseMs + 1;
+    assert.equal(await store.takeDue(expiredAt), null); assert.equal(writes, 1);
+    const persisted = JSON.parse(await fs.readFile(store.filePath, 'utf8'));
+    assert.equal(persisted.records[0].state, 'expired'); assert.equal(persisted.records[0].encryptedToken, undefined);
+    await store.takeDue(expiredAt + 1); assert.equal(writes, 1);
+  } finally { fs.writeFile = original; }
 });
 
 test('cycle deadline and backoff preserve floors; invalid token removes ciphertext', async t => {
@@ -121,6 +219,12 @@ test('cycle deadline and backoff preserve floors; invalid token removes cipherte
   const invalid = store.state.records.find(r => r.state === 'deleted'); assert.equal(invalid.encryptedToken, undefined);
   clock += 300001; await runWidgetPushWorkerCycle({ store, config: {}, clock: () => clock, pushImpl: async () => 'transient' });
   assert.equal(store.state.records.find(r => r.state === 'active').nextAttemptAt, clock + 240000);
+  const late = await fixture(t); await put(late); let elapsedLate = 0, afterDeadline = 0;
+  const take = late.takeDue.bind(late);
+  late.takeDue = async at => { const claim = await take(at); elapsedLate = 15001; return claim; };
+  await runWidgetPushWorkerCycle({ store: late, config: {}, clock: () => now, monotonic: () => elapsedLate,
+    pushImpl: async () => { afterDeadline++; return 'accepted'; } });
+  assert.equal(afterDeadline, 0, 'slow persistence cannot admit APNs after the cycle deadline');
 });
 
 test('stale send completions after deletion, renewal, expiry and stop cannot acknowledge or back off a newer route', async t => {
