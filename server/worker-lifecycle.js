@@ -4,7 +4,7 @@ export class SerialWorker {
   #active = null;
   #controller = null;
   #pending = false;
-  #pendingCacheOnly = true;
+  #pendingMode = 0;
   #stopped = false;
   #started = false;
   #timers = new Map();
@@ -32,21 +32,22 @@ export class SerialWorker {
     this.#scheduleInterval();
   }
 
-  trigger({ cacheOnly = false } = {}) {
+  trigger({ cacheOnly = false, sourceOnly = false } = {}) {
     if (this.#stopped) return Promise.resolve();
     this.#pending = true;
-    this.#pendingCacheOnly &&= cacheOnly;
+    this.#pendingMode = Math.max(this.#pendingMode, cacheOnly ? 1 : sourceOnly ? 2 : 3);
     if (this.#active) { this.#observe('pending'); return this.#active; }
     this.#active = Promise.resolve().then(async () => {
       while (this.#pending && !this.#stopped) {
         this.#pending = false;
-        const cacheOnly = this.#pendingCacheOnly;
-        this.#pendingCacheOnly = true;
+        const mode = this.#pendingMode;
+        this.#pendingMode = 0;
+        const cacheOnly = mode === 1, sourceOnly = mode === 2;
         this.#controller = new AbortController();
         this.#maximum = Math.max(this.#maximum, ++this.#running);
         this.#cyclesStarted += 1; this.#observe('cycle-start');
         try {
-          await this.run(this.#controller.signal, { cacheOnly });
+          await this.run(this.#controller.signal, { cacheOnly, ...(sourceOnly ? { sourceOnly: true } : {}) });
         } catch (error) {
           if (!this.#stopped) this.onError(error);
         } finally {
@@ -60,7 +61,7 @@ export class SerialWorker {
       this.#active = null;
       this.#observe('idle');
       // A trigger can arrive between the last run settling and this cleanup.
-      if (this.#pending && !this.#stopped) return this.trigger({ cacheOnly: this.#pendingCacheOnly });
+      if (this.#pending && !this.#stopped) return this.trigger({ cacheOnly: this.#pendingMode === 1, sourceOnly: this.#pendingMode === 2 });
     });
     return this.#active;
   }

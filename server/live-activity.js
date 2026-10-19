@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
 import { TransactionalJsonStore } from './transactional-json-store.js';
 import { admitPlannedSeed } from './station-board-seed.js';
-import { STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, buildStationBoardState } from './station-board-v2.js';
+import { STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, refreshStationArrivals, StationArrivalReader, buildStationBoardState } from './station-board-v2.js';
 
 // Never log this tuple: it includes token custody and exact selected scope.
 export function registrationTuple(record) {
@@ -252,6 +252,10 @@ export class LiveActivityStore extends TransactionalJsonStore {
       const backoffUntil = Date.parse(record.backoffUntil || '');
       return !Number.isFinite(backoffUntil) || backoffUntil <= nowMs;
     }));
+  }
+
+  stationArrivalAdmissionFloors() {
+    return this.snapshot(state => state.records.filter(record => record.active !== false && record.contentStateContract === STATION_BOARD_CONTRACT && Number.isFinite(record.stationBoardCache?.arrivalsNotBefore)).map(record => ({ stationID: record.stationID, notBefore: record.stationBoardCache.arrivalsNotBefore })));
   }
 
   async retainStationBoard(activityID, environment, incoming, now = new Date(), expectedTuple = null) {
@@ -849,7 +853,9 @@ export async function pushLiveActivityUpdate(record, payload, config, options = 
   throw error;
 }
 
-export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal, cacheOnly = false, clock = () => Date.now() }) {
+const stationArrivalReaders = new WeakMap();
+
+export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal, cacheOnly = false, sourceOnly = false, clock = () => Date.now(), arrivalReader = null, scheduleSourceRefresh = null }) {
   signal?.throwIfAborted();
   await store.expireOld(now, config);
   const records = await store.listActive(now, config);
@@ -902,16 +908,29 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
   }
 
   const publicResponses = new Map();
+  if (!arrivalReader) {
+    if (!stationArrivalReaders.has(store)) stationArrivalReaders.set(store, new StationArrivalReader());
+    arrivalReader = stationArrivalReaders.get(store);
+  }
+  // Prime all active records, including APNs-backoff records, before the first
+  // URL admission. Record order/new registration cannot bypass a saved429 floor.
+  for (const floor of typeof store.stationArrivalAdmissionFloors === 'function' ? store.stationArrivalAdmissionFloors() : []) {
+    const url = new URL(`https://api.tfl.gov.uk/StopPoint/${floor.stationID}/Arrivals`);
+    if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
+    arrivalReader.observeNotBefore(url, floor.notBefore);
+  }
   for (const record of liveRecords.filter((record) => record.contentStateContract === STATION_BOARD_CONTRACT)) {
     signal?.throwIfAborted();
     const expectedTuple = registrationTuple(record);
     let expectedPublicationGeneration;
     try {
       let cache = record.stationBoardCache || {};
-      if (!cacheOnly && !(cache.nextRefreshAt > now.getTime())) {
+      if (sourceOnly) {
+        cache = await refreshStationArrivals(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, arrivalReader);
+      } else if (!cacheOnly && !(cache.nextRefreshAt > now.getTime())) {
         // Only public HTTP reads are shared. Each activity qualifies those
         // immutable receipts against its own selection and retained context.
-        cache = await refreshStationBoard(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, store);
+        cache = await refreshStationBoard(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, store, arrivalReader);
       }
       const effectiveNow = new Date(clock());
       cache = await store.retainStationBoard(record.activityID, record.environment, cache, effectiveNow, expectedTuple);
@@ -930,7 +949,11 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
         logger.info(`Live Activity station-board update pushed, arrivals ${contentState.arrivals.length}`);
       }
       const retainedRecord = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
-      if (retainedRecord && registrationTuple(retainedRecord) === expectedTuple && publicationGeneration(store.publicationAuthority()) === expectedPublicationGeneration && typeof scheduleRolloverPush === 'function') scheduleRolloverPush(retainedRecord, contentState, effectiveNow, config.workerIntervalMs);
+      if (retainedRecord && registrationTuple(retainedRecord) === expectedTuple && publicationGeneration(store.publicationAuthority()) === expectedPublicationGeneration) {
+        const schedulingNow = new Date(clock());
+        if (typeof scheduleSourceRefresh === 'function') scheduleSourceRefresh(retainedRecord, retainedRecord.stationBoardCache, schedulingNow, config.workerIntervalMs);
+        if (typeof scheduleRolloverPush === 'function') scheduleRolloverPush(retainedRecord, contentState, schedulingNow, config.workerIntervalMs);
+      }
     } catch (error) {
       signal?.throwIfAborted();
       if (expectedPublicationGeneration !== undefined && publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;
@@ -940,7 +963,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
     }
   }
   // A typed cache boundary never admits new legacy source reads.
-  const legacyRecords = cacheOnly ? [] : liveRecords.filter((record) => record.contentStateContract !== STATION_BOARD_CONTRACT);
+  const legacyRecords = cacheOnly || sourceOnly ? [] : liveRecords.filter((record) => record.contentStateContract !== STATION_BOARD_CONTRACT);
   if (!legacyRecords.length) return;
   let statuses = [];
   try {
@@ -1003,6 +1026,13 @@ function shouldBackoffEmptyArrivals(record, contentState) {
     && contentState.arrivals.length === 0
     && !contentState.isDisrupted
     && (record.consecutiveEmptyCycles || 0) >= 5;
+}
+
+export function getStationArrivalsRefreshDelayMs(cache, now = new Date(), workerIntervalMs = 90000) {
+  const at = cache?.arrivalsRefreshAt;
+  if (!Number.isFinite(at)) return null;
+  const delay = Math.max(1, at - now.getTime());
+  return delay < workerIntervalMs ? delay : null;
 }
 
 export function getRolloverDelayMs(contentState, now = new Date(), workerIntervalMs = 90_000) {

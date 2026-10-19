@@ -3,8 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { STATION_BOARD_LINES, STATION_BOARD_STATIONS, validBoard, httpObservation, londonClock, londonLocal, journeyURL, parseJourney, parseRailDepartures, parseStationArrivals, parseDestinationFacts, mergeContexts, selectEvents, countdown, nextBoundary, buildStationBoardState, refreshStationBoard } from '../server/station-board-v2.js';
-import { validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
+import { STATION_BOARD_LINES, STATION_BOARD_STATIONS, validBoard, httpObservation, stationArrivalObservation, StationArrivalReader, refreshStationArrivals, londonClock, londonLocal, journeyURL, parseJourney, parseRailDepartures, parseStationArrivals, parseDestinationFacts, mergeContexts, selectEvents, countdown, nextBoundary, buildStationBoardState, refreshStationBoard } from '../server/station-board-v2.js';
+import { validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, getStationArrivalsRefreshDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
 import { SerialWorker } from '../server/worker-lifecycle.js';
 const now = Date.parse('2026-10-01T13:00:00Z');
 const record = { activityID: 'synthetic-v2', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1.0', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 };
@@ -368,4 +368,317 @@ test('bounded planner seed retains exact alighting prefix while publication rout
   const seed = { schemaVersion: 1, stationID: record.stationID, lineID: record.lineID, contexts: [{ sourceID: 'journey-planner', observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 120000).toISOString(), sourceSHA256: 'c'.repeat(64), rows: [{ id: 'journey:bounded-prefix', destinationID: '940GZZLUMDN', destination: 'Morden', via: 'Bank', departure: new Date(now + 90000).toISOString(), routeStationIDs: [record.stationID, '940GZZLUEUS'] }] }] };
   assert.equal(validateTokenPayload({ ...record, plannedContextSeed: seed }, new Date(now)).ok, true);
   const wrong = plannedSeed(); wrong.contexts[0].rows[0].routeStationIDs = ['940GZZLUBNK', '940GZZLUMDN']; assert.equal(validateTokenPayload({ ...record, plannedContextSeed: wrong }, new Date(now)).ok, false);
+});
+
+test('UF276 timestamped arrivals retain original 41.52 seconds beyond HTTP cache max-age', () => {
+  // Reconstructed sanitized clock counterexample, not replay of the private nine-row body.
+  const receipt = Date.parse('2026-10-19T11:02:23.285Z');
+  const timestamp = Date.parse('2026-10-19T11:01:04.805Z');
+  const http = { date: 'Mon, 19 Oct 2026 11:02:23 GMT', age: '51', 'cache-control': 'public,max-age=30' };
+  const events = parseStationArrivals([arrival({ timestamp: new Date(timestamp).toISOString(), expectedArrival: new Date(receipt + 60000).toISOString() })], record, http, receipt);
+  assert.equal(httpObservation(http, receipt, 120000), null, 'generic HTTP cache authority remains strict');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].receivedAt, timestamp);
+  assert.equal(events[0].expiresAt - receipt, 41520);
+});
+
+test('UF276 timestamped source rejects old or invalid clocks while other HTTP authority stays strict', () => {
+  const at = Date.parse('2026-10-19T11:02:23.285Z');
+  const fresh = { date: new Date(at).toUTCString(), age: '51', 'cache-control': 'public,max-age=30' };
+  for (const h of [{ ...fresh, age: undefined }, { ...fresh, age: '' }, { ...fresh, age: '-1' }, { ...fresh, age: '61' }, { ...fresh, age: 'NaN' }, { ...fresh, date: '' }, { ...fresh, date: new Date(at + 6000).toUTCString() }]) {
+    assert.equal(stationArrivalObservation(h, at), null);
+  }
+  const qualified = { ...fresh, age: '0' };
+  for (const offset of [-120000, 6000]) assert.deepEqual(parseStationArrivals([arrival({ timestamp: new Date(at + offset).toISOString(), expectedArrival: new Date(at + 60000).toISOString() })], record, qualified, at), []);
+  assert.deepEqual(parseStationArrivals([arrival({ timestamp: null, expectedArrival: new Date(at + 60000).toISOString() })], record, qualified, at), []);
+  for (const control of ['public,max-age=0', 'no-cache,max-age=30', 'must-revalidate,max-age=30', 'no-store,max-age=30']) {
+    assert.ok(stationArrivalObservation({ ...fresh, 'cache-control': control }, at));
+    assert.equal(httpObservation({ ...fresh, 'cache-control': control }, at, 120000), null);
+  }
+});
+
+test('UF276 timestamped station qualification preserves roles and exact selection on all19 lines', () => {
+  assert.equal(STATION_BOARD_LINES.size, 19);
+  for (const [lineID, line] of STATION_BOARD_LINES) {
+    const origin = STATION_BOARD_STATIONS.get(line.boundedOriginID);
+    const destination = [...STATION_BOARD_STATIONS.values()].find(s => s.stationID !== origin.stationID && s.lineIDs.includes(lineID));
+    assert.ok(destination, lineID);
+    const board = { ...record, stationID: origin.stationID, lineID, selectionMode: 'platform', platformID: 'eastbound-platform-2', platformHeading: 'Eastbound - Platform 2' };
+    const original = now - 78000;
+    const raw = { ...arrival(), naptanId: origin.stationID, lineId: lineID, destinationNaptanId: destination.stationID, destinationName: destination.stationName, platformName: 'Eastbound - Platform 2', timestamp: new Date(original).toISOString(), expectedArrival: new Date(now + 60000).toISOString() };
+    const events = parseStationArrivals([raw], board, headers(now, 51, 30), now);
+    assert.equal(events.length, 1, lineID); assert.equal(events[0].kind, 'throughArrival', lineID);
+    assert.equal(events[0].receivedAt, original); assert.equal(events[0].expiresAt, original + 120000);
+    const cache = { sources: { 'station-arrivals': { observedAt: original, events } } };
+    assert.equal(selectEvents(cache, board, now).length, 1, lineID);
+    assert.equal(selectEvents(cache, { ...board, platformID: 'westbound-platform-1', platformHeading: 'Westbound - Platform 1' }, now).length, 0, lineID);
+    assert.equal(parseStationArrivals([{ ...raw, naptanId: destination.stationID }], board, headers(), now).length, 0, lineID);
+  }
+});
+
+test('UF276 durable retention shortens a source deadline without undoing its admission floor', async (t) => {
+  const store = await temporaryStore(t);
+  const old = { ...cacheOf(row({ sourceID: 'station-arrivals', kind: 'throughArrival', timeEvidence: 'arrivalPrediction', expiresAt: now + 120000 })), arrivalsNotBefore: now + 30000, arrivalsRefreshAt: now + 90000 };
+  await store.retainStationBoard(record.activityID, record.environment, old, new Date(now));
+  const shorter = { ...cacheOf(row({ sourceID: 'station-arrivals', kind: 'throughArrival', timeEvidence: 'arrivalPrediction', receivedAt: now + 1000, expiresAt: now + 60000 })), arrivalsNotBefore: now + 30000, arrivalsRefreshAt: now + 45000 };
+  const retained = await store.retainStationBoard(record.activityID, record.environment, shorter, new Date(now + 1000));
+  assert.equal(retained.arrivalsRefreshAt, now + 45000);
+  assert.equal(retained.arrivalsNotBefore, now + 30000);
+  const loaded = new LiveActivityStore(store.filePath); await loaded.load();
+  assert.equal(loaded.state.records[0].stationBoardCache.arrivalsRefreshAt, now + 45000);
+  assert.equal(getStationArrivalsRefreshDelayMs(retained, new Date(now + 1000)), 44000);
+});
+
+test('UF276 station complete-empty uses strict HTTP authority and failure cannot clear a live source', async (t) => {
+  const store = await temporaryStore(t); const reader = new StationArrivalReader(); let at = now;
+  let value = [arrival({ timestamp: new Date(now).toISOString(), expectedArrival: new Date(now + 300000).toISOString() })];
+  let age = 0, status = 200;
+  const fetchImpl = async () => new Response(JSON.stringify(value), { status, headers: headers(at, age, 30) });
+  let cache = await refreshStationArrivals(record, {}, loadConfig({}), fetchImpl, at, null, () => at, new Map(), reader);
+  assert.equal(cache.sources['station-arrivals'].events.length, 1);
+  const originalExpiry = cache.sources['station-arrivals'].events[0].expiresAt;
+  at += 30000; value = []; age = 51;
+  cache = await refreshStationArrivals(record, { ...cache, arrivalsRefreshAt: at }, loadConfig({}), fetchImpl, at, null, () => at, new Map(), reader);
+  assert.equal(cache.sources['station-arrivals'].events.length, 1, 'HTTP-stale clockless empty is not a tombstone');
+  assert.equal(cache.sources['station-arrivals'].events[0].expiresAt, originalExpiry);
+  at += 30000; age = 0;
+  cache = await refreshStationArrivals(record, { ...cache, arrivalsRefreshAt: at }, loadConfig({}), fetchImpl, at, null, () => at, new Map(), reader);
+  await store.retainStationBoard(record.activityID, record.environment, cache, new Date(at));
+  assert.deepEqual(store.state.records[0].stationBoardCache.sources['station-arrivals'].events, []);
+  assert.equal(cache.sources['station-arrivals'].expiresAt, at + 30000, 'empty retains generic30s deadline');
+  const emptyObservedAt = cache.sources['station-arrivals'].observedAt;
+  at += 15000; status = 503;
+  // A distinct reader models a restarted process; persisted admission still blocks early HTTP.
+  let calls = 0;
+  const blocked = await refreshStationArrivals(record, { ...cache, arrivalsRefreshAt: at }, loadConfig({}), async (...args) => { calls++; return fetchImpl(...args); }, at, null, () => at, new Map(), new StationArrivalReader());
+  assert.equal(calls, 0); assert.equal(blocked.sources['station-arrivals'].observedAt, emptyObservedAt);
+});
+
+test('UF276 thirty-minute source renewals share requests across registrations without extra supplemental reads', async (t) => {
+  const store = await temporaryStore(t); let at = now;
+  const second = { ...record, activityID: 'synthetic-v2-second', installID: 'synthetic-install-second', selectionMode: 'platform', platformID: 'southbound-platform-2', platformHeading: 'Southbound - Platform 2' };
+  await store.upsertToken(second, new Date(now));
+  const reads = [], supplemental = [], pushes = [];
+  const config = loadConfig({});
+  const fetchImpl = async (url) => {
+    const path = new URL(url).pathname;
+    if (path.startsWith('/StopPoint/') && path.endsWith('/Arrivals')) {
+      reads.push(at);
+      return new Response(JSON.stringify([arrival({ timestamp: new Date(at - 78480).toISOString(), expectedArrival: new Date(at + 300000).toISOString() })]), { headers: headers(at, 51, 30) });
+    }
+    supplemental.push({ path, at });
+    return new Response(JSON.stringify(path.endsWith('/Status') ? [{ id: record.lineID, lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: 'Good Service' }] }] : []), { headers: headers(at, 0, 30) });
+  };
+  for (let step = 0; step <= 60; step++) {
+    at = now + step * 30000;
+    if (step) for (const r of store.state.records) assert.ok(r.stationBoardCache.sources['station-arrivals'].events[0].expiresAt > at, 'previous source survives until the next admitted opportunity');
+    const full = step % 3 === 0;
+    const beforeSupplemental = supplemental.length;
+    await runLiveActivityWorkerCycle({ store, config, now: new Date(at), clock: () => at, sourceOnly: !full, fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload); return { status: 200 }; }, logger });
+    if (!full) assert.equal(supplemental.length, beforeSupplemental, 'source-only cycle makes no status/planning/closure request');
+    for (const r of store.state.records) {
+      const live = r.stationBoardCache.sources['station-arrivals'];
+      assert.equal(live.events.length, 1); assert.equal(live.events[0].expiresAt - at, 41520);
+      assert.ok(r.stationBoardCache.arrivalsRefreshAt <= at + 30000);
+      assert.equal(r.stationBoardCache.nextRefreshAt, now + (Math.floor(step / 3) + 1) * 90000);
+    }
+  }
+  assert.equal(reads.length, 61, 'one logical request per30s shared by both configurations');
+  assert.ok(reads.slice(1).every((value, i) => value - reads[i] >= 30000));
+  assert.equal(new Set(supplemental.map(r => r.at)).size, 21, 'supplemental sources stay on full90s cycles');
+  assert.ok(pushes.every(p => p.aps['content-state'].arrivals.some(r => r.timeEvidence === 'throughArrivalPrediction')));
+});
+
+test('UF276 source timer uses the current post-push registration fence', async (t) => {
+  const store = await temporaryStore(t); const schedules = [];
+  const fetchImpl = async url => new Response(JSON.stringify(new URL(url).pathname.endsWith('/Arrivals') ? [arrival()] : []), { headers: headers() });
+  await runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(now), clock: () => now, fetchImpl,
+    pushImpl: async () => { await store.upsertToken({ ...record, tokenUpdatedAt: new Date(now + 1000).toISOString(), platformID: 'other-platform', selectionMode: 'platform' }, new Date(now + 1000)); return { status: 200 }; },
+    scheduleSourceRefresh: (...args) => schedules.push(args), scheduleRolloverPush: (...args) => schedules.push(args), logger });
+  assert.equal(schedules.length, 0, 'obsolete callback cannot install either timer');
+  assert.equal(store.state.records[0].lastSuccessAt, null);
+});
+
+test('UF276 URL reader preserves persisted cooldown across a deferred record and a new registration', async () => {
+  const reader = new StationArrivalReader(), url = new URL('https://api.tfl.gov.uk/StopPoint/synthetic/Arrivals');
+  let at = now, calls = 0;
+  const fetchImpl = async () => { calls++; return new Response('[]', { headers: headers(at) }); };
+  const oldRecord = await reader.read(url, { fetchImpl, clock: () => at, notBefore: now + 300000 });
+  const newRecord = await reader.read(url, { fetchImpl, clock: () => at });
+  assert.equal(oldRecord.deferred, true); assert.equal(newRecord.deferred, true); assert.equal(calls, 0);
+  assert.equal(newRecord.nextAttemptAt, now + 300000);
+  at = now + 300000;
+  assert.equal((await reader.read(url, { fetchImpl, clock: () => at })).ok, true); assert.equal(calls, 1);
+});
+
+test('UF276 URL reader shares in-flight reads and strongest waiter floor without caching completed bodies', async () => {
+  const reader = new StationArrivalReader(), url = new URL('https://api.tfl.gov.uk/StopPoint/synthetic/Arrivals');
+  let at = now, calls = 0, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const fetchImpl = async () => { calls++; await gate; return new Response('[]', { headers: headers(at) }); };
+  const first = reader.read(url, { fetchImpl, clock: () => at });
+  const joined = reader.read(url, { fetchImpl, clock: () => at, notBefore: now + 300000 });
+  release(); const [a, b] = await Promise.all([first, joined]);
+  assert.equal(calls, 1); assert.equal(a.nextAttemptAt, now + 300000); assert.equal(b.nextAttemptAt, now + 300000);
+  at += 30000;
+  const deferred = await reader.read(url, { fetchImpl, clock: () => at });
+  assert.equal(deferred.deferred, true); assert.equal(deferred.value, undefined); assert.equal(calls, 1);
+});
+
+test('UF276 reader honors429 Retry-After and bounded missing-Age retry without spinning', async () => {
+  for (const retry of ['400', new Date(now + 400000).toUTCString()]) {
+    let at = now, calls = 0; const reader = new StationArrivalReader(), url = new URL('https://api.tfl.gov.uk/StopPoint/synthetic/Arrivals');
+    const fetchImpl = async () => { calls++; return new Response('', { status: 429, headers: { 'retry-after': retry } }); };
+    const result = await reader.read(url, { fetchImpl, clock: () => at });
+    assert.equal(result.nextAttemptAt, now + 400000);
+    for (at = now + 30000; at < now + 400000; at += 30000) assert.equal((await reader.read(url, { fetchImpl, clock: () => at })).deferred, true);
+    assert.equal(calls, 1);
+  }
+  let at = now, calls = 0; const reader = new StationArrivalReader(), url = new URL('https://api.tfl.gov.uk/StopPoint/synthetic/Arrivals');
+  const fetchImpl = async () => { calls++; return new Response('[]', { headers: { date: new Date(at).toUTCString() } }); };
+  for (let attempt = 0; attempt < 4; attempt++) { at = now + attempt * 30000; await reader.read(url, { fetchImpl, clock: () => at }); }
+  assert.equal(calls, 8, 'two logical attempts/min, at mosttwo HTTP reads per missing-Age attempt');
+});
+
+test('UF276 reader cancellation consumes no retry and retains only the admitted30s floor', async () => {
+  const controller = new AbortController(), reader = new StationArrivalReader(), url = new URL('https://api.tfl.gov.uk/StopPoint/synthetic/Arrivals');
+  let calls = 0, entered;
+  const gate = new Promise(resolve => { entered = resolve; });
+  const work = reader.read(url, { signal: controller.signal, clock: () => now, fetchImpl: async (_, { signal }) => {
+    calls++; entered(); return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+  } });
+  await gate; controller.abort(new DOMException('Synthetic cancellation', 'AbortError'));
+  await assert.rejects(work, { name: 'AbortError' });
+  const result = await reader.read(url, { clock: () => now + 1000, fetchImpl: async () => { calls++; throw new Error('must not run'); } });
+  assert.equal(result.deferred, true); assert.equal(result.nextAttemptAt, now + 30000); assert.equal(calls, 1);
+});
+
+test('UF276 durable complete-empty ordering survives HTTP expiry and only a newer source recovers', async (t) => {
+  const store = await temporaryStore(t);
+  const live = observedAt => cacheOf(row({ sourceID: 'station-arrivals', kind: 'throughArrival', timeEvidence: 'arrivalPrediction', receivedAt: observedAt, expiresAt: observedAt + 120000, time: now + 300000 }));
+  await store.retainStationBoard(record.activityID, record.environment, live(now), new Date(now));
+  const empty = { sources: { 'station-arrivals': { observedAt: now + 30000, expiresAt: now + 60000, events: [] } } };
+  await store.retainStationBoard(record.activityID, record.environment, empty, new Date(now + 30000));
+  // Original observation t20, delivered after the newer complete-empty HTTP expires at t60.
+  await store.retainStationBoard(record.activityID, record.environment, live(now + 20000), new Date(now + 61000));
+  const reloaded = new LiveActivityStore(store.filePath); await reloaded.load();
+  let retained = reloaded.state.records[0].stationBoardCache;
+  assert.equal(retained.sources['station-arrivals'].observedAt, now + 30000);
+  assert.equal(retained.sources['station-arrivals'].expiresAt, now + 60000);
+  assert.deepEqual(selectEvents(retained, record, now + 61000), [], 'expired negative history is not current and older live rows cannot revive');
+  await reloaded.retainStationBoard(record.activityID, record.environment, live(now + 62000), new Date(now + 62000));
+  retained = reloaded.state.records[0].stationBoardCache;
+  assert.equal(retained.sources['station-arrivals'].observedAt, now + 62000);
+  assert.equal(selectEvents(retained, record, now + 62000).length, 1);
+});
+
+test('UF276 worker primes persisted URL cooldowns before new registrations even when their owner is in APNs backoff', async (t) => {
+  const store = await temporaryStore(t), later = { ...record, activityID: 'later-source-cooldown', installID: 'another-owned-synthetic-install' };
+  await store.upsertToken(later, new Date(now));
+  await store.retainStationBoard(later.activityID, later.environment, { arrivalsNotBefore: now + 300000, arrivalsRefreshAt: now + 300000 }, new Date(now));
+  await store.markBackoff(later.activityID, later.environment, 120000, 'syntheticAPNsBackoff', new Date(now));
+  let arrivals = 0;
+  await runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(now), clock: () => now,
+    fetchImpl: async url => { if (new URL(url).pathname.startsWith('/StopPoint/') && new URL(url).pathname.endsWith('/Arrivals')) arrivals++; return new Response('[]', { headers: headers() }); }, pushImpl: async () => ({ status: 200 }), logger });
+  assert.equal(arrivals, 0, 'first/new record must observe the later/backed-off record cooldown');
+  assert.equal(store.state.records[0].stationBoardCache.arrivalsNotBefore, now + 300000);
+});
+
+test('UF276 actual worker timers renew before expiry with transport latency and let unchanged bodies expire', async (t) => {
+  for (const advancing of [true, false]) {
+    const store = await temporaryStore(t);
+    await store.upsertToken({ ...record, activityID: 'timer-second', installID: 'timer-second-install', selectionMode: 'platform', platformID: 'southbound-platform-2', platformHeading: 'Southbound - Platform 2' }, new Date(now));
+    let at = now, sleeping = 0, active = 0, maximum = 0, initialTimestamp = null;
+    const timers = new Map(), reads = [], supplements = [], delivered = [], cycles = [];
+    const schedule = (callback, delay) => { const key = { at: at + delay, callback, unref() {} }; timers.set(key, key); return key; };
+    const cancel = timer => timers.delete(timer);
+    const latency = (delay, signal) => new Promise((resolve, reject) => {
+      sleeping++;
+      const timer = schedule(() => { sleeping--; signal?.removeEventListener('abort', abort); resolve(); }, delay);
+      const abort = () => { cancel(timer); sleeping--; reject(signal.reason); };
+      signal?.addEventListener('abort', abort, { once: true });
+    });
+    const fetchImpl = async (url, { signal }) => {
+      const path = new URL(url).pathname, dispatch = at;
+      await latency(2000, signal);
+      if (path.startsWith('/StopPoint/') && path.endsWith('/Arrivals')) {
+        const timestamp = advancing || initialTimestamp === null ? at - 78480 : initialTimestamp;
+        initialTimestamp ??= timestamp;
+        reads.push({ dispatch, received: at, expiry: timestamp + 120000 });
+        return new Response(JSON.stringify([arrival({ timestamp: new Date(timestamp).toISOString(), expectedArrival: new Date(at + 300000).toISOString() })]), { headers: headers(at, 51, 30) });
+      }
+      supplements.push({ at: dispatch, path });
+      return new Response(JSON.stringify(path.endsWith('/Status') ? [{ id: record.lineID, lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: 'Good Service' }] }] : []), { headers: headers(at, 0, 30) });
+    };
+    const worker = new SerialWorker({ schedule, cancel, initialDelayMs: 2000, intervalMs: 90000,
+      onError: error => { throw error; },
+      run: async (signal, mode) => {
+        maximum = Math.max(maximum, ++active); cycles.push({ at, ...mode });
+        try {
+          await runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at, signal, ...mode, fetchImpl,
+            pushImpl: async (_, payload) => { await latency(1000, signal); delivered.push({ at, payload }); return { status: 200 }; },
+            scheduleSourceRefresh: (r, cache, current, interval) => worker.scheduleRerun(`${r.activityID}:source`, getStationArrivalsRefreshDelayMs(cache, current, interval), { sourceOnly: true }),
+            scheduleRolloverPush: (r, state, current, interval) => worker.scheduleRerun(`${r.activityID}:cache`, getRolloverDelayMs(state, current, interval), { cacheOnly: true }), logger });
+        } finally { active--; }
+      }
+    });
+    t.after(() => worker.stop());
+    worker.start();
+    const until = now + (advancing ? 370000 : 160000); let waits = 0;
+    while (true) {
+      // Real persistence awaits do not advance virtual provider/network time.
+      if (active && !sleeping) { assert.ok(++waits < 10000, 'business work must settle or schedule transport'); await new Promise(resolve => setImmediate(resolve)); continue; }
+      waits = 0;
+      const next = [...timers.values()].sort((a, b) => a.at - b.at)[0];
+      if (!next || next.at > until) { at = until; await worker.stop(); break; }
+      at = next.at; timers.delete(next); next.callback(); await new Promise(resolve => setImmediate(resolve));
+    }
+    at = Math.max(at, until); await worker.stop();
+    assert.equal(maximum, 1); assert.equal(timers.size, 0);
+    assert.ok(cycles.some(c => c.sourceOnly === true)); assert.ok(cycles.some(c => c.cacheOnly === true));
+    assert.ok(reads.length >= (advancing ? 9 : 2));
+    assert.ok(reads.slice(1).every((r, i) => r.dispatch - reads[i].dispatch >= 30000), 'actual timer-driven source admission is bounded');
+    const full = cycles.filter(c => !c.cacheOnly && !c.sourceOnly);
+    assert.equal(full[0].at, now + 2000);
+    assert.ok(full.slice(1).every((c, i) => c.at >= now + (i + 1) * 90000 && c.at <= now + (i + 1) * 90000 + 8000), 'full90s triggers retain phase; only active serialized work may delay dispatch');
+    assert.ok(supplements.every(read => full.some(c => read.at >= c.at && read.at <= c.at + 4000)), 'only full cycles make supplemental requests');
+    if (advancing) {
+      assert.ok(reads.slice(1).every((r, i) => r.received < reads[i].expiry), 'new original source arrives before previous expiry');
+      assert.ok(delivered.every(({ at: receipt, payload }) => payload.aps['content-state'].arrivals.some(r => r.timeEvidence === 'throughArrivalPrediction' && r.expiresAt * 1000 + 978307200000 > receipt)), 'every delivered healthy payload still has an original current live row');
+      assert.ok(delivered.some(d => d.at > now + 240000), 'actual timer path crosses two original120s windows');
+    } else {
+      const expiry = initialTimestamp + 120000;
+      assert.ok(delivered.some(d => d.at > expiry && d.payload.aps['content-state'].arrivals.length === 0));
+      assert.ok(delivered.filter(d => d.at > expiry).every(d => d.payload.aps['content-state'].arrivals.every(r => r.expiresAt * 1000 + 978307200000 <= d.at)), 'old unchanged provider timestamp is never renewed');
+    }
+  }
+});
+
+test('UF276 transport failure retains only unexpired original live facts and never becomes an empty read', async () => {
+  let at = now; const reader = new StationArrivalReader(), config = loadConfig({});
+  const good = async () => new Response(JSON.stringify([arrival({ expectedArrival: new Date(now + 300000).toISOString() })]), { headers: headers(now, 0, 30) });
+  let cache = await refreshStationArrivals(record, {}, config, good, at, null, () => at, new Map(), reader);
+  const original = cache.sources['station-arrivals'];
+  at += 30000;
+  cache = await refreshStationArrivals(record, { ...cache, arrivalsRefreshAt: at }, config, async () => { throw new Error('synthetic transport failure'); }, at, null, () => at, new Map(), reader);
+  assert.deepEqual(cache.sources['station-arrivals'], original);
+  assert.equal(cache.arrivalsNotBefore, at + 120000);
+  assert.equal(selectEvents(cache, record, now + 31000).length, 1);
+  assert.equal(selectEvents(cache, record, now + 120000).length, 0);
+  assert.equal(cache.sources['station-arrivals'].events[0].expiresAt, now + 120000);
+});
+
+test('UF276 blank Age cannot make a clockless empty authoritative in full or source-only refresh', async (t) => {
+  for (const sourceOnly of [false, true]) for (const age of ['', ' ', '0']) {
+    const store = await temporaryStore(t);
+    const original = cacheOf(row({ sourceID: 'station-arrivals', kind: 'throughArrival', timeEvidence: 'arrivalPrediction', receivedAt: now, expiresAt: now + 120000, time: now + 300000 }));
+    await store.retainStationBoard(record.activityID, record.environment, original, new Date(now));
+    const at = now + 30000;
+    await runLiveActivityWorkerCycle({ store, config: loadConfig({}), sourceOnly, now: new Date(at), clock: () => at,
+      fetchImpl: async () => new Response('[]', { headers: { date: new Date(at).toUTCString(), age, 'cache-control': 'public,max-age=30' } }),
+      pushImpl: async () => ({ status: 200 }), logger });
+    const source = store.state.records[0].stationBoardCache.sources['station-arrivals'];
+    if (age === '0') { assert.deepEqual(source.events, []); assert.equal(source.expiresAt, at + 30000); }
+    else { assert.equal(source.events.length, 1); assert.equal(source.observedAt, now); assert.equal(source.events[0].expiresAt, now + 120000); }
+  }
 });

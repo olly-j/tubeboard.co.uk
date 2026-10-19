@@ -56,6 +56,138 @@ export function httpObservation(headers, now, lifetime, { cacheRequired = false,
   const expiresAt = observedAt + Math.min(lifetime, maxAge ? Number(maxAge[1]) * 1000 : lifetime);
   return now < expiresAt ? { observedAt, expiresAt } : null;
 }
+// Clockless station empties retain generic HTTP expiry, but a blank Age is
+// not an observed integer zero and cannot acquire source-clearing authority.
+function stationEmptyObservation(headers, now) {
+  const age = Object.entries(headers || {}).find(([key]) => key.toLowerCase() === 'age')?.[1];
+  if (typeof age !== 'string' || !/^\d+$/.test(age.trim())) return null;
+  return httpObservation(headers, now, 120000);
+}
+
+// Timestamped predictions have their own original observation lifetime. HTTP
+// max-age controls response-cache reuse; it is not a replacement row clock.
+// This does not relax the strict qualifier used by clockless/planned authority.
+export function stationArrivalObservation(headers, now) {
+  const h = Object.fromEntries(Object.entries(headers || {}).map(([k, v]) => [k.toLowerCase(), v]));
+  const date = Date.parse(h.date || '');
+  if (!Number.isFinite(date) || typeof h.age !== 'string' || !/^\d+$/.test(h.age.trim())) return null;
+  const age = Number(h.age), apparentAge = Math.max(age * 1000, Math.max(0, now - date));
+  if (!Number.isFinite(age) || date > now + 5000 || apparentAge > 60000) return null;
+  const observedAt = now - apparentAge;
+  return { observedAt, expiresAt: observedAt + 120000 };
+}
+
+const STATION_ARRIVAL_ATTEMPT_FLOOR_MS = 30000;
+function retryAfterDelay(value, now) {
+  if (typeof value !== 'string') return 0;
+  if (/^\d+$/.test(value.trim())) {
+    const delay = Number(value) * 1000;
+    return Number.isFinite(delay) && now + delay <= 8640000000000000 ? delay : 0;
+  }
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - now) : 0;
+}
+
+// One owner is shared across full/source-only cycles. It retains admission
+// clocks and in-flight work, never a completed body as an HTTP cache hit.
+export class StationArrivalReader {
+  #entries = new Map();
+
+  observeNotBefore(url, notBefore) {
+    if (!Number.isFinite(notBefore) || notBefore <= 0) return;
+    const key = `station-arrivals:${url.href}`;
+    const entry = this.#entries.get(key) || { nextAttemptAt: 0, promise: null };
+    entry.nextAttemptAt = Math.max(entry.nextAttemptAt, notBefore);
+    this.#entries.set(key, entry);
+  }
+
+  read(url, { fetchImpl = fetch, signal, clock = () => Date.now(), publicResponses = new Map(), notBefore = 0 } = {}) {
+    signal?.throwIfAborted();
+    const key = `station-arrivals:${url.href}`;
+    const now = clock();
+    for (const [other, entry] of this.#entries) if (!entry.promise && entry.nextAttemptAt <= now) this.#entries.delete(other);
+    let entry = this.#entries.get(key);
+    if (!entry) { entry = { nextAttemptAt: 0, promise: null }; this.#entries.set(key, entry); }
+    // A persisted cooldown is source/URL authority, including on a deferred
+    // read or a second waiter joining already-running work after a restart.
+    entry.nextAttemptAt = Math.max(entry.nextAttemptAt, Number.isFinite(notBefore) ? notBefore : 0);
+    const admittedResult = promise => promise.then(response => {
+      signal?.throwIfAborted();
+      entry.nextAttemptAt = Math.max(entry.nextAttemptAt, response.nextAttemptAt || 0);
+      return { ...response, nextAttemptAt: entry.nextAttemptAt };
+    });
+    if (publicResponses.has(key)) return admittedResult(publicResponses.get(key));
+    if (entry.promise) return admittedResult(entry.promise);
+    if (entry.nextAttemptAt > now) {
+      // One cycle has one URL admission outcome, even if slower supplemental
+      // work crosses the floor before its later registrations are visited.
+      const deferred = Promise.resolve({ ok: false, deferred: true, completedAt: now, nextAttemptAt: entry.nextAttemptAt });
+      publicResponses.set(key, deferred);
+      return deferred;
+    }
+    entry.nextAttemptAt = now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS;
+    entry.promise = (async () => {
+      let retryAfter = null;
+      const transport = async (input, options) => {
+        const response = await fetchImpl(input, options);
+        retryAfter = response.headers?.get?.('retry-after') ?? null;
+        return response;
+      };
+      try {
+        let response = await fetchJsonResponse(url, transport, { signal, includeHeaders: true });
+        if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, transport, { signal, includeHeaders: true });
+        const completedAt = clock();
+        if (response.status === 429) entry.nextAttemptAt = Math.max(entry.nextAttemptAt, completedAt + Math.max(300000, retryAfterDelay(retryAfter, completedAt)));
+        else if (response.status >= 500) entry.nextAttemptAt = Math.max(entry.nextAttemptAt, completedAt + 120000);
+        if (response.ok && Buffer.byteLength(JSON.stringify(response.value)) > 2000000) response = { ok: false };
+        return immutable(structuredClone({ ...response, completedAt, nextAttemptAt: entry.nextAttemptAt }));
+      } catch (error) {
+        signal?.throwIfAborted();
+        entry.nextAttemptAt = Math.max(entry.nextAttemptAt, clock() + 120000);
+        return { ok: false, completedAt: clock(), nextAttemptAt: entry.nextAttemptAt };
+      } finally {
+        entry.promise = null;
+      }
+    })();
+    publicResponses.set(key, entry.promise);
+    return admittedResult(entry.promise);
+  }
+}
+
+function nextStationArrivalRefresh(cache, now, notBefore, workerIntervalMs) {
+  const source = cache.sources?.['station-arrivals'];
+  const deadlines = (source?.events || []).map(e => e.expiresAt).filter(Number.isFinite);
+  if (Number.isFinite(source?.expiresAt)) deadlines.push(source.expiresAt);
+  const expiry = deadlines.length ? Math.min(...deadlines) : null;
+  const target = expiry === null ? now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS : Math.min(now + workerIntervalMs, expiry - 15000);
+  return Math.max(notBefore, target);
+}
+
+export async function refreshStationArrivals(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader) {
+  signal?.throwIfAborted();
+  if (previous.arrivalsRefreshAt > now) return mergeContexts(previous, {}, record, now);
+  const url = new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`);
+  if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
+  const response = await arrivalReader.read(url, { fetchImpl, signal, clock, publicResponses, notBefore: previous.arrivalsNotBefore });
+  return mergeStationArrivalRead(record, previous, response, clock(), config.workerIntervalMs);
+}
+
+function mergeStationArrivalRead(record, previous, response, now, workerIntervalMs) {
+  const sources = {};
+  if (response.ok && response.status === 200) {
+    const observation = Array.isArray(response.value) && response.value.length === 0
+      ? stationEmptyObservation(response.headers, response.completedAt)
+      : stationArrivalObservation(response.headers, response.completedAt);
+    const events = parseStationArrivals(response.value, record, response.headers, response.completedAt);
+    if (events.length || observation && Array.isArray(response.value) && response.value.length === 0) {
+      sources['station-arrivals'] = { observedAt: events.length ? Math.max(...events.map(e => e.receivedAt)) : observation.observedAt, expiresAt: observation?.expiresAt, events };
+    }
+  }
+  const merged = mergeContexts(previous, { sources }, record, now);
+  const notBefore = Math.max(previous.arrivalsNotBefore || 0, response.nextAttemptAt || now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS);
+  return { ...merged, arrivalsNotBefore: notBefore, arrivalsRefreshAt: nextStationArrivalRefresh(merged, now, notBefore, workerIntervalMs) };
+}
+
 const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
 export function londonLocal(ms) {
   const p = Object.fromEntries(formatter.formatToParts(new Date(ms)).map((p) => [p.type, p.value]));
@@ -98,7 +230,7 @@ function arrivalAlternatives(rows) {
   return [...groups.values()].map((group) => ({ ...group[0], __unknownPlatform: new Set(group.map((row) => row.platformName)).size > 1, __unknownClock: new Set(group.map((row) => row.expectedArrival)).size > 1 }));
 }
 export function parseStationArrivals(rows, record, headers, now) {
-  const observation = httpObservation(headers, now, 120_000);
+  const observation = stationArrivalObservation(headers, now);
   if (!observation || !Array.isArray(rows) || rows.length > 2000 || rows.some((row) => !objectRow(row))) return [];
   const seen = new Set();
   return arrivalAlternatives(rows).flatMap((row) => {
@@ -229,6 +361,19 @@ function rejectionInvalidates(rejection, event, record, now) {
   return rejection.stationID === record.stationID && rejection.lineID === record.lineID && rejection.observedAt <= now && rejection.observedAt + 600000 > now && event.receivedAt <= rejection.observedAt
     && (['serviceUnavailable', 'stationDisrupted'].includes(rejection.reason) ? planned(event) : sourceKey(event.sourceID) === 'timetable');
 }
+function mergeStationArrivalSchedule(previous, incoming, sources) {
+  if (!Number.isFinite(incoming.arrivalsNotBefore ?? previous.arrivalsNotBefore)) return {};
+  const priorFloor = previous.arrivalsNotBefore || 0, nextFloor = incoming.arrivalsNotBefore || 0;
+  const arrivalsNotBefore = Math.max(priorFloor, nextFloor);
+  const candidates = (nextFloor > priorFloor ? [incoming.arrivalsRefreshAt] : nextFloor < priorFloor ? [previous.arrivalsRefreshAt] : [previous.arrivalsRefreshAt, incoming.arrivalsRefreshAt]).filter(Number.isFinite);
+  const source = sources['station-arrivals'];
+  const expiries = (source?.events || []).map(e => e.expiresAt).filter(Number.isFinite);
+  if (Number.isFinite(source?.expiresAt)) expiries.push(source.expiresAt);
+  const sourceDeadline = expiries.length ? Math.min(...expiries) - 15000 : Infinity;
+  const due = Math.min(sourceDeadline, ...candidates);
+  return { arrivalsNotBefore, ...(Number.isFinite(due) ? { arrivalsRefreshAt: Math.max(arrivalsNotBefore, due) } : {}) };
+}
+
 export function mergeContexts(previous = {}, incoming = {}, record, now) {
   const rejections = [...(previous.rejections || []), ...(incoming.rejections || [])].filter((r) => r && ['publicationChanged', 'timetableChanged', 'unsupportedCalendar', 'serviceUnavailable', 'stationDisrupted'].includes(r.reason) && r.stationID === record.stationID && r.lineID === record.lineID && Number.isFinite(r.observedAt) && r.observedAt <= now && r.observedAt + 600000 > now);
   const markerMap = new Map();
@@ -247,11 +392,13 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       if (!Number.isFinite(context.observedAt) || context.observedAt > now) continue;
       if (normalized === 'timetable' && publicationIdentity?.expiresAt > now && publicationIdentity.observedAt >= context.observedAt && context.evidence?.publication?.sha256?.toLowerCase() !== publicationIdentity.sha256.toLowerCase()) continue;
       const events = (context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && availabilityProofs.some((p) => p.plannedUnavailable === true && p.scheduledClockOnly !== true && blocksScheduled(p, e.time, now))) && !markers.some((r) => rejectionInvalidates(r, e, record, now)));
-      if (!events.length && !(Array.isArray(context.events) && context.events.length === 0 && (normalized === 'rail-departures' || normalized === 'timetable' && context.qualificationOrigin === 'server' && context.expiresAt > now))) continue;
+      // A complete station empty keeps its original ordering floor after HTTP
+      // expiry; it is not current evidence and cannot resurrect older rows.
+      if (!events.length && !(Array.isArray(context.events) && context.events.length === 0 && (normalized === 'rail-departures' || normalized === 'station-arrivals' && Number.isFinite(context.expiresAt) && context.expiresAt > context.observedAt && context.expiresAt <= context.observedAt + 120000 || normalized === 'timetable' && context.qualificationOrigin === 'server' && context.expiresAt > now))) continue;
       if (!old || context.observedAt > old.observedAt) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }
-  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), status: incoming.status || previous.status || null };
+  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null };
 }
 function selectionMatches(event, record) {
   if (record.selectionMode !== 'platform' && !record.platformID) return true;
@@ -390,7 +537,7 @@ function immutable(value) {
   return value;
 }
 
-export async function refreshStationBoard(record, previous, config, fetchImpl, now, signal, clock = () => now, publicResponses = new Map(), publicationAuthorityStore = null) {
+export async function refreshStationBoard(record, previous, config, fetchImpl, now, signal, clock = () => now, publicResponses = new Map(), publicationAuthorityStore = null, arrivalReader = null) {
   signal?.throwIfAborted();
   if (previous.nextRefreshAt > now) return mergeContexts(previous, {}, record, now);
   let renewalAsset = null, renewalHead = null;
@@ -460,7 +607,11 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     return responses;
   })().catch(() => null) : Promise.resolve(null);
   const rail = STATION_BOARD_LINES.get(record.lineID)?.qualifiedRailDepartureSource;
-  const arrivalTask = request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`)).catch(() => ({ ok: false }));
+  const arrivalsURL = new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`);
+  if (config.tflAppKey) arrivalsURL.searchParams.set('app_key', config.tflAppKey);
+  const arrivalTask = arrivalReader
+    ? arrivalReader.read(arrivalsURL, { fetchImpl, signal, clock, publicResponses, notBefore: previous.arrivalsNotBefore })
+    : request(arrivalsURL).catch(() => ({ ok: false }));
   const railTask = rail ? request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/ArrivalDepartures?lineIds=${record.lineID}`)).catch(() => ({ ok: false })) : Promise.resolve({ ok: false });
   const [service, station] = await Promise.all([
     request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Status?detail=true`), 'GET', false, true),
@@ -484,7 +635,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     // A fresh explicit empty rail read replaces only its exact source.
     if (events.length || observation && observation.expiresAt > completedAt) sources[source] = { ...(observation ? { expiresAt: observation.expiresAt } : {}), observedAt: events.length ? Math.max(...events.map((e) => e.receivedAt)) : observation.observedAt, events };
   };
-  if (arrivals.ok) add('station-arrivals', parseStationArrivals(arrivals.value, record, arrivals.headers, arrivals.completedAt));
+  if (arrivals.ok && arrivals.status === 200) add('station-arrivals', parseStationArrivals(arrivals.value, record, arrivals.headers, arrivals.completedAt), Array.isArray(arrivals.value) && arrivals.value.length === 0 ? stationEmptyObservation(arrivals.headers, arrivals.completedAt) : null);
   if (departures.ok) add('rail-departures', parseRailDepartures(departures.value, record, departures.headers, departures.completedAt), Array.isArray(departures.value) && departures.value.length === 0 ? httpObservation(departures.headers, departures.completedAt, 90000, { cacheRequired: true }) : null);
   if (journey.ok) add('journey-planner', parseJourney(journey.value, record, journey.headers, journeyDepartAt, journey.completedAt, actualRequestAt));
   const selected = selectEvents({ sources }, record, completedAt);
@@ -535,7 +686,8 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
 
   // Availability masks presentation. It never destroys the original source
   // context or creates a permanent publication-style closure rejection.
-  const merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
+  let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
+  if (arrivalReader) merged = mergeStationArrivalRead(record, merged, arrivals, applicabilityAt, config.workerIntervalMs);
   return publicationAuthorityStore ? applyPublicationAuthority(merged, publicationAuthorityStore.publicationAuthority()) : merged;
 }
 
