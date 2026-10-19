@@ -769,6 +769,25 @@ export function buildContentState(record, arrivals, statuses, now = new Date()) 
   };
 }
 
+export function stationBoardContentDigest(contentState) {
+  const input = { ...contentState };
+  delete input.updatedAt;
+  delete input.nextBoardBoundaryAt;
+  if (contentState.contentStateContract === STATION_BOARD_CONTRACT) {
+    input.arrivals = contentState.arrivals.map((row) => {
+      // These typed clients derive the visible timer from the original ETA.
+      // Normalize only the comparison copy; preserve fallback text on wire.
+      if (row.isCached === false && Number.isFinite(row.expectedArrival) && Number.isFinite(row.expiresAt)
+        && ['throughArrivalPrediction', 'reportedIncomingArrival', 'estimatedDeparture'].includes(row.timeEvidence)) {
+        const { countdownText, ...semantic } = row;
+        return semantic;
+      }
+      return row;
+    });
+  }
+  return crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex');
+}
+
 export function buildApnsPayload(contentState, now = new Date()) {
   const staleAt = contentState.contentStateContract === STATION_BOARD_CONTRACT
     ? new Date((contentState.staleAt * 1000) + APPLE_REFERENCE_UNIX_SECONDS * 1000)
@@ -939,8 +958,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       cache = applyPublicationAuthority(cache, publicationAuthority);
       expectedPublicationGeneration = publicationGeneration(publicationAuthority);
       const contentState = buildStationBoardState(record, cache, effectiveNow.getTime());
-      const digestInput = { ...contentState }; delete digestInput.updatedAt; delete digestInput.nextBoardBoundaryAt;
-      const contentDigest = crypto.createHash('sha256').update(JSON.stringify(digestInput)).digest('hex');
+      const contentDigest = stationBoardContentDigest(contentState);
       if (contentDigest !== record.lastBoardContentDigest) {
         const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
         if (!current || registrationTuple(current) !== expectedTuple || publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;

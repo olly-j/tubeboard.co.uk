@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import crypto from 'node:crypto';
+import { buildStationBoardState, parseStationArrivals } from '../server/station-board-v2.js';
 import {
   buildEndApnsPayload,
   buildApnsPayload,
@@ -14,6 +16,7 @@ import {
   loadConfig,
   normalizePlatformID,
   runLiveActivityWorkerCycle,
+  stationBoardContentDigest,
   TokenRateLimiter,
   validateEndPayload,
   validateTokenPayload
@@ -898,6 +901,168 @@ function jsonResponse(value) {
     }
   };
 }
+
+async function uf277Fixture(t) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tubeboard-uf277-'));
+  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+  const store = new LiveActivityStore(path.join(tempDir, 'records.json'));
+  const now = Date.parse('2026-10-19T12:00:00Z');
+  const record = { ...validTokenPayload, selectionMode: 'allPlatforms',
+    contentStateContract: 'station-board-v2', plannedPresentationVersion: 2,
+    tokenUpdatedAt: new Date(now).toISOString() };
+  await store.upsertToken(record, new Date(now));
+  const events = parseStationArrivals([{ id: 'uf277-through', lineId: 'central',
+    naptanId: record.stationID, stationName: 'Leyton Underground Station',
+    destinationName: 'Epping Underground Station', destinationNaptanId: '940GZZLUEPG',
+    expectedArrival: new Date(now + 300000).toISOString(), timestamp: new Date(now).toISOString(),
+    timing: { read: new Date(now).toISOString() }, direction: 'Outbound',
+    platformName: 'Eastbound - Platform 2' }], record,
+  { date: new Date(now).toUTCString(), age: '0', 'cache-control': 'public,max-age=30' }, now);
+  assert.equal(events.length, 1);
+  const cache = { sources: { 'station-arrivals': { observedAt: now, expiresAt: now + 120000, events } },
+    rejections: [], nextRefreshAt: now + 90000,
+    status: { label: 'Good Service', reason: null, isDisrupted: false, expiresAt: now + 120000 } };
+  await store.retainStationBoard(record.activityID, record.environment, cache, new Date(now));
+  const pushes = []; let httpReads = 0;
+  const cycle = (offset, extra = {}) => runLiveActivityWorkerCycle({ store, config: loadConfig({}),
+    now: new Date(now + offset), clock: () => now + offset, cacheOnly: true,
+    fetchImpl: async () => { httpReads++; throw Error('No HTTP in a cache-only cycle'); },
+    pushImpl: async (_record, payload) => { pushes.push(payload); return { status: 200 }; },
+    logger: silentLogger(), ...extra });
+  return { store, now, record, cache, pushes, cycle, httpReads: () => httpReads };
+}
+
+test('UF277 countdown-only typed cache cycle sends no extra APNs and does not renew clocks', async (t) => {
+  const f = await uf277Fixture(t);
+  const first = buildStationBoardState(f.record, f.cache, f.now);
+  const later = buildStationBoardState(f.record, f.cache, f.now + 15000);
+  assert.notEqual(first.arrivals[0].countdownText, later.arrivals[0].countdownText);
+  assert.equal(first.arrivals[0].expectedArrival, later.arrivals[0].expectedArrival);
+  assert.equal(first.arrivals[0].expiresAt, later.arrivals[0].expiresAt);
+  assert.equal(first.staleAt, later.staleAt);
+  await f.cycle(0);
+  const accepted = structuredClone(f.store.state.records[0]);
+  await f.cycle(15000);
+  assert.equal(f.httpReads(), 0);
+  assert.equal(f.pushes.length, 1);
+  assert.equal(f.store.state.records[0].lastBoardContentDigest, accepted.lastBoardContentDigest);
+  assert.equal(f.store.state.records[0].lastSuccessAt, accepted.lastSuccessAt);
+  assert.deepEqual(f.store.state.records[0].stationBoardCache, accepted.stationBoardCache);
+  assert.equal(f.pushes[0].aps['content-state'].arrivals[0].countdownText, first.arrivals[0].countdownText);
+});
+
+test('UF277 only locally timed typed rows ignore derived countdown text without changing wire data', async (t) => {
+  const f = await uf277Fixture(t);
+  for (const evidence of ['throughArrivalPrediction', 'reportedIncomingArrival', 'estimatedDeparture']) {
+    const first = buildStationBoardState(f.record, f.cache, f.now);
+    first.arrivals[0].timeEvidence = evidence;
+    const later = structuredClone(first);
+    later.arrivals[0].countdownText = 'derived later countdown';
+    const original = structuredClone(later);
+    const wire = buildApnsPayload(later, new Date(f.now));
+    assert.equal(stationBoardContentDigest(first), stationBoardContentDigest(later), evidence);
+    assert.deepEqual(later, original);
+    assert.deepEqual(buildApnsPayload(later, new Date(f.now)), wire);
+    assert.equal(wire.aps['content-state'].arrivals[0].countdownText, 'derived later countdown');
+  }
+});
+
+test('UF277 cached scheduled unverified clockless and incomplete fallbacks keep countdown sensitivity', async (t) => {
+  const f = await uf277Fixture(t);
+  const controls = [
+    { timeEvidence: 'unverified' }, { timeEvidence: 'destinationOnly' },
+    { timeEvidence: 'scheduledDeparture' }, { timeEvidence: 'future-unknown-role' },
+    { isCached: true }, { isCached: undefined },
+    ...['expectedArrival', 'expiresAt'].flatMap((key) => [null, undefined, NaN, Infinity, '803832000'].map((value) => ({ [key]: value })))
+  ];
+  for (const control of controls) {
+    const first = buildStationBoardState(f.record, f.cache, f.now);
+    Object.assign(first.arrivals[0], control);
+    const later = structuredClone(first); later.arrivals[0].countdownText = 'changed fallback';
+    assert.notEqual(stationBoardContentDigest(first), stationBoardContentDigest(later), JSON.stringify(control));
+  }
+  const legacy = buildContentState(f.record, [], [], new Date(f.now));
+  legacy.arrivals = [{ ...buildStationBoardState(f.record, f.cache, f.now).arrivals[0] }];
+  const changed = structuredClone(legacy); changed.arrivals[0].countdownText = 'changed legacy';
+  assert.notEqual(stationBoardContentDigest(legacy), stationBoardContentDigest(changed));
+});
+
+test('UF277 real ETA expiry status role and row removal still publish through the actual worker', async (t) => {
+  for (const change of ['eta', 'expiry', 'status', 'role', 'empty']) {
+    await t.test(change, async (t) => {
+      const f = await uf277Fixture(t); await f.cycle(0);
+      const next = structuredClone(f.cache), source = next.sources['station-arrivals'];
+      source.observedAt = f.now + 1000;
+      source.events[0].receivedAt = f.now + 1000;
+      if (change === 'eta') source.events[0].time += 30000;
+      if (change === 'expiry') { source.expiresAt += 30000; source.events[0].expiresAt += 30000; }
+      if (change === 'status') next.status.label = 'Minor Delays';
+      if (change === 'role') { source.events[0].kind = 'incomingArrival'; source.events[0].destination = 'Leyton'; source.events[0].destinationStationID = f.record.stationID; }
+      if (change === 'empty') source.events = [];
+      await f.store.retainStationBoard(f.record.activityID, f.record.environment, next, new Date(f.now + 1000));
+      await f.cycle(1000);
+      assert.equal(f.pushes.length, 2, change); assert.equal(f.httpReads(), 0);
+      const state = f.pushes[1].aps['content-state'];
+      if (change === 'eta') assert.equal(state.arrivals[0].expectedArrival, f.pushes[0].aps['content-state'].arrivals[0].expectedArrival + 30);
+      if (change === 'expiry') assert.equal(state.arrivals[0].expiresAt, f.pushes[0].aps['content-state'].arrivals[0].expiresAt + 30);
+      if (change === 'status') assert.equal(state.status, 'Minor Delays');
+      if (change === 'role') assert.equal(state.arrivals[0].timeEvidence, 'reportedIncomingArrival');
+      if (change === 'empty') assert.deepEqual(state.arrivals, []);
+    });
+  }
+});
+
+test('UF277 selected platform registration still publishes and original expiry still removes rows', async (t) => {
+  const f = await uf277Fixture(t); await f.cycle(0);
+  await f.store.upsertToken({ ...f.record, selectionMode: 'platform', platformID: 'eastbound-platform-2',
+    platformHeading: 'Eastbound - Platform 2', platformLabel: 'Platform 2', platformDirection: 'Eastbound',
+    tokenUpdatedAt: new Date(f.now + 1000).toISOString() }, new Date(f.now + 1000));
+  await f.cycle(1000);
+  assert.equal(f.pushes.length, 2); assert.equal(f.pushes[1].aps['content-state'].platform, 'Eastbound - Platform 2');
+  assert.equal(f.pushes[1].aps['content-state'].arrivals.length, 1);
+  await f.cycle(120000);
+  assert.equal(f.pushes.length, 3); assert.deepEqual(f.pushes[2].aps['content-state'].arrivals, []);
+  assert.equal(f.httpReads(), 0);
+});
+
+test('UF277 prior raw digest migrates once only after actual APNs acceptance', async (t) => {
+  const f = await uf277Fixture(t);
+  const state = buildStationBoardState(f.record, f.cache, f.now);
+  const raw = { ...state }; delete raw.updatedAt; delete raw.nextBoardBoundaryAt;
+  const oldDigest = crypto.createHash('sha256').update(JSON.stringify(raw)).digest('hex');
+  await f.store.transaction((data) => { data.records[0].lastBoardContentDigest = oldDigest; });
+  await f.cycle(0, { pushImpl: async () => { const error = Error('Synthetic APNs failure'); error.backoffMs = 1000; throw error; } });
+  assert.equal(f.store.state.records[0].lastBoardContentDigest, oldDigest);
+  assert.equal(f.store.state.records[0].lastSuccessAt, null);
+  await f.cycle(500); assert.equal(f.pushes.length, 0);
+  await f.cycle(1000); assert.equal(f.pushes.length, 1);
+  const accepted = f.store.state.records[0].lastBoardContentDigest;
+  assert.notEqual(accepted, oldDigest);
+  await f.cycle(15000); assert.equal(f.pushes.length, 1);
+  assert.equal(f.store.state.records[0].lastBoardContentDigest, accepted);
+  assert.equal(f.store.state.records[0].lastSuccessAt, new Date(f.now + 1000).toISOString());
+});
+
+test('UF277 empty typed heartbeat behavior and legacy worker remain unchanged', async (t) => {
+  const f = await uf277Fixture(t);
+  const empty = structuredClone(f.cache); empty.sources['station-arrivals'].events = [];
+  empty.sources['station-arrivals'].observedAt = f.now + 1;
+  await f.store.retainStationBoard(f.record.activityID, f.record.environment, empty, new Date(f.now + 1));
+  await f.cycle(1); await f.cycle(15000);
+  assert.equal(f.pushes.length, 2); assert.ok(f.pushes.every((p) => p.aps['content-state'].arrivals.length === 0));
+  assert.equal(f.pushes[1].aps['content-state'].staleAt, f.pushes[1].aps['content-state'].updatedAt);
+  const legacy = await uf277Fixture(t);
+  await legacy.store.transaction((data) => { delete data.records[0].contentStateContract; });
+  const fetchImpl = async (url) => String(url).includes('/Status') ? jsonResponse([]) : jsonResponse([{
+    id: 'legacy-through', lineId: 'central', stationName: 'Leyton Underground Station',
+    platformName: 'Eastbound - Platform 2', destinationName: 'Epping Underground Station',
+    expectedArrival: new Date(legacy.now + 300000).toISOString() }]);
+  await legacy.cycle(0, { cacheOnly: false, fetchImpl });
+  await legacy.cycle(90000, { cacheOnly: false, fetchImpl });
+  assert.equal(legacy.pushes.length, 2);
+  assert.equal(legacy.pushes[0].aps['content-state'].contentStateContract, undefined);
+  assert.equal(legacy.pushes[1].aps['content-state'].staleAt, legacy.pushes[1].aps['content-state'].updatedAt + 300);
+});
 
 function silentLogger() {
   return {
