@@ -93,6 +93,12 @@
         </section>
 
         <section>
+          <h2>Premium widget updates</h2>
+          <p>Supported Premium widgets send an opaque Apple widget push token, its push environment, the names of the widget types in use and a registration revision. They do not send the station, widget configuration, location, installation identifier or travel history. An Apple-signed purchase transaction is used transiently for verification and is not persisted or logged; the widget service retains no product or payment details.</p>
+          <p>The token is encrypted at rest. Its update lease lasts no more than 24 hours and ends earlier if the verified subscription expires. An expired lease cannot receive further hints. The next normal service cycle, start or registration cleanup removes its encrypted token. Explicit removal or an invalid-token response also removes that token from the registration. A hash-only revision fence is retained for up to seven days to reject older requests, then removed by the next operating cleanup. These cleanup operations require the service to be running; they are not a promise of disk deletion while it is stopped. A same-revision registration may renew an ordinary expired lease with newly verified proof, but cannot revive an explicitly deleted revision. Apple controls when a widget hint is delivered and the widget refreshes.</p>
+        </section>
+
+        <section>
           <h2>Website and service logs</h2>
           <p>This website has no account, forms, advertising pixels, analytics scripts or cookies. Like most hosted services, the infrastructure may create routine security and operational logs such as request time, requested path, response status, user agent and IP address. Notification APIs also use short-lived, in-memory rate limits to protect the service from abuse. Service operational logs are kept for no more than 14 days.</p>
         </section>

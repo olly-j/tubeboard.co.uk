@@ -28,6 +28,8 @@ required=(
   contracts/disruption-alert-registration-v1.schema.json
   contracts/fixtures/disruption-alert-registration-v1.json
   contracts/disruption-alert-registration-v2.schema.json
+  contracts/widget-push-registration-v1.schema.json
+  contracts/fixtures/widget-push-registration-v1.json
   contracts/fixtures/disruption-alert-registration-v2.json
   contracts/tubeboard-status-v1.schema.json
   contracts/tubeboard-status-v2.schema.json
@@ -55,6 +57,8 @@ python3 -m json.tool contracts/fixtures/live-activity-registration-v1.json >/dev
 python3 -m json.tool contracts/disruption-alert-registration-v1.schema.json >/dev/null
 python3 -m json.tool contracts/fixtures/disruption-alert-registration-v1.json >/dev/null
 python3 -m json.tool contracts/disruption-alert-registration-v2.schema.json >/dev/null
+python3 -m json.tool contracts/widget-push-registration-v1.schema.json >/dev/null
+python3 -m json.tool contracts/fixtures/widget-push-registration-v1.json >/dev/null
 python3 -m json.tool contracts/fixtures/disruption-alert-registration-v2.json >/dev/null
 python3 -m json.tool contracts/tubeboard-status-v1.schema.json >/dev/null
 python3 -m json.tool contracts/tubeboard-status-v2.schema.json >/dev/null
@@ -68,7 +72,7 @@ if grep -Rqs -- 'flyctl deploy' .github/workflows; then
   exit 1
 fi
 
-if git ls-files | grep -Eq '(^|/)(\.env|live-activities\.json|disruption-alerts\.json)$|\.p8$|\.key$'; then
+if git ls-files | grep -Eq '(^|/)(\.env|live-activities\.json|disruption-alerts\.json|widget-push\.json)$|\.p8$|\.key$'; then
   echo "Sensitive service material is tracked by Git." >&2
   exit 1
 fi
