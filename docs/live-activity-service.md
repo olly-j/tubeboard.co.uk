@@ -510,3 +510,32 @@ or a physical thirty-minute session. Protected-main/Node22 checks, separately
 authorized exact-main deployment with preserved image/volume rollback, automatic
 live-source/push observation over several original120-second boundaries and
 owner physical confirmation remain release/operational gates.
+
+## UF277: Ignore Locally Derived Countdown Text In Typed Push Digests (1.4.7)
+
+The typed worker compares a semantic digest before sending an APNs update.
+For an uncached through-arrival prediction, reported incoming arrival or
+estimated departure with finite numeric ETA and original expiry, the shipped
+clients derive their timer from that ETA. A cache-only cycle changing only the
+derived countdown text therefore no longer creates another push. Only the
+digest comparison copy omits that text; the APNs payload retains every field,
+including the countdown fallback. Scheduled, cached, unverified, clockless and
+incomplete rows keep their existing countdown sensitivity. The older delivered
+1.2.3/20261008115502 typed client and current1.2.4/20261019092042 client both
+render these qualified numeric clocks locally.
+
+Real ETA, original expiry, status, role, selection and row-removal changes remain
+part of the digest. Source acquisition, timers, default90-second full refresh,
+shared30-second source admission, APNs priority10 and honest expiry are unchanged.
+Suppressed countdown-only cycles do not advance lastSuccessAt. A previous raw
+digest may cause one migration push per active typed record; only successful
+APNs acceptance stores the new digest, preserving retry/backoff after failure.
+No store rewrite, registration field, wire contract, dependency or app build is
+required. Legacy worker and empty-state behavior remain unchanged.
+
+This is a verified avoidable-send correction, not proof that Apple throttling
+caused the reported phone failure. Source tests and APNs acceptance cannot prove
+device receipt. The1.4.6 private observer's raw digest reconstruction is not valid
+for1.4.7; a new observer must bind the reviewed normalization and exact source/version.
+Merge/deployment/physical acceptance remain separate, with explicit authorization
+required for a production rollout.
