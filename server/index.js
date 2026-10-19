@@ -3,6 +3,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SerialWorker } from './worker-lifecycle.js';
+import { WIDGET_PUSH_PATH, WidgetPushStore, WidgetPushAdmission, loadWidgetPushConfig,
+  handleWidgetPushRegistration, runWidgetPushWorkerCycle } from './widget-push.js';
 import { PrimaryArrivalsSource, loadPrimaryArrivalsConfig, handlePrimaryArrivalsSource } from './primary-arrivals-source.js';
 import { startOperatorObservation, selectedPresence } from './operator-observation.js';
 import { handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from './timetable-publication-resource.js';
@@ -64,6 +66,9 @@ const disruptionAlertStore = new DisruptionAlertStore(
   path.resolve(projectRoot, disruptionAlertConfig.dataFile),
   disruptionAlertConfig.encryptionKey
 );
+const widgetPushConfig = loadWidgetPushConfig(process.env, disruptionAlertConfig);
+const widgetPushStore = new WidgetPushStore(path.resolve(projectRoot, widgetPushConfig.dataFile), widgetPushConfig.encryptionKey);
+const widgetPushAdmission = new WidgetPushAdmission();
 const disruptionAlertRateLimiter = new TokenRateLimiter({
   limit: 6,
   windowMs: 60_000
@@ -112,6 +117,8 @@ const server = http.createServer(async (request, response) => {
         timetablePublicationAuthorityVersion: 1,
         disruptionAlertContractVersion: DISRUPTION_ALERT_CONTRACT_VERSION,
         disruptionAlertWorkerEnabled: disruptionAlertConfig.workerEnabled,
+        widgetPushContractVersion: 1,
+        widgetPushWorkerEnabled: widgetPushConfig.enabled,
         sourceRevision: SOURCE_REVISION
       });
       return;
@@ -126,6 +133,12 @@ const server = http.createServer(async (request, response) => {
 
     if (!isAllowedHost(requestHost)) {
       sendJson(response, 400, { ok: false, error: 'Unexpected Host header' });
+      return;
+    }
+
+    if (url.pathname === WIDGET_PUSH_PATH) {
+      await handleWidgetPushRegistration(request, response, { config: widgetPushConfig,
+        store: widgetPushStore, admission: widgetPushAdmission, ip: getClientIp(request) });
       return;
     }
 
@@ -286,6 +299,13 @@ if (disruptionAlertConfig.workerEnabled) {
   });
   notificationWorkers.push(worker);
   worker.start();
+}
+
+if (widgetPushConfig.enabled && widgetPushConfig.encryptionKey?.length === 32) {
+  const worker = new SerialWorker({ initialDelayMs: 6000, intervalMs: widgetPushConfig.intervalMs,
+    run: signal => runWidgetPushWorkerCycle({ store: widgetPushStore, config: widgetPushConfig, signal }),
+    onError: () => console.error('Widget hint cycle unavailable') });
+  notificationWorkers.push(worker); worker.start();
 }
 
 let shuttingDown = false;
@@ -530,6 +550,7 @@ function getStaticRelativePath(cleanPath) {
     '/contracts/live-activity-registration-v2.schema.json',
     '/contracts/disruption-alert-registration-v1.schema.json',
     '/contracts/disruption-alert-registration-v2.schema.json',
+    '/contracts/widget-push-registration-v1.schema.json',
     '/contracts/tubeboard-status-v1.schema.json',
     '/contracts/tubeboard-status-v2.schema.json'
   ]);

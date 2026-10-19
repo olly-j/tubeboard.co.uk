@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "token": "0123456789abcdef",
+  "environment": "production",
+  "kinds": ["TubeBoardFavouriteWidget", "TubeBoardLineStatusWidget"],
+  "revision": 1792425600000,
+  "transactionJWS": "eyJhbGciOiJFUzI1NiJ9.eyJzeW50aGV0aWNGaXh0dXJlIjp0cnVlfQ.c3ludGhldGlj"
+}
