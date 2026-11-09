@@ -633,3 +633,15 @@ Required gates remain independent review, Node22 hosted Service Quality, Fly
 configuration validation, explicit exact-source production approval, existing
 volume/image rollback, signed widget APS/topic verification and actual supported
 physical-device proof/token/renewal/push-triggered closed-host reload acceptance.
+
+### Timetable edition observation
+
+The London service independently checks the fixed official Journey Planner ZIP
+headers at startup and every five minutes. GET or HEAD on
+`/api/timetable-publication-observation/v1` reads the last observation from
+memory. Its version 1 JSON records the canonical source, publication SHA-256,
+and ISO UTC observation and expiry times derived from the publisher Date and
+Age. Reads never initiate a poll. The route disallows query parameters and
+returns 503 when cold, expired, or after a failed observation. All responses
+use `Cache-Control: no-store`. The observation identifies an edition only.
+Qualification and publication of its timetable proof are separate operations.
