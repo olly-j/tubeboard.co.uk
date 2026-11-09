@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TimetableEditionObservation, handleEditionObservation } from './timetable-edition-observation.js';
 import { SerialWorker } from './worker-lifecycle.js';
 import { WIDGET_PUSH_PATH, WidgetPushStore, WidgetPushAdmission, loadWidgetPushConfig,
   handleWidgetPushRegistration, runWidgetPushWorkerCycle } from './widget-push.js';
@@ -43,6 +44,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 const config = loadConfig();
+const timetableEdition = new TimetableEditionObservation();
 const primaryArrivalsSource = new PrimaryArrivalsSource(loadPrimaryArrivalsConfig());
 const siteDir = path.resolve(projectRoot, process.env.SITE_DIR || '.');
 const dataFile = path.resolve(projectRoot, config.dataFile);
@@ -136,6 +138,8 @@ const server = http.createServer(async (request, response) => {
       sendJson(response, 400, { ok: false, error: 'Unexpected Host header' });
       return;
     }
+
+    if (handleEditionObservation(request, response, url, timetableEdition, sendJson)) return;
 
     if (url.pathname === WIDGET_PUSH_PATH) {
       await handleWidgetPushRegistration(request, response, { config: widgetPushConfig,
@@ -258,6 +262,13 @@ server.listen(port, () => {
 });
 
 const notificationWorkers = [];
+if (process.env.TUBEBOARD_TIMETABLE_EDITION_MONITOR_ENABLED === 'true') {
+  const worker = new SerialWorker({ initialDelayMs: 0, intervalMs: 300_000,
+    run: signal => timetableEdition.refresh(signal),
+    onError: () => console.error('Timetable edition observation unavailable') });
+  notificationWorkers.push(worker);
+  worker.start();
+}
 if (config.workerEnabled) {
   const worker = new SerialWorker({
     initialDelayMs: 2_000,
