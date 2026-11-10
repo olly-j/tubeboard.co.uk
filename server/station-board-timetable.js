@@ -53,11 +53,27 @@ function definitions(entry) {
   if (entry.profiles.length || !scopes.length || scopes.length>2 || new Set(scopes.map(s=>s.direction)).size!==scopes.length || scopes.some(s=>!['inbound','outbound'].includes(s.direction) || !s.profiles.length)) fail('unsupportedCalendar');
   return [...scopes].sort((a,b)=>a.direction.localeCompare(b.direction));
 }
+function hasDateBoundOriginProof(entry) {
+  return entry.directionalDefinitions === undefined
+    && sha(entry.apiBodySHA256)
+    && Array.isArray(entry.originatingDateGaps)
+    && entry.profiles.length > 0
+    && entry.profiles.every(profile => Array.isArray(profile.originatingServiceDateRanges)
+      && profile.originatingServiceDateRanges.length > 0);
+}
 function validateCalendar(entry,sets) {
   const bounds={operatingStartDate:entry.operatingStartDate,operatingEndDate:entry.operatingEndDate};
   if (!dateKey(bounds.operatingStartDate) || !dateKey(bounds.operatingEndDate) || bounds.operatingStartDate>bounds.operatingEndDate || entry.nonOperationBankHolidays!==true) fail('unsupportedCalendar');
+  const dateBoundOrigin = hasDateBoundOriginProof(entry);
+  if (dateBoundOrigin) {
+    const gaps=entry.originatingDateGaps;
+    if (gaps.length>3660 || new Set(gaps.map(gap=>gap.serviceDate)).size!==gaps.length
+      || gaps.some(gap=>!dateKey(gap.serviceDate) || gap.serviceDate<bounds.operatingStartDate
+        || gap.serviceDate>bounds.operatingEndDate || !str(gap.reason) || !gap.reason.trim() || gap.reason.length>240)) fail('unsupportedCalendar');
+  }
   for (const {profiles} of sets) {
-    if (!profiles.length || profiles.length>64 || new Set(profiles.flatMap(p=>p.weekdays)).size!==7) fail('unsupportedCalendar');
+    const coveredWeekdays=new Set(profiles.flatMap(p=>p.weekdays));
+    if (!profiles.length || profiles.length>64 || (!dateBoundOrigin && coveredWeekdays.size!==7) || !coveredWeekdays.size) fail('unsupportedCalendar');
     for (const p of profiles) {
       if (!p.weekdays.length || new Set(p.weekdays).size!==p.weekdays.length || p.weekdays.some(d=>d<1 || d>7)) fail('unsupportedCalendar');
       if (p.originatingServiceDateRanges!==undefined && !validOriginatingRanges(p.originatingServiceDateRanges,bounds,p.originatingServiceDateRanges?.[0]?.startDate)) fail('unsupportedCalendar');
@@ -266,8 +282,11 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
     const keys=new Set([...declared].flatMap(name=>profileJourneys(response,name).map(r=>r.key)));
     for(const old of scopedKeys.values())if([...keys].some(k=>old.has(k)))fail();scopedKeys.set(scope.direction,keys);
     rawHashes.push({direction:scope.direction,sha256:resource.bodySHA256});
+    const dateGaps=scope.direction===null ? entry.originatingDateGaps??[]
+      : entry.directionalSourceEvidence?.find(value=>value.direction===scope.direction)?.originatingDateGaps??[];
     for(const day of [civilNext(today,-1),today]){
       if(day<entry.operatingStartDate || day>entry.operatingEndDate || day<proof.holidayCoverageStart || day>proof.holidayCoverageEnd)fail('unsupportedCalendar');
+      if(dateGaps.some(gap=>gap.serviceDate===day))fail('unsupportedCalendar');
       if(proof.bankHolidayDates.includes(day)){if(scope.profiles.some(p=>p.originatingServiceDateRanges!==undefined))fail('unsupportedCalendar');continue;}
       const eligible=scope.profiles.filter(p=>p.weekdays.includes(weekday(day)) && (p.originatingServiceDateRanges===undefined || p.originatingServiceDateRanges.some(r=>r.startDate<=day && day<=r.endDate)));
       if(eligible.length!==1)fail('unsupportedCalendar');const profile=eligible[0], rows=completeRows(response,profile);

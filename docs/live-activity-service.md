@@ -355,6 +355,16 @@ bodies are bounded to 2,000,000 bytes. Final line/station controls must still
 qualify before admission; this does not relax Journey disruption guards or
 availability masks.
 
+A non-directional origin may declare fewer than seven weekdays only when its
+proof binds a valid Unified response SHA-256, an explicit `originatingDateGaps`
+array, and nonempty valid service-date ranges on every profile. The board still
+requires exactly one matching profile for both the previous and current London
+service dates, within the operating and holiday-coverage bounds; a date listed
+in `originatingDateGaps` rejects that projection. Directional definitions and
+legacy or synthetic calendars without this complete date-bound origin proof
+retain the full seven-weekday requirement. Comparison archives cannot fill a
+missing profile, service date, or current live response.
+
 The shared timetable clock is the minimum original Date/Age-derived observation
 from official HEAD, every required timetable response and the line/station
 controls. Expiry remains that observation plus 600 seconds, capped at London

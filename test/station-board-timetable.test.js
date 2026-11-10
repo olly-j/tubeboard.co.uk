@@ -45,6 +45,46 @@ test('calendarNeededDayRangesHolidaysMidnightAndDST',()=>{
   const midnight=Date.parse('2026-10-03T22:59:00Z'),r=response(1439);const context=qualifyTimetable(assetFor([r]),[wrap(r,midnight)],record,{head:{sha256:sha,...observation(midnight)},serviceObservation:observation(midnight),stationObservation:observation(midnight),at:midnight});
   assert.ok(context.expiresAt<=londonClock('2026-10-04T00:00:00'));
 });
+test('dateBoundOriginAllowsOnlyExplicitlySupportedWeekdaysAndDates',()=>{
+  const raw=circleRaw(),full=circleAsset(raw),dated=changedAsset(full,p=>{
+    const entry=p.entries[0];
+    entry.profiles.find(profile=>profile.name==='Wednesdays').weekdays=[4];
+    entry.profiles.find(profile=>profile.name==='Thursdays').weekdays=[5];
+    entry.profiles.find(profile=>profile.name==='Friday').weekdays=[6];
+    entry.apiBodySHA256='a'.repeat(64);entry.originatingDateGaps=[];
+  });
+  assert.equal(selectedTimetableEntry(dated,circleRecord).entry.profiles.length,3);
+  const context=circleQualify(raw,dated);
+  assert.deepEqual(context.evidence.qualification.map(value=>value.serviceDay),['2026-10-01','2026-10-02']);
+  assert.ok(context.events.length>0);
+
+  for(const serviceDate of ['2026-10-01','2026-10-02']){
+    const gap=changedAsset(dated,p=>p.entries[0].originatingDateGaps=[{serviceDate,reason:'no matching API weekday profile'}]);
+    assert.throws(()=>circleQualify(raw,gap),/unsupportedCalendar/);
+  }
+  for(const mutation of [
+    p=>delete p.entries[0].apiBodySHA256,
+    p=>delete p.entries[0].originatingDateGaps,
+    p=>{p.entries[0].profiles[0].originatingServiceDateRanges=[];},
+    p=>{p.entries[0].profiles[0].originatingServiceDateRanges=[{startDate:'2026-10-03',endDate:'2026-10-02'}];}
+  ]){
+    const invalid=changedAsset(dated,mutation);
+    assert.throws(()=>circleQualify(raw,invalid),/unsupportedCalendar/);
+  }
+});
+test('directionalAndLegacyLimitedCalendarsStillRequireAllWeekdays',()=>{
+  const inbound=response(720,['940GZZLUBNK'],'inbound'),outbound=response(780,['940GZZLUCHX'],'outbound'),asset=assetFor([inbound,outbound]);
+  const partialDirection=changedAsset(asset,p=>{
+    const entry=p.entries[0];entry.apiBodySHA256='a'.repeat(64);entry.originatingDateGaps=[];
+    for(const scope of entry.directionalDefinitions){scope.profiles[0].weekdays=[5];scope.profiles[0].originatingServiceDateRanges=[{startDate:'2026-10-01',endDate:'2026-10-02'}];}
+  });
+  assert.throws(()=>selectedTimetableEntry(partialDirection,record),/unsupportedCalendar/);
+  const raw=circleRaw(),legacy=changedAsset(circleAsset(raw),p=>{
+    const entry=p.entries[0];entry.profiles.find(profile=>profile.name==='Wednesdays').weekdays=[4];
+    entry.profiles.find(profile=>profile.name==='Thursdays').weekdays=[5];entry.profiles.find(profile=>profile.name==='Friday').weekdays=[6];
+  });
+  assert.throws(()=>selectedTimetableEntry(legacy,circleRecord),/unsupportedCalendar/);
+});
 test('commonTTExpiryShortHeadersAndFinalControls',()=>{
   for(const directional of [false,true]){
     const raws=directional?[response(720,['940GZZLUBNK'],'inbound'),response(780,['940GZZLUCHX'],'outbound')]:[response()];
