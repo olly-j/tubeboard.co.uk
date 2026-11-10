@@ -9,7 +9,7 @@ import { once } from 'node:events';
 import test from 'node:test';
 import { canonicalResource, handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from '../server/timetable-publication-resource.js';
 import { handleSourceBodyResource, loadSourceBodyArchiveIndex, SOURCE_ARCHIVE_DIRECTORY, SOURCE_BODY_PREFIX } from '../server/timetable-source-body-resource.js';
-import { TimetablePublicationAdmissionStore, PUBLICATION_CANDIDATE_PREFIX } from '../server/timetable-publication-admission-store.js';
+import { TimetablePublicationAdmissionStore, PUBLICATION_CANDIDATE_PREFIX, MAX_STAGE_AGE_MS } from '../server/timetable-publication-admission-store.js';
 
 const priorSHA = '0169fa960dee3ad1ca47ae70c639143375287a99ce18018a05703927593bc017';
 const candidateSHA = '788955e868b7ae85219db15b4e05c2f187bdf3be1767f16b1c369b60dea08ad7';
@@ -64,13 +64,13 @@ async function setup(t, { maxAdmittedPackages = 2 } = {}) {
   const tokenHeaders = { authorization: 'Bearer offline-test-token' };
   const put = async (url, bytes) => fetch(url, { method: 'PUT', headers: { ...tokenHeaders,
     'content-type': 'application/json' }, body: bytes });
-  const candidateFor = async sha => {
+  const candidateFor = async (sha, capturedAt = observedAt) => {
     const currentResource = await fs.readFile(candidatePath);
     const parsed = JSON.parse(currentResource);
     const proofBytes = Buffer.from(parsed.proofBodyBase64, 'base64');
     const proof = JSON.parse(proofBytes);
     proof.publication.sha256 = sha;
-    proof.publication.capturedAt = new Date(observedAt).toISOString();
+    proof.publication.capturedAt = new Date(capturedAt).toISOString();
     const newProofBytes = Buffer.from(JSON.stringify(proof, null, 2) + '\n');
     const newProofBodySHA = digest(newProofBytes);
     const resource = canonicalResource({ schemaVersion: 1, publicationSHA256: sha, proofRevision: 1,
@@ -97,7 +97,7 @@ async function setup(t, { maxAdmittedPackages = 2 } = {}) {
     }
   };
   const restart = async () => { store = await openStore(); };
-  return { origin, storeDirectory, stage, restart, candidateFor,
+  return { origin, storeDirectory, stage, restart, candidateFor, put,
     publicationDirectory,
     setObservationSequence: value => { observationSequence = value; },
     tokenHeaders, store: () => store };
@@ -232,6 +232,46 @@ test('official edition drift during preparation leaves old public assets intact 
   const retried = await fetch(`${candidateBase}/admit`, options);
   assert.equal(retried.status, 201);
   assert.equal(JSON.parse(await retried.text()).publicationSHA256, candidate.sha);
+});
+
+test('a regenerated candidate for the same edition recovers an expired partial upload', async t => {
+  const fixture = await setup(t);
+  const interrupted = await fixture.candidateFor(candidateSHA);
+  const next = await fixture.candidateFor(candidateSHA, observedAt + 1_000);
+  const endpoint = `${fixture.origin}${PUBLICATION_CANDIDATE_PREFIX}${candidateSHA}`;
+  await fixture.stage(interrupted, { omitLastBody: true });
+  assert.equal((await fixture.put(endpoint + '/proof', next.resource)).status, 409);
+  const directory = path.join(fixture.storeDirectory, 'staging', candidateSHA);
+  const metadata = { schemaVersion: 1, publicationSHA256: candidateSHA, createdAt: new Date(now - MAX_STAGE_AGE_MS).toISOString() };
+  await fs.writeFile(path.join(directory, 'stage.json'), JSON.stringify(metadata));
+  await fixture.restart();
+  const staleCommit = await fetch(endpoint + '/admit', { method: 'POST', headers: fixture.tokenHeaders });
+  assert.equal(staleCommit.status, 409);
+  assert.deepEqual(await staleCommit.json(), { ok: false, error: 'candidate-stage-expired' });
+  await fixture.stage(next);
+  await assert.rejects(fs.access(path.join(directory, 'archives', candidateSHA, interrupted.proofBodySHA)), { code: 'ENOENT' });
+  const prior = await fs.readFile(path.join(PUBLICATION_ASSET_DIRECTORY, `${priorSHA}.json`));
+  const response = await fetch(endpoint + '/admit', { method: 'POST', headers: {
+    ...fixture.tokenHeaders, 'if-match': `"${digest(prior)}"`, 'x-tubeboard-resource-sha256': digest(next.resource)
+  } });
+  assert.equal(response.status, 201);
+  const publicProof = await fetch(`${fixture.origin}/api/timetable-publications/v1/${candidateSHA}`);
+  assert.deepEqual(Buffer.from(await publicProof.arrayBuffer()), next.resource);
+});
+
+test('a directory left before the stage timestamp is written cannot indefinitely block a new edition', async t => {
+  const fixture = await setup(t);
+  const orphan = path.join(fixture.storeDirectory, 'staging', 'a'.repeat(64));
+  await fs.mkdir(orphan);
+  const nowDate = new Date(now);
+  await fs.utimes(orphan, nowDate, nowDate);
+  const next = await fixture.candidateFor(candidateSHA);
+  const url = `${fixture.origin}${PUBLICATION_CANDIDATE_PREFIX}${candidateSHA}/proof`;
+  assert.equal((await fixture.put(url, next.resource)).status, 409);
+  const expired = new Date(now - MAX_STAGE_AGE_MS - 1);
+  await fs.utimes(orphan, expired, expired);
+  assert.equal((await fixture.put(url, next.resource)).status, 204);
+  await assert.rejects(fs.access(orphan), { code: 'ENOENT' });
 });
 
 test('admission history rotates payloads safely without exhausting future editions', async t => {
