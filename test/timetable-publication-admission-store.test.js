@@ -9,6 +9,7 @@ import { once } from 'node:events';
 import test from 'node:test';
 import { canonicalResource, handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from '../server/timetable-publication-resource.js';
 import { handleSourceBodyResource, loadSourceBodyArchiveIndex, SOURCE_ARCHIVE_DIRECTORY, SOURCE_BODY_PREFIX } from '../server/timetable-source-body-resource.js';
+import { handleWindowResource, WINDOW_PREFIX } from '../server/timetable-window-resource.js';
 import { TimetablePublicationAdmissionStore, PUBLICATION_CANDIDATE_PREFIX, MAX_STAGE_AGE_MS } from '../server/timetable-publication-admission-store.js';
 
 const priorSHA = '0169fa960dee3ad1ca47ae70c639143375287a99ce18018a05703927593bc017';
@@ -51,6 +52,7 @@ async function setup(t, { maxAdmittedPackages = 2 } = {}) {
         directory: publicationDirectory,
         readBytes: sha => store.readPublicPublicationBytes(sha)
       })) return;
+      if (await handleWindowResource(request, response, url, new Map(), key => store.windowPackage(key))) return;
       if (await handleSourceBodyResource(request, response, url, { index: store.sourceBodyIndex })) return;
       response.writeHead(404); response.end();
     } catch {
@@ -363,6 +365,7 @@ test('configured admission initialization failure is visible while health and ex
     assert.equal(snapshot.ok, true);
     assert.equal(snapshot.timetablePublicationAdmissionConfigured, true);
     assert.equal(snapshot.timetablePublicationAdmissionReady, false);
+    assert.equal(snapshot.timetableWindowResourcesReady, false);
     assert.equal((await fetch(`${origin}/api/timetable-publications/v1/${candidateSHA}`)).status, 200);
     assert.doesNotMatch(JSON.stringify(snapshot), /admission-store|\/data|Temporary|\.json/);
   });
@@ -375,4 +378,67 @@ test('persisted and packaged baseline divergence blocks writer initialization', 
   const baselineResponse = await fetch(`${fixture.origin}/api/timetable-publications/v1/${priorSHA}`);
   assert.equal(baselineResponse.status, 503);
   assert.equal((await fetch(`${fixture.origin}/api/timetable-publications/v1/${candidateSHA}`)).status, 404);
+});
+
+test('optional station windows appear atomically, bind to replay receipts and survive a cold restart', async t => {
+  const f = await setup(t);
+  const candidate = await f.candidateFor(candidateSHA);
+  await f.stage(candidate);
+  const identity = { publicationSHA256: candidateSHA, proofBodySHA256: candidate.proofBodySHA,
+    schemaVersion: 1, proofRevision: 1, canonicalizerVersion: 'tb085-counted-minute-ordered-path-multiset-v1' };
+  const scope = { lineID: 'central', stationID: '940GZZLUEPG', requestDirection: 'default' };
+  const bytes = Buffer.from(JSON.stringify({ ...identity, ...scope, responseDirection: 'outbound',
+    sourceEndpoint: 'https://api.tfl.gov.uk/Line/' + scope.lineID + '/Timetable/' + scope.stationID,
+    sourceCapturedAt: '2026-11-09T12:00:00Z', sourceAgeSeconds: 0, sourceBodySHA256: 'c'.repeat(64),
+    profiles: [{ name: 'Monday', weekdays: [2], count: 3, sha256: 'd'.repeat(64) }],
+    serviceRanges: [{ startDate: '2026-11-09', endDate: '2026-11-09', profileName: 'Monday', disputedMinutes: [399] }] }));
+  const sha = digest(bytes);
+  const file = 'resources/' + sha + '.json';
+  const index = Buffer.from(JSON.stringify({ ...identity, resources: [{ ...scope, sha256: sha, bytes: bytes.length, path: file }] }));
+  const bundle = Buffer.from(JSON.stringify({ indexBase64: index.toString('base64'), resources: { [sha]: bytes.toString('base64') } }));
+  const staging = f.origin + PUBLICATION_CANDIDATE_PREFIX + candidateSHA;
+  const putWindow = staging + '/windows/' + candidate.proofBodySHA + '/bundle';
+  const publicRoot = f.origin + WINDOW_PREFIX + candidateSHA + '/' + candidate.proofBodySHA + '/';
+  assert.equal((await f.put(putWindow, Buffer.from('{}'))).status, 422);
+  assert.equal((await f.put(putWindow, bundle)).status, 204);
+  assert.equal((await fetch(publicRoot + 'index.json')).status, 404);
+  const prior = await fs.readFile(path.join(PUBLICATION_ASSET_DIRECTORY, priorSHA + '.json'));
+  const headers = { ...f.tokenHeaders, 'if-match': '"' + digest(prior) + '"',
+    'x-tubeboard-resource-sha256': digest(candidate.resource) };
+  const admit = extra => fetch(staging + '/admit', { method: 'POST', headers: { ...headers, ...extra } });
+  assert.equal((await admit({})).status, 409);
+  assert.equal((await admit({ 'x-tubeboard-window-index-sha256': '0'.repeat(64) })).status, 422);
+  const pin = { 'x-tubeboard-window-index-sha256': digest(index) };
+  const admitted = await admit(pin);
+  assert.equal(admitted.status, 201);
+  assert.equal((await admitted.json()).windowIndexSHA256, digest(index));
+  assert.deepEqual(Buffer.from(await (await fetch(publicRoot + file)).arrayBuffer()), bytes);
+  await f.restart();
+  assert.deepEqual(Buffer.from(await (await fetch(publicRoot + 'index.json')).arrayBuffer()), index);
+  assert.equal((await admit(pin)).status, 200);
+  assert.equal((await admit({})).status, 409);
+  const disk = path.join(f.storeDirectory, 'admitted', candidateSHA, 'windows.json');
+  for (const damage of ['truncate', 'missing']) {
+    if (damage === 'truncate') await fs.writeFile(disk, '{');
+    else await fs.unlink(disk);
+    await f.restart();
+    assert.equal(f.store().windowResourcesReady, false);
+    assert.equal((await fetch(publicRoot + file)).status, 503);
+    assert.equal((await fetch(f.origin + '/api/timetable-publications/v1/' + candidateSHA)).status, 200);
+    assert.equal((await admit(pin)).status, 503);
+    assert.equal((await fetch(putWindow, { method: 'PUT', body: bundle })).status, 401);
+    assert.equal((await f.put(putWindow, Buffer.from('{}'))).status, 422);
+    assert.equal((await f.put(putWindow.replace(candidate.proofBodySHA, 'f'.repeat(64)), bundle)).status, 409);
+    assert.equal(f.store().windowResourcesReady, false);
+    assert.equal((await f.put(putWindow, bundle)).status, 204);
+    assert.equal(f.store().windowResourcesReady, true);
+    assert.deepEqual(Buffer.from(await (await fetch(publicRoot + file)).arrayBuffer()), bytes);
+    // Equivalent transport with alternate whitespace cannot replace healthy data.
+    const alternate = Buffer.from(bundle.toString() + '\n');
+    assert.equal((await f.put(putWindow, alternate)).status, 204);
+    assert.deepEqual(await fs.readFile(disk), bundle);
+    await f.restart();
+    assert.equal((await admit(pin)).status, 200);
+    assert.equal(f.store().windowResourcesReady, true);
+  }
 });

@@ -115,3 +115,13 @@ Local route behavior, concurrency, crash recovery, receipt replay, payload
 rotation and public GET/HEAD visibility are exercised by
 `test/timetable-publication-admission-store.test.js`; the pure preflight checks
 are in `test/timetable-publication-admission.test.js`.
+
+### Optional dated timetable windows
+
+A protected publisher can add station-window metadata to a new edition. After staging the proof, PUT the JSON transport to `windows/{proofBodySHA256}/bundle` beneath the existing candidate URL. Its `indexBase64` holds the original index bytes and `resources` maps each referenced digest to its base64-encoded bytes. The request is limited to 3 MiB. Send `x-tubeboard-window-index-sha256` on the admission POST and its retries. The service checks the proof identity, exact sizes and hashes, station scope and dated profile schema before publishing the index with the proof. Candidates without windows use the existing admission contract.
+
+Public clients can GET or HEAD `/api/timetable-windows/v1/{edition}/{proofBodySHA256}/index.json` and the index's relative `resources/{sha256}.json` paths. These reads serve prevalidated bytes without fetching upstream data. A missing resource returns 404. The dated metadata requires independent current publication, timetable, status and closure evidence before a client can offer a departure.
+
+On restart a damaged retained window returns 503 for its package and sets `timetableWindowResourcesReady` to false in `/healthz`. Other verified proofs and comparison bodies remain available. Re-send the original authenticated bundle PUT to restore its receipt-bound index and every referenced body. The service validates the input before atomically replacing the damaged file. Repeating the PUT leaves healthy bytes untouched. A retired receipt cannot be restored. Check readiness, index and referenced body digests after recovery.
+
+A service binary predating window receipts does not recognize their extra ledger field. After the first such admission, preserve the volume and use a service version that reads window receipts for rollback or forward repair. Existing installed apps continue to read proof and source routes without requesting windows.

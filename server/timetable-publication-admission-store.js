@@ -12,13 +12,14 @@ import { readPublicationAsset, canonicalResource, validatePublicationResource,
 import { validateSourceManifest, loadSourceBodyArchiveIndex, SOURCE_ARCHIVE_DIRECTORY,
   MAX_SOURCE_MANIFEST_BYTES, MAX_SOURCE_BODY_BYTES, MAX_SOURCE_ARCHIVE_BYTES,
   MAX_SOURCE_INDEX_ARCHIVES } from './timetable-source-body-resource.js';
+import { decodeWindowTransport, MAX_WINDOW_TRANSPORT_BYTES } from './timetable-window-resource.js';
 import { evaluateNewEditionAdmission, hasCompleteComparisonArchive,
   publicationResourceSHA256 } from './timetable-publication-admission.js';
 
 export const PUBLICATION_CANDIDATE_PREFIX = '/api/timetable-publication-candidates/v1/';
 export const PUBLICATION_CANDIDATE_AUDIENCE = 'tubeboard-timetable-publication-candidate';
 export const PUBLICATION_CANDIDATE_WORKFLOW_REF = 'olly-j/My-Train-Times/.github/workflows/timetable-publication.yml@refs/heads/main';
-export const MAX_STAGED_PACKAGE_BYTES = MAX_RESOURCE_BYTES + MAX_SOURCE_MANIFEST_BYTES + MAX_SOURCE_ARCHIVE_BYTES + 1024;
+export const MAX_STAGED_PACKAGE_BYTES = MAX_RESOURCE_BYTES + MAX_SOURCE_MANIFEST_BYTES + MAX_SOURCE_ARCHIVE_BYTES + MAX_WINDOW_TRANSPORT_BYTES + 1024;
 export const MAX_STAGED_PACKAGE_COUNT = 1;
 export const MAX_ADMITTED_BYTES = 128 * 1024 * 1024;
 export const MAX_ADMITTED_PACKAGES = 2; // Keep the current and one verified rollback package.
@@ -181,7 +182,8 @@ async function writeImmutable(root, target, bytes) {
 function receiptHash(core) { return digest(jsonBytes(core)); }
 function makeReceipt(core) { return { ...core, receiptSHA256: receiptHash(core) }; }
 function validReceipt(value, revision) {
-  if (!exactKeys(value, [...receiptCoreKeys, 'receiptSHA256']) || value.schemaVersion !== 1
+  const keys = value && Object.hasOwn(value, 'windowIndexSHA256') ? [...receiptCoreKeys, 'windowIndexSHA256'] : receiptCoreKeys;
+  if ((keys !== receiptCoreKeys && !validSHA(value.windowIndexSHA256)) || !exactKeys(value, [...keys, 'receiptSHA256']) || value.schemaVersion !== 1
       || value.status !== 'admitted' || value.admissionRevision !== revision
       || !validSHA(value.publicationSHA256) || value.proofRevision !== 1
       || !validSHA(value.proofBodySHA256) || !validSHA(value.resourceSHA256)
@@ -190,8 +192,21 @@ function validReceipt(value, revision) {
       || !Number.isSafeInteger(value.totalBodyBytes) || value.totalBodyBytes < 1
       || !validSHA(value.previousPublicationSHA256) || !validSHA(value.previousResourceSHA256)
       || typeof value.observedAt !== 'string' || !Number.isFinite(Date.parse(value.observedAt))) return false;
-  const core = Object.fromEntries(receiptCoreKeys.map(key => [key, value[key]]));
+  const core = Object.fromEntries(keys.map(key => [key, value[key]]));
   return value.receiptSHA256 === receiptHash(core);
+}
+
+async function readCandidateWindows(root, identity, expectedSHA) {
+  let bytes;
+  try { bytes = await readBoundedFile(root, 'windows.json', MAX_WINDOW_TRANSPORT_BYTES); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    if (expectedSHA !== undefined) throw fail(422, 'window-package-missing');
+    return null;
+  }
+  if (!validSHA(expectedSHA)) throw fail(409, 'window-index-digest-required');
+  try { return await decodeWindowTransport(bytes, identity, expectedSHA); }
+  catch { throw fail(422, 'window-package-invalid'); }
 }
 
 function combineIndexes(prior, next) {
@@ -252,6 +267,8 @@ export class TimetablePublicationAdmissionStore {
     await ensureDirectory(this.stagingDirectory);
     await ensureDirectory(this.admittedDirectory);
     await ensureDirectory(path.join(this.directory, '.tmp'));
+    // A crash before the atomic repair rename may leave one private scratch file.
+    await fs.rm(path.join(this.directory, '.tmp', 'window-repair'), { force: true });
     const { asset: baselineAsset, resourceSHA256: baseResourceSHA256, index: persistedBaselineIndex } =
       await this.#loadOrPersistBaseline();
     const baselineAlreadyInBaseIndex = hasCompleteComparisonArchive(baselineAsset, this.baseSourceIndex);
@@ -263,6 +280,7 @@ export class TimetablePublicationAdmissionStore {
     let admittedBytes = 0;
     let index = baseIndex;
     const retainedIndexes = new Map();
+    const windowPackages = new Map();
     const retainedStart = Math.max(0, ledger.records.length - this.maxRetainedPackages);
     const seen = new Set();
     for (let i = 0; i < ledger.records.length; i++) {
@@ -292,6 +310,11 @@ export class TimetablePublicationAdmissionStore {
       if (index.archiveCount + candidateIndex.archiveCount > MAX_SOURCE_INDEX_ARCHIVES) throw fail(503, 'source-index-count-limit');
       index = combineIndexes(index, candidateIndex);
       retainedIndexes.set(receipt.publicationSHA256, candidateIndex);
+      if (receipt.windowIndexSHA256) {
+        const key = receipt.publicationSHA256 + '/' + receipt.proofBodySHA256;
+        try { windowPackages.set(key, await readCandidateWindows(packageRoot, asset.identity, receipt.windowIndexSHA256)); }
+        catch { windowPackages.set(key, false); }
+      }
       admittedBytes += await treeBytes(packageRoot);
       if (admittedBytes > this.maxAdmittedBytes) throw fail(503, 'admitted-storage-limit');
       previousAsset = asset;
@@ -300,11 +323,15 @@ export class TimetablePublicationAdmissionStore {
     if (ledger.revision !== ledger.records.length || ledger.revision > MAX_ADMISSION_HISTORY) {
       throw fail(503, 'admission-ledger-invalid');
     }
-    this.#snapshot = Object.freeze({ ledger, index, baseIndex, retainedIndexes,
+    this.#snapshot = Object.freeze({ ledger, index, baseIndex, retainedIndexes, windowPackages,
       previousAsset, previousResourceSHA256, admittedBytes });
     await this.#cleanupSuperseded(ledger);
     return this;
   }
+
+  get windowResourcesReady() { return ![...this.#snapshot.windowPackages.values()].includes(false); }
+
+  windowPackage(key) { return this.#snapshot?.windowPackages.get(key); }
 
   get sourceBodyIndex() { return this.#snapshot?.index ?? this.baseSourceIndex; }
 
@@ -511,6 +538,8 @@ export class TimetablePublicationAdmissionStore {
     let proofBodySHA256;
     let bodySHA256;
     if (parts.length === 1 && parts[0] === 'proof') kind = 'proof';
+    else if (parts.length === 3 && parts[0] === 'windows' && validSHA(parts[1])
+        && parts[2] === 'bundle') { kind = 'windows'; proofBodySHA256 = parts[1]; }
     else if (parts.length === 3 && parts[0] === 'archives' && validSHA(parts[1])
         && parts[2] === 'manifest') { kind = 'manifest'; proofBodySHA256 = parts[1]; }
     else if (parts.length === 4 && parts[0] === 'archives' && validSHA(parts[1])
@@ -518,11 +547,19 @@ export class TimetablePublicationAdmissionStore {
       kind = 'body'; proofBodySHA256 = parts[1]; bodySHA256 = parts[3];
     } else { errorResponse(response, 404, 'candidate-not-found'); return; }
 
-    const maximum = kind === 'proof' ? MAX_RESOURCE_BYTES : kind === 'manifest' ? MAX_SOURCE_MANIFEST_BYTES : MAX_SOURCE_BODY_BYTES;
+    const maximum = { proof: MAX_RESOURCE_BYTES, manifest: MAX_SOURCE_MANIFEST_BYTES, body: MAX_SOURCE_BODY_BYTES, windows: MAX_WINDOW_TRANSPORT_BYTES }[kind];
     const bytes = await readBoundedRequest(request, maximum);
     if (!bytes.length) throw fail(400, 'empty-object');
     const contentType = String(request.headers['content-type'] ?? '').toLowerCase();
     if (!/^application\/json(?:\s*;|$)/.test(contentType)) throw fail(415, 'unsupported-content-type');
+    if (kind === 'windows') {
+      const record = this.#snapshot.ledger.records.find(row => row.receipt.publicationSHA256 === sha);
+      if (record) {
+        await this.#restoreRetainedWindows(record, proofBodySHA256, bytes);
+        sendBytes(response, 204, Buffer.alloc(0), { 'x-tubeboard-object-sha256': digest(bytes) });
+        return;
+      }
+    }
     const packageRoot = await this.#ensureStage(sha);
     let relative;
     if (kind === 'proof') {
@@ -532,7 +569,11 @@ export class TimetablePublicationAdmissionStore {
       const asset = await this.#proofAsset(packageRoot, sha);
       if (asset.identity.proofBodySHA256 !== proofBodySHA256) throw fail(409, 'proof-identity-mismatch');
       const archiveRoot = path.join(packageRoot, 'archives', sha, proofBodySHA256);
-      if (kind === 'manifest') {
+      if (kind === 'windows') {
+        try { await decodeWindowTransport(bytes, asset.identity); }
+        catch { throw fail(422, 'window-package-invalid'); }
+        relative = 'windows.json';
+      } else if (kind === 'manifest') {
         validateSourceManifest(bytes, sha, proofBodySHA256);
         relative = path.join('archives', sha, proofBodySHA256, 'manifest.json');
       } else {
@@ -551,17 +592,54 @@ export class TimetablePublicationAdmissionStore {
     sendBytes(response, 204, Buffer.alloc(0), { 'x-tubeboard-object-sha256': digest(bytes) });
   }
 
+  async #restoreRetainedWindows(record, proofBodySHA256, bytes) {
+    const { receipt } = record;
+    if (!record.retained || !receipt.windowIndexSHA256 || proofBodySHA256 !== receipt.proofBodySHA256) {
+      throw fail(409, 'admitted-candidate-is-immutable');
+    }
+    const key = receipt.publicationSHA256 + '/' + proofBodySHA256;
+    let verified;
+    try { verified = await decodeWindowTransport(bytes, receipt, receipt.windowIndexSHA256); }
+    catch { throw fail(422, 'window-package-invalid'); }
+    if (this.windowPackage(key) !== false) return;
+    const root = this.#admittedPackage(receipt.publicationSHA256);
+    const target = path.join(root, 'windows.json');
+    let previousSize = 0;
+    try {
+      const stat = await fs.lstat(target);
+      if (!stat.isFile()) throw fail(503, 'stored-object-invalid');
+      previousSize = stat.size;
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const admittedBytes = this.#snapshot.admittedBytes - previousSize + bytes.length;
+    if (admittedBytes > this.maxAdmittedBytes) throw fail(507, 'admitted-storage-limit');
+    const temporary = path.join(this.directory, '.tmp', 'window-repair');
+    const handle = await fs.open(temporary, 'wx', 0o600);
+    try {
+      try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+      await fs.rename(temporary, target);
+      await fsyncDirectory(root);
+    } finally { await fs.rm(temporary, { force: true }); }
+    const windowPackages = new Map(this.#snapshot.windowPackages);
+    windowPackages.set(key, verified);
+    this.#snapshot = Object.freeze({ ...this.#snapshot, windowPackages, admittedBytes });
+  }
+
   async #admit(request, response, sha) {
     const bytes = await readBoundedRequest(request, 1);
     if (bytes.length !== 0) throw fail(400, 'admission-body-must-be-empty');
+    const claimedWindows = request.headers['x-tubeboard-window-index-sha256'];
+    if (claimedWindows !== undefined && !validSHA(claimedWindows)) throw fail(400, 'invalid-window-index-digest');
     const existingRecord = this.#snapshot.ledger.records.find(value => value.receipt.publicationSHA256 === sha);
     if (existingRecord) {
       const existing = existingRecord.receipt;
       const ifMatch = request.headers['if-match'];
       const resourceClaim = request.headers['x-tubeboard-resource-sha256'];
-      if (resourceClaim !== existing.resourceSHA256
+      if (claimedWindows !== existing.windowIndexSHA256 || resourceClaim !== existing.resourceSHA256
           || ifMatch !== `"${existing.previousResourceSHA256}"`) {
         throw fail(409, 'admitted-candidate-is-immutable');
+      }
+      if (existingRecord.retained && this.windowPackage(sha + '/' + existing.proofBodySHA256) === false) {
+        throw fail(503, 'admitted-window-package-unavailable');
       }
       if (existingRecord.retained) {
         const proofBytes = await readBoundedFile(path.join(this.#admittedPackage(sha), 'proofs'), `${sha}.json`, MAX_RESOURCE_BYTES);
@@ -580,6 +658,7 @@ export class TimetablePublicationAdmissionStore {
     const proofBytes = await readBoundedFile(proofDirectory, `${sha}.json`, MAX_RESOURCE_BYTES);
     const metadata = validatePublicationResource(proofBytes, sha);
     const candidateAsset = await readPublicationAsset(sha, proofDirectory);
+    await readCandidateWindows(packageRoot, candidateAsset.identity, claimedWindows);
     const resourceSHA256 = digest(proofBytes);
     if (request.headers['x-tubeboard-resource-sha256'] !== resourceSHA256) {
       throw fail(409, 'candidate-resource-digest-mismatch');
@@ -623,7 +702,8 @@ export class TimetablePublicationAdmissionStore {
       resourceSHA256, sourceManifestSHA256: digest(manifestBytes), sourceCount: manifest.sourceCount,
       uniqueBodyCount: manifest.uniqueBodyCount, totalBodyBytes: manifest.totalBodyBytes,
       previousPublicationSHA256: previousAsset.identity.publicationSHA256,
-      previousResourceSHA256, observedAt: officialObservation.observedAt
+      previousResourceSHA256, observedAt: officialObservation.observedAt,
+      ...(claimedWindows === undefined ? {} : { windowIndexSHA256: claimedWindows })
     };
     const receipt = makeReceipt(core);
     const committedPackage = this.#admittedPackage(sha);
@@ -653,6 +733,13 @@ export class TimetablePublicationAdmissionStore {
     committedCombinedIndex = combineIndexes(committedCombinedIndex, committedIndex);
     if (committedCombinedIndex.bytes > MAX_SOURCE_ARCHIVE_BYTES) throw fail(507, 'source-index-storage-limit');
     if (committedCombinedIndex.archiveCount > MAX_SOURCE_INDEX_ARCHIVES) throw fail(507, 'source-index-count-limit');
+    const windows = await readCandidateWindows(committedPackage, candidateAsset.identity, claimedWindows);
+    const windowPackages = new Map();
+    for (const record of records.filter(item => item.retained)) {
+      const key = record.receipt.publicationSHA256 + '/' + record.receipt.proofBodySHA256;
+      const bundle = record.receipt.publicationSHA256 === sha ? windows : this.#snapshot.windowPackages.get(key);
+      if (bundle != null) windowPackages.set(key, bundle);
+    }
     if (!sameFreshOfficialObservation(officialObservation, this.observation.current(), sha, this.now())) {
       if (packageRoot === this.#stagedPackage(sha)) {
         await fs.rename(committedPackage, packageRoot);
@@ -666,7 +753,7 @@ export class TimetablePublicationAdmissionStore {
     if (priorRetainedIndex && this.maxRetainedPackages > 1) retainedIndexes.set(priorRetainedSHA, priorRetainedIndex);
     retainedIndexes.set(sha, committedIndex);
     this.#snapshot = Object.freeze({ ledger, index: committedCombinedIndex,
-      baseIndex: this.#snapshot.baseIndex, retainedIndexes,
+      baseIndex: this.#snapshot.baseIndex, retainedIndexes, windowPackages,
       previousAsset: candidateAsset, previousResourceSHA256: resourceSHA256,
       admittedBytes: nextAdmittedBytes });
     await this.#cleanupSuperseded(ledger);
