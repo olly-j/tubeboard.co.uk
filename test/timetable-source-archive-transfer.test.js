@@ -5,6 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
+import { gzipSync } from 'node:zlib';
 import test from 'node:test';
 import {
   SOURCE_ARCHIVE_TRANSFER_AUDIENCE, SOURCE_ARCHIVE_TRANSFER_COOLDOWN_MS,
@@ -25,10 +26,11 @@ function observation(sha = publicationSHA256, observedAt = fixedNow - 60_000, ex
 
 function responseFor(bytes, { status = 200, sha = publicationSHA256,
   date = new Date(fixedNow).toUTCString(), age = '0', contentType = 'application/zip',
-  contentLength, lastModified = 'Mon, 09 Nov 2026 00:38:16 GMT' } = {}) {
+  contentLength, contentEncoding, lastModified = 'Mon, 09 Nov 2026 00:38:16 GMT' } = {}) {
   const headers = {
     'x-amz-meta-sha256': sha, 'content-type': contentType,
     date, ...(age === null ? {} : { age }),
+    ...(contentEncoding ? { 'content-encoding': contentEncoding } : {}),
     ...(lastModified ? { 'last-modified': lastModified } : {})
   };
   const actualContentLength = contentLength === undefined ? String(bytes?.length ?? 0) : contentLength;
@@ -201,6 +203,44 @@ test('authorized current edition returns only bytes whose official metadata and 
   assert.equal(calls.length, 2);
 });
 
+test('gzip transfer hashes the transparently decoded official ZIP body', async t => {
+  const bytes = Buffer.from('decoded official ZIP body');
+  const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+  const wireBytes = gzipSync(bytes);
+  const calls = [];
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-source-transfer-gzip-'));
+  t.after(() => fs.rm(tempDirectory, { recursive: true, force: true }));
+  const upstream = http.createServer((request, response) => {
+    calls.push({ method: request.method, url: request.url });
+    response.writeHead(200, { 'x-amz-meta-sha256': sha, 'content-type': 'application/zip',
+      'content-encoding': 'gzip', 'content-length': String(wireBytes.length),
+      date: new Date(fixedNow).toUTCString(), age: '0' });
+    if (request.method === 'HEAD') response.end(); else response.end(wireBytes);
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(async () => new Promise(resolve => {
+    upstream.close(resolve); upstream.closeAllConnections();
+  }));
+  const upstreamOrigin = `http://127.0.0.1:${upstream.address().port}`;
+  const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => fixedNow,
+    tempDirectory, verifyOIDC: async () => true,
+    fetchImpl: async (url, { method }) => {
+      const localURL = new URL(url.pathname + url.search, upstreamOrigin);
+      const response = await fetch(localURL, { method });
+      Object.defineProperty(response, 'url', { value: url.href });
+      return response;
+    }
+  });
+  const origin = await withServer(t, transfer);
+  const response = await fetch(origin + archiveURL(sha), { headers: auth });
+  assert.equal(response.status, 200);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+  assert.deepEqual(calls.map(call => call.method), ['HEAD', 'GET']);
+  assert.equal(calls[0].url, calls[1].url);
+  assert.ok(calls[0].url.includes('tb085='));
+  await waitForEmpty(tempDirectory);
+});
+
 test('missing or invalid OIDC identity is indistinguishable from an unknown archive and never contacts TfL', async t => {
   let calls = 0;
   const transfer = new TimetableSourceArchiveTransfer({ observation: observation(), now: () => fixedNow,
@@ -240,25 +280,34 @@ test('upstream status, identity, freshness, MIME, length, cap and digest failure
   const sha = crypto.createHash('sha256').update(bytes).digest('hex');
   const now = fixedNow;
   const badResponses = [
-    { head: { sha: 'b'.repeat(64) } }, { head: { contentType: 'text/html' } },
-    { head: { date: new Date(now - 11 * 60_000).toUTCString() } },
-    { head: { age: '600' } }, { head: { age: 'not-a-number' } },
-    { get: { status: 403 } }, { get: { sha: 'b'.repeat(64) } },
-    { get: { contentType: 'text/html' } }, { get: { contentLength: '999' } },
-    { get: { contentLength: '4' } },
-    { head: { contentLength: null }, get: { bytes: Buffer.alloc(65), contentLength: null, lastModified: null } },
-    { get: { contentEncoding: 'gzip' } }
+    { head: { sha: 'b'.repeat(64) }, expected: 'head-identity' },
+    { head: { contentType: 'text/html' }, expected: 'head-content-type' },
+    { head: { contentEncoding: 'br' }, expected: 'head-content-encoding' },
+    { head: { date: new Date(now - 11 * 60_000).toUTCString() }, expected: 'head-source-clock' },
+    { head: { age: '600' }, expected: 'head-source-clock' },
+    { head: { age: 'not-a-number' }, expected: 'head-source-clock' },
+    { get: { status: 403 }, expected: 'get-response-identity' },
+    { get: { sha: 'b'.repeat(64) }, expected: 'get-publisher-sha' },
+    { get: { contentType: 'text/html' }, expected: 'get-content-type' },
+    { get: { contentEncoding: 'br' }, expected: 'get-content-encoding' },
+    { get: { contentEncoding: 'gzip' }, expected: 'get-content-encoding' },
+    { get: { contentLength: '999' }, expected: 'get-size' },
+    { get: { contentLength: '4' }, expected: 'head-get-length-mismatch' },
+    { head: { contentLength: null }, get: { bytes: Buffer.alloc(65), contentLength: null, lastModified: null }, expected: 'get-size' },
+    { get: { contentEncoding: 'gzip' }, expected: 'get-content-encoding' }
   ];
   for (const invalid of badResponses) {
     const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-source-transfer-reject-'));
+    const failures = [];
     const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => now,
-      tempDirectory, maxBytes: 64, verifyOIDC: async () => true,
+      tempDirectory, maxBytes: 64, verifyOIDC: async () => true, onFailure: reason => failures.push(reason),
       fetchImpl: async (_url, { method }) => {
         const options = method === 'HEAD' ? invalid.head : invalid.get;
         if (options?.contentEncoding) {
           return new Response(method === 'HEAD' ? null : bytes, { status: options.status ?? 200,
             headers: { 'x-amz-meta-sha256': options.sha ?? sha,
               'content-type': options.contentType ?? 'application/zip',
+              ...(options.contentEncoding ? { 'content-encoding': options.contentEncoding } : {}),
               ...(method === 'HEAD' ? { date: new Date(now).toUTCString(), age: '0' }
                 : { 'content-encoding': options.contentEncoding, date: new Date(now).toUTCString(), age: '0' }) } });
         }
@@ -273,6 +322,7 @@ test('upstream status, identity, freshness, MIME, length, cap and digest failure
     const response = await fetch(origin + archiveURL(sha), { headers: auth });
     assert.equal(response.status, 503);
     assert.equal((await response.arrayBuffer()).byteLength > 0, true);
+    assert.deepEqual(failures, [invalid.expected]);
     await waitForEmpty(tempDirectory);
     await fs.rm(tempDirectory, { recursive: true, force: true });
   }
