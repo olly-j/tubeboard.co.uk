@@ -9,6 +9,7 @@ import { WIDGET_PUSH_PATH, WidgetPushStore, WidgetPushAdmission, loadWidgetPushC
 import { PrimaryArrivalsSource, loadPrimaryArrivalsConfig, handlePrimaryArrivalsSource } from './primary-arrivals-source.js';
 import { startOperatorObservation, selectedPresence } from './operator-observation.js';
 import { handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from './timetable-publication-resource.js';
+import { handleSourceBodyResource, loadSourceBodyArchiveIndex, SOURCE_ARCHIVE_DIRECTORY } from './timetable-source-body-resource.js';
 import {
   LiveActivityStore,
   TokenRateLimiter,
@@ -76,6 +77,10 @@ const disruptionAlertRateLimiter = new TokenRateLimiter({
   limit: 6,
   windowMs: 60_000
 });
+const sourceBodyArchiveIndex = loadSourceBodyArchiveIndex({
+  publicationDirectory: PUBLICATION_ASSET_DIRECTORY,
+  archiveDirectory: SOURCE_ARCHIVE_DIRECTORY
+}).catch(() => null);
 const port = Number.parseInt(process.env.PORT || '4173', 10);
 let operatorObservation = null;
 function observeStoreCompletion(work, kind) {
@@ -155,6 +160,10 @@ const server = http.createServer(async (request, response) => {
     if (await handlePublicationResource(request, response, url, {
       directory: PUBLICATION_ASSET_DIRECTORY
     })) return;
+
+    // Exact archived Unified JSON bodies are available only when their scope
+    // is bound by the installed proof and its matching local manifest.
+    if (await handleSourceBodyResource(request, response, url, { index: sourceBodyArchiveIndex })) return;
 
     if (request.method === 'POST' && url.pathname === '/api/live-activities/tokens') {
       await handleTokenRegistration(request, response);
