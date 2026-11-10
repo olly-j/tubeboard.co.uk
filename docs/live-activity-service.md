@@ -666,7 +666,9 @@ observation, fetched from the fixed TfL URL with redirects disabled. It checks
 the publisher SHA metadata, HTTP Date/Age, ZIP content type, byte bounds and
 the full downloaded SHA-256 before returning a response. Its maximum is
 160 MiB, timeout is 30 seconds, and one process permits only one transfer per
-ten minutes. The response is `no-store` and includes
+ten minutes. The 30-second deadline covers both the upstream read and the
+downstream response; a stalled transfer is aborted and its temporary file is
+removed. The response is `no-store` and includes
 `X-TubeBoard-Source-Use: verified-qualification-input-only` plus the exact
 publication and upstream clock metadata. Bytes are spooled to a unique
 permission-restricted temporary directory and removed after the response;

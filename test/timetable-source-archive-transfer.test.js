@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { Writable } from 'node:stream';
 import test from 'node:test';
 import {
   SOURCE_ARCHIVE_TRANSFER_AUDIENCE, SOURCE_ARCHIVE_TRANSFER_COOLDOWN_MS,
@@ -233,4 +234,25 @@ test('absolute upstream timeout aborts the source request and clears transfer ow
   assert.equal(aborted, true);
   await waitForEmpty(tempDirectory);
   assert.equal(transfer.active, false);
+});
+
+test('downstream backpressure is covered by the same deadline and releases the temporary archive', async t => {
+  const bytes = Buffer.alloc(256 * 1024, 7);
+  const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+  const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-source-transfer-downstream-'));
+  t.after(() => fs.rm(tempDirectory, { recursive: true, force: true }));
+  const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => fixedNow,
+    tempDirectory, timeoutMs: 20, verifyOIDC: async () => true,
+    fetchImpl: async () => responseFor(bytes, { sha })
+  });
+  const response = new Writable({ write() {} });
+  response.writeHead = (status, headers) => {
+    response.statusCode = status; response.headers = headers; response.headersSent = true;
+    return response;
+  };
+  await transfer.transfer(sha, response);
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.destroyed, true);
+  assert.equal(transfer.active, false);
+  await waitForEmpty(tempDirectory);
 });

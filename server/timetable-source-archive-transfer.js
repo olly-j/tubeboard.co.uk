@@ -188,7 +188,7 @@ export class TimetableSourceArchiveTransfer {
         ...(upstream.headers.get('last-modified')
           ? { 'x-tubeboard-source-last-modified': upstream.headers.get('last-modified') } : {})
       });
-      await pipeline(createReadStream(temporaryFile), response);
+      await pipeline(createReadStream(temporaryFile), response, { signal: controller.signal });
     } catch {
       if (!response.headersSent) errorResponse(response, 503, 'Official timetable archive unavailable');
       else if (!response.writableEnded && !response.destroyed) response.destroy();
