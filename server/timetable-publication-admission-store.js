@@ -467,14 +467,20 @@ export class TimetablePublicationAdmissionStore {
     }
     try { await fs.lstat(this.#admittedPackage(sha)); return this.#admittedPackage(sha); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
-    let names = await fs.readdir(this.stagingDirectory, { withFileTypes: true });
-    names = names.filter(item => item.isDirectory());
-    const other = names.find(item => item.name !== sha);
-    if (other) {
-      const metadata = await this.#readStageMetadata(other.name).catch(() => null);
-      if (metadata && this.now() - Date.parse(metadata.createdAt) > MAX_STAGE_AGE_MS) {
-        await fs.rm(this.#stagedPackage(other.name), { recursive: true, force: true });
-      } else throw fail(409, 'another-candidate-is-staged');
+    for (const item of await fs.readdir(this.stagingDirectory, { withFileTypes: true })) {
+      if (!item.isDirectory() || !validSHA(item.name)) throw fail(503, 'staged-metadata-invalid');
+      const staged = this.#stagedPackage(item.name);
+      let createdAt;
+      try { createdAt = Date.parse((await this.#readStageMetadata(item.name)).createdAt); }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        // A crash can leave the private directory before stage.json is linked.
+        createdAt = (await fs.stat(staged)).mtimeMs;
+      }
+      if (this.now() - createdAt >= MAX_STAGE_AGE_MS) {
+        await fs.rm(staged, { recursive: true });
+        await fsyncDirectory(this.stagingDirectory);
+      } else if (item.name !== sha) throw fail(409, 'another-candidate-is-staged');
     }
     await ensureDirectory(packageRoot);
     const metaPath = path.join(packageRoot, 'stage.json');
@@ -566,6 +572,10 @@ export class TimetablePublicationAdmissionStore {
       return;
     }
     const packageRoot = await this.#candidatePackageRoot(sha);
+    if (packageRoot === this.#stagedPackage(sha)) {
+      const stage = await this.#readStageMetadata(sha);
+      if (this.now() - Date.parse(stage.createdAt) >= MAX_STAGE_AGE_MS) throw fail(409, 'candidate-stage-expired');
+    }
     const proofDirectory = path.join(packageRoot, 'proofs');
     const proofBytes = await readBoundedFile(proofDirectory, `${sha}.json`, MAX_RESOURCE_BYTES);
     const metadata = validatePublicationResource(proofBytes, sha);
