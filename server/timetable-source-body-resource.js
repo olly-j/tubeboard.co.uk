@@ -6,7 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { TextDecoder } from 'node:util';
-import { readPublicationAsset } from './timetable-publication-resource.js';
+import { isDeepStrictEqual } from 'node:util';
+import { readPublicationAsset, validatePublicationResource, MAX_RESOURCE_BYTES } from './timetable-publication-resource.js';
 import { selectedTimetableEntry } from './station-board-timetable.js';
 
 export const SOURCE_BODY_PREFIX = '/api/timetable-source-bodies/v1/';
@@ -147,9 +148,35 @@ async function readBoundedFile(directory, relativePath, maximumBytes) {
   } finally { await handle.close(); }
 }
 
-function freezeIndex(entries, unavailable, indexedBytes = 0, archivesSeen = 0) {
+// A bundled predecessor can reuse current body buffers only for identical
+// qualified station entries under identical publication-wide service rules.
+async function previousProofScopes(archivePath, asset, manifest) {
+  if (asset.identity.proofRevision < 2) return null;
+  let bytes;
+  try { bytes = await readBoundedFile(archivePath, 'previous-resource.json', MAX_RESOURCE_BYTES); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  const previous = validatePublicationResource(bytes, asset.identity.publicationSHA256);
+  if (previous.revision !== asset.identity.proofRevision - 1) throw new Error('Wrong previous proof revision');
+  const prior = JSON.parse(Buffer.from(JSON.parse(bytes).proofBodyBase64, 'base64'));
+  const { entries: previousEntries, coverage: previousCoverage, ...previousRules } = prior;
+  const { entries: currentEntries, coverage: currentCoverage, ...currentRules } = asset.proof;
+  if (!isDeepStrictEqual(previousRules, currentRules)) return null;
+  const stationKey = row => row.lineID + '/' + row.stationID;
+  const current = new Map(currentEntries.map(row => [stationKey(row), row]));
+  const identical = new Set(previousEntries.filter(row => row.status === 'qualified'
+    && isDeepStrictEqual(row, current.get(stationKey(row)))).map(stationKey));
+  const priorManifest = validateSourceManifest(
+    await readBoundedFile(archivePath, 'previous-manifest.json', MAX_SOURCE_MANIFEST_BYTES),
+    asset.identity.publicationSHA256, previous.proofBodySHA256);
+  const priorSources = new Map(priorManifest.sources.map(source => [scopeKey(source), source]));
+  const identicalScopes = new Set(manifest.sources.filter(source =>
+    identical.has(stationKey(source)) && isDeepStrictEqual(source, priorSources.get(scopeKey(source)))).map(scopeKey));
+  return { sha: previous.proofBodySHA256, identicalScopes };
+}
+
+function freezeIndex(entries, unavailable, indexedBytes = 0, archivesSeen = 0, previous = new Map()) {
   return Object.freeze({
-    get: key => entries.get(key),
+    get: key => entries.get(key) ?? previous.get(key),
     isUnavailable: (publicationSHA256, proofBodySHA256) => unavailable.has(archiveIdentityKey(publicationSHA256, proofBodySHA256)),
     size: entries.size,
     bytes: indexedBytes,
@@ -164,12 +191,13 @@ export async function loadSourceBodyArchiveIndex({
   archiveDirectory = SOURCE_ARCHIVE_DIRECTORY
 }) {
   const entries = new Map();
+  const previousEntries = new Map();
   const unavailable = new Set();
   let indexedBytes = 0;
   let archivesSeen = 0;
   let archiveNames;
   try { archiveNames = await fs.readdir(archiveDirectory, { withFileTypes: true }); }
-  catch (error) { if (error.code === 'ENOENT') return freezeIndex(entries, unavailable, indexedBytes, archivesSeen); throw error; }
+  catch (error) { if (error.code === 'ENOENT') return freezeIndex(entries, unavailable, indexedBytes, archivesSeen, previousEntries); throw error; }
   const publicationNames = archiveNames.filter(item => item.isDirectory() && validSHA(item.name))
     .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   for (const publication of publicationNames) {
@@ -235,6 +263,8 @@ export async function loadSourceBodyArchiveIndex({
             publicationSHA256: publication.name,
             proofBodySHA256: proofDirectory.name,
             bodySHA256: source.bodySHA256,
+            lineID: source.lineID,
+            stationID: source.stationID,
             direction: requestDirection,
             responseDirection: source.responseDirection,
             endpoint: source.endpoint,
@@ -248,7 +278,17 @@ export async function loadSourceBodyArchiveIndex({
         }
         // Publish this package atomically only after every proof scope and body
         // has passed validation; a late failure cannot leave partial authority.
-        for (const [key, source] of pendingEntries) entries.set(key, source);
+        // A damaged optional predecessor must not withdraw the independently
+        // validated current package. No alias is published on that path.
+        let previous;
+        try { previous = await previousProofScopes(archivePath, asset, manifest); }
+        catch { previous = null; }
+        for (const [key, source] of pendingEntries) {
+          entries.set(key, source);
+          if (previous?.identicalScopes.has(scopeKey(source))) {
+            previousEntries.set(requestKey({ ...source, proofBodySHA256: previous.sha }), source);
+          }
+        }
         indexedBytes += pendingBytes;
       } catch {
         // Keep only an identity-bounded failure marker. The HTTP route fails
@@ -257,7 +297,7 @@ export async function loadSourceBodyArchiveIndex({
       }
     }
   }
-  return freezeIndex(entries, unavailable, indexedBytes, archivesSeen);
+  return freezeIndex(entries, unavailable, indexedBytes, archivesSeen, previousEntries);
 }
 
 function jsonError(response, status, message, headOnly) {

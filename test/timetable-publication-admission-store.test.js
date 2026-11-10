@@ -14,8 +14,8 @@ import { TimetablePublicationAdmissionStore, PUBLICATION_CANDIDATE_PREFIX } from
 const priorSHA = '0169fa960dee3ad1ca47ae70c639143375287a99ce18018a05703927593bc017';
 const candidateSHA = '788955e868b7ae85219db15b4e05c2f187bdf3be1767f16b1c369b60dea08ad7';
 const proofBodySHA = 'c51723fae3c55df89b0fa875c3a8630384c76ce83748a886f9cb2c7e806b4930';
-const candidatePath = path.join(PUBLICATION_ASSET_DIRECTORY, `${candidateSHA}.json`);
-const archivePath = path.join(SOURCE_ARCHIVE_DIRECTORY, candidateSHA, proofBodySHA);
+const archivePath = path.join(SOURCE_ARCHIVE_DIRECTORY, candidateSHA, '0c5fba0afe99c032a4477fc9126158f26aeafc3ad9fdd173c3d6c489f2fb191c');
+const candidatePath = path.join(archivePath, 'previous-resource.json');
 const observedAt = Date.parse('2026-11-10T19:55:00Z');
 const now = Date.parse('2026-11-10T20:00:00Z');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -75,7 +75,7 @@ async function setup(t, { maxAdmittedPackages = 2 } = {}) {
     const newProofBodySHA = digest(newProofBytes);
     const resource = canonicalResource({ schemaVersion: 1, publicationSHA256: sha, proofRevision: 1,
       proofBodySHA256: newProofBodySHA, proofBodyBase64: newProofBytes.toString('base64') });
-    const sourceManifest = JSON.parse(await fs.readFile(path.join(archivePath, 'manifest.json'), 'utf8'));
+    const sourceManifest = JSON.parse(await fs.readFile(path.join(archivePath, 'previous-manifest.json'), 'utf8'));
     sourceManifest.publicationSHA256 = sha;
     sourceManifest.proofBodySHA256 = newProofBodySHA;
     const manifestBytes = Buffer.from(JSON.stringify(sourceManifest, null, 2) + '\n');
