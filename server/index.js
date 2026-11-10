@@ -11,6 +11,7 @@ import { PrimaryArrivalsSource, loadPrimaryArrivalsConfig, handlePrimaryArrivals
 import { startOperatorObservation, selectedPresence } from './operator-observation.js';
 import { handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from './timetable-publication-resource.js';
 import { handleSourceBodyResource, loadSourceBodyArchiveIndex, SOURCE_ARCHIVE_DIRECTORY } from './timetable-source-body-resource.js';
+import { TimetablePublicationAdmissionStore } from './timetable-publication-admission-store.js';
 import {
   LiveActivityStore,
   TokenRateLimiter,
@@ -46,6 +47,10 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '..');
 const config = loadConfig();
+const publicationAssetDirectory = path.resolve(projectRoot,
+  process.env.TUBEBOARD_TIMETABLE_PUBLICATION_ASSET_DIRECTORY || PUBLICATION_ASSET_DIRECTORY);
+const sourceArchiveDirectory = path.resolve(projectRoot,
+  process.env.TUBEBOARD_TIMETABLE_SOURCE_ARCHIVE_DIRECTORY || SOURCE_ARCHIVE_DIRECTORY);
 const timetableEdition = new TimetableEditionObservation();
 const timetableSourceArchiveTransfer = new TimetableSourceArchiveTransfer({ observation: timetableEdition });
 const primaryArrivalsSource = new PrimaryArrivalsSource(loadPrimaryArrivalsConfig());
@@ -80,9 +85,30 @@ const disruptionAlertRateLimiter = new TokenRateLimiter({
   windowMs: 60_000
 });
 const sourceBodyArchiveIndex = loadSourceBodyArchiveIndex({
-  publicationDirectory: PUBLICATION_ASSET_DIRECTORY,
-  archiveDirectory: SOURCE_ARCHIVE_DIRECTORY
+  publicationDirectory: publicationAssetDirectory,
+  archiveDirectory: sourceArchiveDirectory
 }).catch(() => null);
+const publicationAdmissionConfigured = Boolean(process.env.TUBEBOARD_TIMETABLE_PUBLICATION_ADMISSION_DIRECTORY);
+// The persistent writer is deliberately opt-in. Fly's normal configuration
+// does not set this path; enabling candidate writes is a separate reviewed
+// operational change. Public readback only sees packages after admission.
+const timetablePublicationAdmissionStore = process.env.TUBEBOARD_TIMETABLE_PUBLICATION_ADMISSION_DIRECTORY
+  ? Promise.all([sourceBodyArchiveIndex]).then(async ([baseSourceIndex]) => {
+    if (!baseSourceIndex) throw new Error('Base timetable source index unavailable');
+    const store = new TimetablePublicationAdmissionStore({
+      directory: process.env.TUBEBOARD_TIMETABLE_PUBLICATION_ADMISSION_DIRECTORY,
+      baselineSHA256: process.env.TUBEBOARD_TIMETABLE_PUBLICATION_ADMISSION_BASELINE_SHA256,
+      observation: timetableEdition,
+      baseSourceIndex,
+      publicationDirectory: publicationAssetDirectory,
+      archiveDirectory: sourceArchiveDirectory
+    });
+    return store.initialize();
+  }).catch(() => {
+    console.warn(JSON.stringify({ event: 'timetable-publication-admission-init-failed' }));
+    return null;
+  })
+  : Promise.resolve(null);
 const port = Number.parseInt(process.env.PORT || '4173', 10);
 let operatorObservation = null;
 function observeStoreCompletion(work, kind) {
@@ -118,6 +144,7 @@ const server = http.createServer(async (request, response) => {
     // Keep this deliberately narrow so the probe can verify the process
     // without weakening host validation for pages or API routes.
     if ((request.method === 'GET' || request.method === 'HEAD') && requestTarget === '/healthz') {
+      const admissionStore = publicationAdmissionConfigured ? await timetablePublicationAdmissionStore : null;
       sendJson(response, 200, {
         ok: true,
         serviceVersion: SERVICE_VERSION,
@@ -129,6 +156,8 @@ const server = http.createServer(async (request, response) => {
         disruptionAlertWorkerEnabled: disruptionAlertConfig.workerEnabled,
         widgetPushContractVersion: WIDGET_PUSH_CONTRACT_VERSION,
         widgetPushWorkerEnabled: widgetPushConfig.enabled && widgetPushConfig.encryptionKey?.length === 32,
+        timetablePublicationAdmissionConfigured: publicationAdmissionConfigured,
+        timetablePublicationAdmissionReady: Boolean(admissionStore),
         sourceRevision: SOURCE_REVISION
       });
       return;
@@ -150,6 +179,12 @@ const server = http.createServer(async (request, response) => {
 
     if (await handleTimetableSourceArchiveTransfer(request, response, url, timetableSourceArchiveTransfer)) return;
 
+    const admissionReadPath = url.pathname.startsWith('/api/timetable-publication-candidates/v1/')
+      || url.pathname.startsWith('/api/timetable-publications/v1/')
+      || url.pathname.startsWith('/api/timetable-source-bodies/v1/');
+    const publicationAdmissionStore = admissionReadPath ? await timetablePublicationAdmissionStore : null;
+    if (publicationAdmissionStore && await publicationAdmissionStore.handle(request, response, url)) return;
+
     if (url.pathname === WIDGET_PUSH_PATH) {
       await handleWidgetPushRegistration(request, response, { config: widgetPushConfig,
         store: widgetPushStore, admission: widgetPushAdmission, ip: getClientIp(request) });
@@ -162,12 +197,15 @@ const server = http.createServer(async (request, response) => {
     // Public reviewed metadata only. Host/security validation above remains
     // identical; no token, JWS, install ID, location or TfL query is involved.
     if (await handlePublicationResource(request, response, url, {
-      directory: PUBLICATION_ASSET_DIRECTORY
+      directory: publicationAssetDirectory,
+      ...(publicationAdmissionStore ? { readBytes: sha => publicationAdmissionStore.readPublicPublicationBytes(sha) } : {})
     })) return;
 
     // Exact archived Unified JSON bodies are available only when their scope
     // is bound by the installed proof and its matching local manifest.
-    if (await handleSourceBodyResource(request, response, url, { index: sourceBodyArchiveIndex })) return;
+    if (await handleSourceBodyResource(request, response, url, {
+      index: publicationAdmissionStore ? publicationAdmissionStore.sourceBodyIndex : await sourceBodyArchiveIndex
+    })) return;
 
     if (request.method === 'POST' && url.pathname === '/api/live-activities/tokens') {
       await handleTokenRegistration(request, response);

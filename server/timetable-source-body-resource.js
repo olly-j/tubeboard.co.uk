@@ -147,11 +147,13 @@ async function readBoundedFile(directory, relativePath, maximumBytes) {
   } finally { await handle.close(); }
 }
 
-function freezeIndex(entries, unavailable) {
+function freezeIndex(entries, unavailable, indexedBytes = 0, archivesSeen = 0) {
   return Object.freeze({
     get: key => entries.get(key),
     isUnavailable: (publicationSHA256, proofBodySHA256) => unavailable.has(archiveIdentityKey(publicationSHA256, proofBodySHA256)),
-    size: entries.size
+    size: entries.size,
+    bytes: indexedBytes,
+    archiveCount: archivesSeen
   });
 }
 
@@ -167,7 +169,7 @@ export async function loadSourceBodyArchiveIndex({
   let archivesSeen = 0;
   let archiveNames;
   try { archiveNames = await fs.readdir(archiveDirectory, { withFileTypes: true }); }
-  catch (error) { if (error.code === 'ENOENT') return freezeIndex(entries, unavailable); throw error; }
+  catch (error) { if (error.code === 'ENOENT') return freezeIndex(entries, unavailable, indexedBytes, archivesSeen); throw error; }
   const publicationNames = archiveNames.filter(item => item.isDirectory() && validSHA(item.name))
     .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   for (const publication of publicationNames) {
@@ -255,7 +257,7 @@ export async function loadSourceBodyArchiveIndex({
       }
     }
   }
-  return freezeIndex(entries, unavailable);
+  return freezeIndex(entries, unavailable, indexedBytes, archivesSeen);
 }
 
 function jsonError(response, status, message, headOnly) {
