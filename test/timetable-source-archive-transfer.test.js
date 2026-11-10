@@ -25,13 +25,14 @@ function observation(sha = publicationSHA256, observedAt = fixedNow - 60_000, ex
 
 function responseFor(bytes, { status = 200, sha = publicationSHA256,
   date = new Date(fixedNow).toUTCString(), age = '0', contentType = 'application/zip',
-  contentLength = String(bytes.length), lastModified = 'Mon, 09 Nov 2026 00:38:16 GMT' } = {}) {
+  contentLength, lastModified = 'Mon, 09 Nov 2026 00:38:16 GMT' } = {}) {
   const headers = {
     'x-amz-meta-sha256': sha, 'content-type': contentType,
-    date, age,
+    date, ...(age === null ? {} : { age }),
     ...(lastModified ? { 'last-modified': lastModified } : {})
   };
-  if (contentLength !== null) headers['content-length'] = contentLength;
+  const actualContentLength = contentLength === undefined ? String(bytes?.length ?? 0) : contentLength;
+  if (actualContentLength !== null) headers['content-length'] = actualContentLength;
   return new Response(bytes, { status, headers });
 }
 
@@ -90,19 +91,87 @@ test('OIDC verifier pins GitHub issuer, audience, repository, protected ref, wor
   assert.equal(await verifySourceArchiveOIDC(token, { verify: async () => { throw new Error('bad signature'); } }), false);
 });
 
+test('cold-cache HEAD is warmed once on the exact nonce and publisher SHA before one GET', async t => {
+  const bytes = Buffer.from('verified cold-cache ZIP');
+  const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+  const calls = [];
+  const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => fixedNow,
+    verifyOIDC: async () => true,
+    fetchImpl: async (url, { method }) => {
+      calls.push({ url: url.href, method });
+      if (method === 'HEAD' && calls.filter(call => call.method === 'HEAD').length === 1) {
+        return responseFor(null, { sha, age: null, contentLength: String(bytes.length) });
+      }
+      return responseFor(method === 'GET' ? bytes : null,
+        { sha, age: method === 'GET' ? null : '0', contentLength: String(bytes.length) });
+    }
+  });
+  const origin = await withServer(t, transfer);
+  const response = await fetch(origin + archiveURL(sha), { headers: auth });
+  assert.equal(response.status, 200);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
+  assert.deepEqual(calls.map(call => call.method), ['HEAD', 'HEAD', 'GET']);
+  assert.equal(new Set(calls.map(call => call.url)).size, 1);
+  assert.equal(calls[0].url.includes(`tb085=`), true);
+  assert.equal(response.headers.get('x-tubeboard-source-http-age'), '0');
+  assert.equal(response.headers.get('x-tubeboard-source-clock-method'), 'HEAD');
+});
+
+test('unwarmed source clocks fail closed with a sanitized reason and no archive GET', async t => {
+  const bytes = Buffer.from('verified ZIP');
+  const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+  const calls = [];
+  const failures = [];
+  const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => fixedNow,
+    verifyOIDC: async () => true, onFailure: reason => failures.push(reason),
+    fetchImpl: async (_url, { method }) => {
+      calls.push(method);
+      return responseFor(method === 'GET' ? bytes : null,
+        { sha, age: null, contentLength: String(bytes.length) });
+    }
+  });
+  const origin = await withServer(t, transfer);
+  const response = await fetch(origin + archiveURL(sha), { headers: auth });
+  assert.equal(response.status, 503);
+  assert.deepEqual(calls, ['HEAD', 'HEAD']);
+  assert.deepEqual(failures, ['head-source-clock']);
+});
+
+test('warmed HEAD must retain the exact publisher hash before the single archive GET', async t => {
+  const bytes = Buffer.from('verified ZIP');
+  const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+  const calls = [];
+  const failures = [];
+  const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => fixedNow,
+    verifyOIDC: async () => true, onFailure: reason => failures.push(reason),
+    fetchImpl: async (url, { method }) => {
+      calls.push({ url: url.href, method });
+      return responseFor(method === 'GET' ? bytes : null,
+        { sha: method === 'HEAD' && calls.length === 2 ? 'b'.repeat(64) : sha,
+          age: calls.length === 1 ? null : '0', contentLength: String(bytes.length) });
+    }
+  });
+  const origin = await withServer(t, transfer);
+  const response = await fetch(origin + archiveURL(sha), { headers: auth });
+  assert.equal(response.status, 503);
+  assert.deepEqual(calls.map(call => call.method), ['HEAD', 'HEAD']);
+  assert.equal(calls[0].url, calls[1].url);
+  assert.deepEqual(failures, ['head-identity']);
+});
+
 test('authorized current edition returns only bytes whose official metadata and digest match', async t => {
   const bytes = Buffer.from('verified official ZIP bytes');
   const sha = crypto.createHash('sha256').update(bytes).digest('hex');
   const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-source-transfer-'));
   t.after(() => fs.rm(tempDirectory, { recursive: true, force: true }));
-  let calls = 0;
+  const calls = [];
   const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => fixedNow,
     tempDirectory, verifyOIDC: async value => value === token,
     fetchImpl: async (url, options) => {
-      calls += 1;
+      calls.push({ url: url.href, method: options.method });
       assert.equal(url.origin + url.pathname, TIMETABLE_PUBLICATION_URL);
       assert.ok(url.searchParams.has('tb085'));
-      assert.equal(options.method, 'GET'); assert.equal(options.redirect, 'error');
+      assert.ok(['HEAD', 'GET'].includes(options.method)); assert.equal(options.redirect, 'error');
       assert.ok(options.signal instanceof AbortSignal);
       return responseFor(bytes, { sha });
     }
@@ -120,13 +189,16 @@ test('authorized current edition returns only bytes whose official metadata and 
   assert.equal(response.headers.get('x-tubeboard-publication-sha256'), sha);
   assert.equal(response.headers.get('x-tubeboard-source-url'), TIMETABLE_PUBLICATION_URL);
   assert.equal(response.headers.get('x-tubeboard-source-http-age'), '0');
+  assert.equal(response.headers.get('x-tubeboard-source-clock-method'), 'GET');
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), bytes);
-  assert.equal(calls, 1);
+  assert.deepEqual(calls.map(call => call.method), ['HEAD', 'GET']);
+  assert.equal(calls[0].url, calls[1].url);
+  assert.equal(new URL(calls[0].url).searchParams.get('tb085')?.length > 0, true);
   await waitForEmpty(tempDirectory);
   const limited = await fetch(origin + archiveURL(sha), { headers: auth });
   assert.equal(limited.status, 429);
   assert.ok(Number(limited.headers.get('retry-after')) >= 1);
-  assert.equal(calls, 1);
+  assert.equal(calls.length, 2);
 });
 
 test('missing or invalid OIDC identity is indistinguishable from an unknown archive and never contacts TfL', async t => {
@@ -168,20 +240,34 @@ test('upstream status, identity, freshness, MIME, length, cap and digest failure
   const sha = crypto.createHash('sha256').update(bytes).digest('hex');
   const now = fixedNow;
   const badResponses = [
-    responseFor(bytes, { status: 403, sha }), responseFor(bytes, { sha: 'b'.repeat(64) }),
-    responseFor(bytes, { sha, contentType: 'text/html' }),
-    responseFor(bytes, { sha, date: new Date(now - 11 * 60_000).toUTCString() }),
-    responseFor(bytes, { sha, age: '600' }), responseFor(bytes, { sha, age: 'not-a-number' }),
-    responseFor(bytes, { sha, contentLength: '999' }), responseFor(bytes, { sha, contentLength: '4' }),
-    responseFor(Buffer.from('too-large'), { sha: crypto.createHash('sha256').update('too-large').digest('hex'),
-      contentLength: null, lastModified: null }),
-    new Response(bytes, { status: 200, headers: { 'x-amz-meta-sha256': sha,
-      'content-type': 'application/zip', 'content-encoding': 'gzip', date: new Date(now).toUTCString(), age: '0' } })
+    { head: { sha: 'b'.repeat(64) } }, { head: { contentType: 'text/html' } },
+    { head: { date: new Date(now - 11 * 60_000).toUTCString() } },
+    { head: { age: '600' } }, { head: { age: 'not-a-number' } },
+    { get: { status: 403 } }, { get: { sha: 'b'.repeat(64) } },
+    { get: { contentType: 'text/html' } }, { get: { contentLength: '999' } },
+    { get: { contentLength: '4' } },
+    { head: { contentLength: null }, get: { bytes: Buffer.alloc(65), contentLength: null, lastModified: null } },
+    { get: { contentEncoding: 'gzip' } }
   ];
-  for (const upstream of badResponses) {
+  for (const invalid of badResponses) {
     const tempDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-source-transfer-reject-'));
     const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => now,
-      tempDirectory, maxBytes: 8, verifyOIDC: async () => true, fetchImpl: async () => upstream
+      tempDirectory, maxBytes: 64, verifyOIDC: async () => true,
+      fetchImpl: async (_url, { method }) => {
+        const options = method === 'HEAD' ? invalid.head : invalid.get;
+        if (options?.contentEncoding) {
+          return new Response(method === 'HEAD' ? null : bytes, { status: options.status ?? 200,
+            headers: { 'x-amz-meta-sha256': options.sha ?? sha,
+              'content-type': options.contentType ?? 'application/zip',
+              ...(method === 'HEAD' ? { date: new Date(now).toUTCString(), age: '0' }
+                : { 'content-encoding': options.contentEncoding, date: new Date(now).toUTCString(), age: '0' }) } });
+        }
+        const body = options?.bytes ?? bytes;
+        const merged = { ...options, sha: options?.sha ?? sha,
+          contentLength: Object.hasOwn(options ?? {}, 'contentLength')
+            ? options.contentLength : String(method === 'HEAD' ? bytes.length : body.length) };
+        return responseFor(method === 'HEAD' ? null : body, merged);
+      }
     });
     const origin = await withServer(t, transfer);
     const response = await fetch(origin + archiveURL(sha), { headers: auth });
@@ -202,7 +288,10 @@ test('only GET is allowed and verified transfer is globally single-flight', asyn
   t.after(() => fs.rm(tempDirectory, { recursive: true, force: true }));
   const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => fixedNow,
     tempDirectory, verifyOIDC: async () => true,
-    fetchImpl: async () => { started(); await new Promise(resolve => { release = resolve; }); return responseFor(bytes, { sha }); }
+    fetchImpl: async (_url, { method }) => {
+      if (method === 'HEAD') return responseFor(null, { sha, contentLength: String(bytes.length) });
+      started(); await new Promise(resolve => { release = resolve; }); return responseFor(bytes, { sha });
+    }
   });
   const origin = await withServer(t, transfer);
   assert.equal((await fetch(origin + archiveURL(sha), { method: 'POST', headers: auth })).status, 405);
@@ -243,7 +332,8 @@ test('downstream backpressure is covered by the same deadline and releases the t
   t.after(() => fs.rm(tempDirectory, { recursive: true, force: true }));
   const transfer = new TimetableSourceArchiveTransfer({ observation: observation(sha), now: () => fixedNow,
     tempDirectory, timeoutMs: 20, verifyOIDC: async () => true,
-    fetchImpl: async () => responseFor(bytes, { sha })
+    fetchImpl: async (_url, { method }) => responseFor(method === 'HEAD' ? null : bytes,
+      { sha, contentLength: String(bytes.length) })
   });
   const response = new Writable({ write() {} });
   response.writeHead = (status, headers) => {

@@ -25,6 +25,13 @@ const OIDC_REF = 'refs/heads/main';
 const OIDC_EVENTS = new Set(['schedule', 'workflow_dispatch']);
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SOURCE_URL = new URL(TIMETABLE_PUBLICATION_URL);
+const TRANSFER_FAILURE_REASONS = new Set([
+  'head-identity', 'head-content-type', 'head-source-clock', 'head-size',
+  'get-identity', 'get-source-clock', 'get-size', 'head-get-length-mismatch',
+  'transfer-aborted', 'temporary-write', 'get-length-mismatch', 'get-body-digest',
+  'source-clock-expired', 'transfer-timeout', 'upstream-request'
+]);
+const transferFailure = reason => Object.assign(new Error(reason), { transferReason: reason });
 
 export async function verifySourceArchiveOIDC(token, { now = Date.now, verify = jwtVerify } = {}) {
   if (typeof token !== 'string' || token.length < 100 || token.length > 8192) return false;
@@ -77,7 +84,8 @@ function freshPublicationObservation(observation, publicationSHA256, now) {
 export class TimetableSourceArchiveTransfer {
   constructor({ observation, fetchImpl = fetch, verifyOIDC = verifySourceArchiveOIDC, now = Date.now,
     tempDirectory = os.tmpdir(), timeoutMs = DEFAULT_TIMEOUT_MS,
-    maxBytes = MAX_SOURCE_ZIP_BYTES, cooldownMs = SOURCE_ARCHIVE_TRANSFER_COOLDOWN_MS } = {}) {
+    maxBytes = MAX_SOURCE_ZIP_BYTES, cooldownMs = SOURCE_ARCHIVE_TRANSFER_COOLDOWN_MS,
+    onFailure = reason => console.warn(JSON.stringify({ event: 'timetable-source-archive-transfer-failed', reason })) } = {}) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > DEFAULT_TIMEOUT_MS
         || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_SOURCE_ZIP_BYTES
         || !Number.isSafeInteger(cooldownMs) || cooldownMs < 1 || cooldownMs > SOURCE_ARCHIVE_TRANSFER_COOLDOWN_MS) {
@@ -91,6 +99,7 @@ export class TimetableSourceArchiveTransfer {
     this.timeoutMs = timeoutMs;
     this.maxBytes = maxBytes;
     this.cooldownMs = cooldownMs;
+    this.onFailure = onFailure;
     this.active = false;
     this.nextTransferAt = -Infinity;
   }
@@ -120,30 +129,69 @@ export class TimetableSourceArchiveTransfer {
     try {
       const url = new URL(SOURCE_URL);
       url.searchParams.set('tb085', randomUUID());
-      const upstream = await this.fetchImpl(url, {
-        method: 'GET',
+      const fetchOptions = {
         redirect: 'error',
         signal: controller.signal,
         headers: { Accept: 'application/octet-stream', 'Cache-Control': 'no-cache',
           'User-Agent': 'TubeBoard official timetable source transfer/1' }
-      });
-      upstreamBody = upstream.body;
-      if (upstream.status !== 200 || upstream.redirected || !upstream.body
-          || (upstream.url && upstream.url !== url.href)) throw new Error('upstream');
-      const upstreamSHA = upstream.headers.get('x-amz-meta-sha256');
-      const contentType = upstream.headers.get('content-type') || '';
-      if (upstreamSHA !== publicationSHA256
-          || !/^(?:application\/octet-stream|application\/zip)(?:\s*;|$)/i.test(contentType)
-          || ![null, 'identity'].includes(upstream.headers.get('content-encoding')?.toLowerCase() ?? null)) {
-        throw new Error('identity');
+      };
+      const firstHead = await this.fetchImpl(url, { ...fetchOptions, method: 'HEAD' });
+      if (firstHead.status !== 200 || firstHead.redirected || (firstHead.url && firstHead.url !== url.href)
+          || firstHead.headers.get('x-amz-meta-sha256') !== publicationSHA256) {
+        throw transferFailure('head-identity');
+      }
+      const firstContentType = firstHead.headers.get('content-type') || '';
+      if (!/^(?:application\/octet-stream|application\/zip)(?:\s*;|$)/i.test(firstContentType)) {
+        throw transferFailure('head-content-type');
+      }
+      const firstAge = firstHead.headers.get('age');
+      let warmHead = firstHead;
+      if (firstAge === null) {
+        try { if (firstHead.body) await firstHead.body.cancel(); } catch {}
+        warmHead = await this.fetchImpl(url, { ...fetchOptions, method: 'HEAD' });
+      }
+      if (warmHead.status !== 200 || warmHead.redirected || (warmHead.url && warmHead.url !== url.href)
+          || warmHead.headers.get('x-amz-meta-sha256') !== publicationSHA256) {
+        throw transferFailure('head-identity');
+      }
+      const warmContentType = warmHead.headers.get('content-type') || '';
+      if (!/^(?:application\/octet-stream|application\/zip)(?:\s*;|$)/i.test(warmContentType)) {
+        throw transferFailure('head-content-type');
       }
       const startedAt = this.now();
-      const sourceClock = timetableHTTPObservation({ date: upstream.headers.get('date'), age: upstream.headers.get('age') },
-        startedAt, { official: true });
-      if (!sourceClock) throw new Error('source clock');
+      const warmClockHeaders = { date: warmHead.headers.get('date'), age: warmHead.headers.get('age') };
+      const warmClock = timetableHTTPObservation(warmClockHeaders, startedAt, { official: true });
+      if (!warmClock) throw transferFailure('head-source-clock');
+      const headLength = warmHead.headers.get('content-length');
+      if (headLength !== null && (!/^\d+$/.test(headLength) || Number(headLength) < 1
+          || Number(headLength) > this.maxBytes)) throw transferFailure('head-size');
+
+      const upstream = await this.fetchImpl(url, { ...fetchOptions, method: 'GET' });
+      upstreamBody = upstream.body;
+      if (upstream.status !== 200 || upstream.redirected || !upstream.body
+          || (upstream.url && upstream.url !== url.href)) throw transferFailure('get-identity');
+      const upstreamSHA = upstream.headers.get('x-amz-meta-sha256');
+      const contentType = upstream.headers.get('content-type') || '';
+      if (upstreamSHA !== publicationSHA256 || contentType !== warmContentType
+          || !/^(?:application\/octet-stream|application\/zip)(?:\s*;|$)/i.test(contentType)
+          || ![null, 'identity'].includes(upstream.headers.get('content-encoding')?.toLowerCase() ?? null)) {
+        throw transferFailure('get-identity');
+      }
+      const getAge = upstream.headers.get('age');
+      const getClockHeaders = { date: upstream.headers.get('date'), age: getAge };
+      const getClock = getAge === null ? null
+        : timetableHTTPObservation(getClockHeaders, this.now(), { official: true });
+      const sourceClockHeaders = getAge === null ? warmClockHeaders : getClockHeaders;
+      const sourceClock = getAge === null ? warmClock : getClock;
+      const sourceClockMethod = getAge === null ? 'HEAD' : 'GET';
+      if (!sourceClock) throw transferFailure('get-source-clock');
       const lengthHeader = upstream.headers.get('content-length');
       if (lengthHeader !== null && (!/^\d+$/.test(lengthHeader) || Number(lengthHeader) < 1
-          || Number(lengthHeader) > this.maxBytes)) throw new Error('source size');
+          || Number(lengthHeader) > this.maxBytes)) throw transferFailure('get-size');
+      if (lengthHeader !== null && headLength !== null && lengthHeader !== headLength) {
+        throw transferFailure('head-get-length-mismatch');
+      }
+      const expectedLength = lengthHeader ?? headLength;
 
       temporaryDirectory = await fs.mkdtemp(path.join(this.tempDirectory, 'tubeboard-timetable-archive-'));
       temporaryFile = path.join(temporaryDirectory, 'source.zip');
@@ -152,26 +200,32 @@ export class TimetableSourceArchiveTransfer {
       const hasher = createHash('sha256');
       let total = 0;
       while (true) {
-        if (response.destroyed || controller.signal.aborted) throw new Error('cancelled');
+        if (response.destroyed || controller.signal.aborted) throw transferFailure('transfer-aborted');
         const { value, done } = await reader.read();
         if (done) break;
         const chunk = Buffer.from(value);
         total += chunk.length;
-        if (total > this.maxBytes || (lengthHeader !== null && total > Number(lengthHeader))) throw new Error('source size');
+        if (total > this.maxBytes || (expectedLength !== null && total > Number(expectedLength))) {
+          throw transferFailure('get-size');
+        }
         hasher.update(chunk);
         let offset = 0;
         while (offset < chunk.length) {
           const result = await handle.write(chunk, offset, chunk.length - offset);
-          if (result.bytesWritten < 1) throw new Error('temporary write');
+          if (result.bytesWritten < 1) throw transferFailure('temporary-write');
           offset += result.bytesWritten;
         }
       }
-      if (total < 1 || (lengthHeader !== null && total !== Number(lengthHeader))
-          || hasher.digest('hex') !== publicationSHA256) throw new Error('archive digest');
+      if (total < 1 || (expectedLength !== null && total !== Number(expectedLength))) {
+        throw transferFailure('get-length-mismatch');
+      }
+      if (hasher.digest('hex') !== publicationSHA256) throw transferFailure('get-body-digest');
       await handle.close();
       handle = null;
       const receivedAt = this.now();
-      if (!Number.isFinite(receivedAt) || receivedAt < startedAt || receivedAt >= sourceClock.expiresAt) throw new Error('source expired');
+      if (!Number.isFinite(receivedAt) || receivedAt < startedAt || receivedAt >= sourceClock.expiresAt) {
+        throw transferFailure('source-clock-expired');
+      }
       if (response.destroyed || response.writableEnded) return;
       response.writeHead(200, {
         'content-type': 'application/zip',
@@ -183,13 +237,17 @@ export class TimetableSourceArchiveTransfer {
         'x-tubeboard-source-use': 'verified-qualification-input-only',
         'x-tubeboard-publication-sha256': publicationSHA256,
         'x-tubeboard-source-url': TIMETABLE_PUBLICATION_URL,
-        'x-tubeboard-source-http-date': upstream.headers.get('date'),
-        'x-tubeboard-source-http-age': upstream.headers.get('age'),
-        ...(upstream.headers.get('last-modified')
-          ? { 'x-tubeboard-source-last-modified': upstream.headers.get('last-modified') } : {})
+        'x-tubeboard-source-http-date': sourceClockHeaders.date,
+        'x-tubeboard-source-http-age': sourceClockHeaders.age,
+        'x-tubeboard-source-clock-method': sourceClockMethod,
+        ...((upstream.headers.get('last-modified') ?? warmHead.headers.get('last-modified'))
+          ? { 'x-tubeboard-source-last-modified': upstream.headers.get('last-modified') ?? warmHead.headers.get('last-modified') } : {})
       });
       await pipeline(createReadStream(temporaryFile), response, { signal: controller.signal });
-    } catch {
+    } catch (error) {
+      const reason = TRANSFER_FAILURE_REASONS.has(error?.transferReason) ? error.transferReason
+        : controller.signal.aborted ? 'transfer-timeout' : 'upstream-request';
+      try { this.onFailure(reason); } catch {}
       if (!response.headersSent) errorResponse(response, 503, 'Official timetable archive unavailable');
       else if (!response.writableEnded && !response.destroyed) response.destroy();
     } finally {
