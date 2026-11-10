@@ -664,7 +664,14 @@ repository ID `1267669215`, `refs/heads/main`, the exact
 the requested SHA to equal the service's fresh official publication
 observation, fetched from the fixed TfL URL with redirects disabled. It checks
 the publisher SHA metadata, HTTP Date/Age, ZIP content type, byte bounds and
-the full downloaded SHA-256 before returning a response. Its maximum is
+the full downloaded SHA-256 before returning a response. It first sends HEAD
+to a unique cache-busted TfL URL and, if that cold-cache response omits Age,
+repeats HEAD once with the same URL before making exactly one GET to that same
+URL. Both HEAD and GET must identify the requested publication SHA. If GET
+omits Age, the still-fresh warmed HEAD clock is used; the response records
+`X-TubeBoard-Source-Clock-Method: HEAD` or `GET` to identify the clock source.
+The route logs only fixed failure-reason codes, never upstream error text or
+credentials. Its maximum is
 160 MiB, timeout is 30 seconds, and one process permits only one transfer per
 ten minutes. The 30-second deadline covers both the upstream read and the
 downstream response; a stalled transfer is aborted and its temporary file is
