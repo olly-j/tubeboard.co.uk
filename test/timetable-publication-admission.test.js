@@ -9,7 +9,7 @@ import { SOURCE_ARCHIVE_DIRECTORY, loadSourceBodyArchiveIndex } from '../server/
 import { evaluateNewEditionAdmission, hasPreservedPublicationCoverage, publicationResourceSHA256 } from '../server/timetable-publication-admission.js';
 
 const previousSHA = '788955e868b7ae85219db15b4e05c2f187bdf3be1767f16b1c369b60dea08ad7';
-const previousProofSHA = 'c51723fae3c55df89b0fa875c3a8630384c76ce83748a886f9cb2c7e806b4930';
+const previousProofSHA = '0c5fba0afe99c032a4477fc9126158f26aeafc3ad9fdd173c3d6c489f2fb191c';
 const archivePath = path.join(SOURCE_ARCHIVE_DIRECTORY, previousSHA, previousProofSHA);
 const now = Date.parse('2026-11-10T20:00:00Z');
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -66,7 +66,7 @@ test('complete new edition package is eligible for admission but never activates
     previousResourceSHA256: publicationResourceSHA256(fixture.previousAsset),
     proofRevision: 1, proofBodySHA256: fixture.candidateAsset.identity.proofBodySHA256,
     resourceSHA256: publicationResourceSHA256(fixture.candidateAsset),
-    comparisonSourceCount: 15, activatesPublication: false
+    comparisonSourceCount: 31, activatesPublication: false
   });
 });
 

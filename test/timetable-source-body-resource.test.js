@@ -11,10 +11,10 @@ import {
   handleSourceBodyResource, loadSourceBodyArchiveIndex, SOURCE_ARCHIVE_DIRECTORY, SOURCE_BODY_PREFIX,
   validateSourceManifest
 } from '../server/timetable-source-body-resource.js';
-import { PUBLICATION_ASSET_DIRECTORY } from '../server/timetable-publication-resource.js';
+import { canonicalResource, PUBLICATION_ASSET_DIRECTORY } from '../server/timetable-publication-resource.js';
 
 const publicationSHA256 = '788955e868b7ae85219db15b4e05c2f187bdf3be1767f16b1c369b60dea08ad7';
-const proofBodySHA256 = 'c51723fae3c55df89b0fa875c3a8630384c76ce83748a886f9cb2c7e806b4930';
+const proofBodySHA256 = '0c5fba0afe99c032a4477fc9126158f26aeafc3ad9fdd173c3d6c489f2fb191c';
 const eppingSHA256 = '8f2b4892ad9eede0e097a2dbb5eefea961fc41777e154cd420f718750388c86a';
 const inboundSHA256 = 'a32504f8e875465a798d449c7442b71a6a5f7e374192b3ebec0298df23ba9b7f';
 const outboundSHA256 = 'fc65b4850ebf1c5a0e90a52a1f4bcba6230242a95f7201403ed38264c1337b68';
@@ -100,11 +100,11 @@ test('unknown, stale, unqualified, wrong-direction, wrong-digest and query paths
   assert.equal(post.headers.get('allow'), 'GET, HEAD');
 });
 
-test('producer manifest is consumed byte-for-byte and ties all qualified proof scopes to body hashes', async () => {
+test('reviewed manifest retains exact upstream headers and binds all qualified scopes to body hashes', async () => {
   const bytes = await fs.readFile(path.join(archivePath, 'manifest.json'));
   const manifest = validateSourceManifest(bytes, publicationSHA256, proofBodySHA256);
-  assert.equal(manifest.sources.length, 15); // Fourteen scopes, with Goodge Street split by direction.
-  assert.equal(createHash('sha256').update(bytes).digest('hex'), 'c67adb7466260e041a151661893a58d3e37f8915a76735569c73ed6273c82d11');
+  assert.equal(manifest.sources.length, 31); // Thirty station/line pairs, with Goodge Street split by direction.
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), '8db51b8f067cb78ce6a08d1c7005549f10ab9bdcc15092801a548b12918253a3');
   const withExtra = JSON.parse(bytes);
   withExtra.extra = true;
   assert.throws(() => validateSourceManifest(Buffer.from(JSON.stringify(withExtra, null, 2) + '\n'),
@@ -158,7 +158,7 @@ test('one immutable startup index serves concurrent, HEAD, 304 and unknown reque
     await fs.copyFile(path.join(archivePath, 'bodies', name), path.join(archiveCopy, 'bodies', name));
   }
   const index = await loadSourceBodyArchiveIndex({ publicationDirectory, archiveDirectory });
-  assert.equal(index.size, 15);
+  assert.equal(index.size, 31);
   await fs.rm(temp, { recursive: true }); // All later requests must use the validated in-memory package.
   const origin = await scope(t, { index });
   const target = route('central', '940GZZLUEPG', 'default', eppingSHA256);
@@ -178,6 +178,45 @@ test('one immutable startup index serves concurrent, HEAD, 304 and unknown reque
   assert.equal(unchanged.status, 304);
   const unknown = await fetch(origin + route('central', '940GZZLUEPG', 'default', 'a'.repeat(64)));
   assert.equal(unknown.status, 404);
+});
+
+test('cached proof URLs require unchanged station dates, capture metadata and global rules', async t => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'tbsource-previous-'));
+  t.after(() => fs.rm(temp, { recursive: true, force: true }));
+  const archiveCopy = path.join(temp, publicationSHA256, proofBodySHA256);
+  await fs.cp(archivePath, archiveCopy, { recursive: true });
+  const previousPath = path.join(archiveCopy, 'previous-resource.json');
+  const manifestPath = path.join(archiveCopy, 'previous-manifest.json');
+  const wrapper = JSON.parse(await fs.readFile(previousPath));
+  const previous = JSON.parse(Buffer.from(wrapper.proofBodyBase64, 'base64'));
+  const manifest = JSON.parse(await fs.readFile(manifestPath));
+  previous.entries.find(row => row.stationID === '940GZZLUEPG').operatingEndDate = '2026-12-22';
+  manifest.sources.find(row => row.bodySHA256 === inboundSHA256).age = '1';
+  for (const changeRules of [false, true]) {
+    if (changeRules) previous.holidayCoverageEnd = '2026-11-10';
+    const bytes = Buffer.from(JSON.stringify(previous));
+    wrapper.proofBodyBase64 = bytes.toString('base64');
+    wrapper.proofBodySHA256 = createHash('sha256').update(bytes).digest('hex');
+    manifest.proofBodySHA256 = wrapper.proofBodySHA256;
+    await fs.writeFile(previousPath, canonicalResource(wrapper));
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+    const origin = await scope(t, { archiveDirectory: temp });
+    for (const [line, station, direction, body, retained] of [
+      ['central', '940GZZLUEPG', 'default', eppingSHA256, false],
+      ['northern', '940GZZLUGDG', 'inbound', inboundSHA256, false],
+      ['northern', '940GZZLUGDG', 'outbound', outboundSHA256, true]
+    ]) {
+      const url = origin + route(line, station, direction, body);
+      assert.equal((await fetch(url, { method: 'HEAD' })).status, 200);
+      const cached = await fetch(url.replace(proofBodySHA256, wrapper.proofBodySHA256), { method: 'HEAD' });
+      assert.equal(cached.status, retained && !changeRules ? 200 : 404);
+    }
+  }
+  await fs.writeFile(previousPath, 'bad predecessor');
+  const origin = await scope(t, { archiveDirectory: temp });
+  const url = origin + route('central', '940GZZLUEPG', 'default', eppingSHA256);
+  assert.equal((await fetch(url, { method: 'HEAD' })).status, 200);
+  assert.equal((await fetch(url.replace(proofBodySHA256, wrapper.proofBodySHA256), { method: 'HEAD' })).status, 404);
 });
 
 test('the actual service route serves the reviewed body without enabling a TfL proxy', { timeout: 15000 }, async t => {
@@ -218,6 +257,28 @@ test('the actual service route serves the reviewed body without enabling a TfL p
   const bytes = Buffer.from(await response.arrayBuffer());
   assert.equal(bytes.length, 231686);
   assert.equal(createHash('sha256').update(bytes).digest('hex'), eppingSHA256);
+  const publication = await fetch(origin + '/api/timetable-publications/v1/' + publicationSHA256);
+  assert.equal(publication.status, 200);
+  const wrapper = await publication.json();
+  assert.equal(wrapper.proofRevision, 2);
+  assert.equal(wrapper.proofBodySHA256, proofBodySHA256);
+  const current = JSON.parse(await fs.readFile(path.join(archivePath, 'manifest.json')));
+  const old = JSON.parse(await fs.readFile(path.join(archivePath, 'previous-manifest.json')));
+  const oldHashes = new Set(old.sources.map(row => row.bodySHA256));
+  for (const row of current.sources) {
+    const currentURL = origin + route(row.lineID, row.stationID, row.direction ?? 'default', row.bodySHA256);
+    for (const [proofHash, expected] of [[proofBodySHA256, 200], [old.proofBodySHA256, oldHashes.has(row.bodySHA256) ? 200 : 404]]) {
+      const res = await fetch(currentURL.replace(proofBodySHA256, proofHash));
+      assert.equal(res.status, expected, row.stationID);
+      if (expected === 200) {
+        assert.equal(res.headers.get('x-tubeboard-proof-body-sha256'), proofHash);
+        assert.equal(res.headers.get('x-tubeboard-source-http-date'), row.httpDate);
+        assert.equal(res.headers.get('x-tubeboard-source-http-cache-control'), row.cacheControl);
+        const data = Buffer.from(await res.arrayBuffer());
+        assert.equal(createHash('sha256').update(data).digest('hex'), row.bodySHA256);
+      }
+    }
+  }
   assert.deepEqual(await fs.readdir(directory), []);
   assert.equal((await fetch(origin + '/server/timetable-source-body-resource.js')).status, 404);
 });
