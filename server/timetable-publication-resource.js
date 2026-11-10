@@ -94,7 +94,7 @@ function jsonError(response, status, message, headOnly) {
   response.end(headOnly ? undefined : body);
 }
 
-export async function handlePublicationResource(request, response, url, { directory }) {
+export async function handlePublicationResource(request, response, url, { directory, readBytes }) {
   if (!url.pathname.startsWith(PUBLICATION_RESOURCE_PREFIX)) return false;
   const headOnly = request.method === 'HEAD';
   const sha = url.pathname.slice(PUBLICATION_RESOURCE_PREFIX.length);
@@ -110,7 +110,7 @@ export async function handlePublicationResource(request, response, url, { direct
   let bytes;
   let proof;
   try {
-    bytes = await readReviewedAsset(directory, sha);
+    bytes = readBytes ? await readBytes(sha) : await readReviewedAsset(directory, sha);
     proof = validatePublicationResource(bytes, sha);
   } catch (error) {
     // Invalid reviewed assets are deployment/readiness failures, not unknown
