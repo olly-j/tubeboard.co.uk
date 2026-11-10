@@ -652,3 +652,27 @@ Age. Reads never initiate a poll. The route disallows query parameters and
 returns 503 when cold, expired, or after a failed observation. All responses
 use `Cache-Control: no-store`. The observation identifies an edition only.
 Qualification and publication of its timetable proof are separate operations.
+
+The source-only `GET /api/timetable-source-archives/v1/{publicationSHA256}`
+route is a bounded fallback for the protected timetable publication workflow
+when its direct TfL ZIP request is denied. It accepts only a short-lived GitHub
+Actions OIDC token with audience `tubeboard-timetable-source-archive`, from
+repository ID `1267669215`, `refs/heads/main`, the exact
+`.github/workflows/timetable-publication.yml` workflow, and the `schedule` or
+`workflow_dispatch` event. The workflow requests an OIDC token with only
+`id-token: write`; there is no shared bearer secret. The route still requires
+the requested SHA to equal the service's fresh official publication
+observation, fetched from the fixed TfL URL with redirects disabled. It checks
+the publisher SHA metadata, HTTP Date/Age, ZIP content type, byte bounds and
+the full downloaded SHA-256 before returning a response. Its maximum is
+160 MiB, timeout is 30 seconds, and one process permits only one transfer per
+ten minutes. The response is `no-store` and includes
+`X-TubeBoard-Source-Use: verified-qualification-input-only` plus the exact
+publication and upstream clock metadata. Bytes are spooled to a unique
+permission-restricted temporary directory and removed after the response;
+they are never written to `/data`, published as timetable rows, or treated as
+proof. Authentication or path failures return 404, a stale/unavailable
+edition 409, a rate limit 429, and upstream/validation failures 503. This
+route does not qualify a timetable or authorize production publication; a
+source merge is not deployment, and deploying it requires the separate
+explicit production authorization in the deployment section.
