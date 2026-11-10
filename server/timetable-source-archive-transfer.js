@@ -26,8 +26,9 @@ const OIDC_EVENTS = new Set(['schedule', 'workflow_dispatch']);
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SOURCE_URL = new URL(TIMETABLE_PUBLICATION_URL);
 const TRANSFER_FAILURE_REASONS = new Set([
-  'head-identity', 'head-content-type', 'head-source-clock', 'head-size',
-  'get-identity', 'get-source-clock', 'get-size', 'head-get-length-mismatch',
+  'head-identity', 'head-content-type', 'head-content-encoding', 'head-source-clock', 'head-size',
+  'get-response-identity', 'get-url-identity', 'get-publisher-sha', 'get-content-type',
+  'get-content-encoding', 'get-source-clock', 'get-size', 'head-get-length-mismatch',
   'transfer-aborted', 'temporary-write', 'get-length-mismatch', 'get-body-digest',
   'source-clock-expired', 'transfer-timeout', 'upstream-request'
 ]);
@@ -144,6 +145,8 @@ export class TimetableSourceArchiveTransfer {
       if (!/^(?:application\/octet-stream|application\/zip)(?:\s*;|$)/i.test(firstContentType)) {
         throw transferFailure('head-content-type');
       }
+      const firstEncoding = (firstHead.headers.get('content-encoding') || 'identity').toLowerCase();
+      if (!['identity', 'gzip'].includes(firstEncoding)) throw transferFailure('head-content-encoding');
       const firstAge = firstHead.headers.get('age');
       let warmHead = firstHead;
       if (firstAge === null) {
@@ -158,6 +161,10 @@ export class TimetableSourceArchiveTransfer {
       if (!/^(?:application\/octet-stream|application\/zip)(?:\s*;|$)/i.test(warmContentType)) {
         throw transferFailure('head-content-type');
       }
+      const warmEncoding = (warmHead.headers.get('content-encoding') || 'identity').toLowerCase();
+      if (!['identity', 'gzip'].includes(warmEncoding) || warmEncoding !== firstEncoding) {
+        throw transferFailure('head-content-encoding');
+      }
       const startedAt = this.now();
       const warmClockHeaders = { date: warmHead.headers.get('date'), age: warmHead.headers.get('age') };
       const warmClock = timetableHTTPObservation(warmClockHeaders, startedAt, { official: true });
@@ -168,14 +175,20 @@ export class TimetableSourceArchiveTransfer {
 
       const upstream = await this.fetchImpl(url, { ...fetchOptions, method: 'GET' });
       upstreamBody = upstream.body;
-      if (upstream.status !== 200 || upstream.redirected || !upstream.body
-          || (upstream.url && upstream.url !== url.href)) throw transferFailure('get-identity');
+      if (upstream.status !== 200 || upstream.redirected || !upstream.body) {
+        throw transferFailure('get-response-identity');
+      }
+      if (upstream.url && upstream.url !== url.href) throw transferFailure('get-url-identity');
       const upstreamSHA = upstream.headers.get('x-amz-meta-sha256');
       const contentType = upstream.headers.get('content-type') || '';
-      if (upstreamSHA !== publicationSHA256 || contentType !== warmContentType
-          || !/^(?:application\/octet-stream|application\/zip)(?:\s*;|$)/i.test(contentType)
-          || ![null, 'identity'].includes(upstream.headers.get('content-encoding')?.toLowerCase() ?? null)) {
-        throw transferFailure('get-identity');
+      if (upstreamSHA !== publicationSHA256) throw transferFailure('get-publisher-sha');
+      if (contentType !== warmContentType
+          || !/^(?:application\/octet-stream|application\/zip)(?:\s*;|$)/i.test(contentType)) {
+        throw transferFailure('get-content-type');
+      }
+      const getEncoding = (upstream.headers.get('content-encoding') || 'identity').toLowerCase();
+      if (!['identity', 'gzip'].includes(getEncoding) || getEncoding !== warmEncoding) {
+        throw transferFailure('get-content-encoding');
       }
       const getAge = upstream.headers.get('age');
       const getClockHeaders = { date: upstream.headers.get('date'), age: getAge };
@@ -191,7 +204,10 @@ export class TimetableSourceArchiveTransfer {
       if (lengthHeader !== null && headLength !== null && lengthHeader !== headLength) {
         throw transferFailure('head-get-length-mismatch');
       }
-      const expectedLength = lengthHeader ?? headLength;
+      // Undici automatically decodes gzip while preserving these headers.
+      // Compare wire lengths across HEAD/GET, but bound/hash the decoded ZIP
+      // body and do not compare its length to a compressed Content-Length.
+      const expectedLength = getEncoding === 'gzip' ? null : lengthHeader ?? headLength;
 
       temporaryDirectory = await fs.mkdtemp(path.join(this.tempDirectory, 'tubeboard-timetable-archive-'));
       temporaryFile = path.join(temporaryDirectory, 'source.zip');

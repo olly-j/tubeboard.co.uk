@@ -670,8 +670,12 @@ repeats HEAD once with the same URL before making exactly one GET to that same
 URL. Both HEAD and GET must identify the requested publication SHA. If GET
 omits Age, the still-fresh warmed HEAD clock is used; the response records
 `X-TubeBoard-Source-Clock-Method: HEAD` or `GET` to identify the clock source.
-The route logs only fixed failure-reason codes, never upstream error text or
-credentials. Its maximum is
+TfL's ZIP endpoint can return HTTP `Content-Encoding: gzip`; Node Fetch decodes
+that wrapper before the route hashes and returns the body. The route accepts
+only matching `identity` or `gzip` metadata, compares optional HEAD/GET lengths
+as wire metadata, then applies byte bounds and the publisher SHA to the decoded
+ZIP bytes. Unsupported or inconsistent encodings fail closed. The route logs
+only fixed failure-reason codes, never upstream error text or credentials. Its maximum is
 160 MiB, timeout is 30 seconds, and one process permits only one transfer per
 ten minutes. The 30-second deadline covers both the upstream read and the
 downstream response; a stalled transfer is aborted and its temporary file is
