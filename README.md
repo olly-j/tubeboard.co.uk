@@ -42,8 +42,10 @@ HEAD or a proof-resource cache hit alone never extends a departure's expiry.
 Legacy clients keep their existing contract. The HTTP route and local authority
 reader share the module-relative `server/timetable-publications/v1/` directory,
 which the existing Docker `COPY server` includes independently of the working
-directory. No publication asset is installed or running maintainer established.
-The adapter passed seven focused resource tests and all 265 host tests. The
+directory. The source tree includes the reviewed 9 November publication proof
+and its proof-bound archived TfL bodies for comparison readback. This does not
+establish a production deployment or a running timetable maintainer. The
+adapter passed seven focused resource tests and all 265 host tests. The
 preceding source22 checkpoint78061231 separately passed all 264 Service Quality
 CI tests under Node v22.23.3 with Python3; original-clock Swift-to-Node parity
 and eight local endpoint checks also passed. The exact Node22.21.1 slim image
