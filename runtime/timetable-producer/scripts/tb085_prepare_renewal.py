@@ -767,6 +767,39 @@ def acquire_cached_archive(work, publication, deadline, archive, receipt_path, m
     return retained
 
 
+def retain_verified_cached_archive(work, captures, download):
+    """Move our verified private copy; never link or move the caller's cache."""
+    work, captures = Path(work), Path(captures)
+    if (download.get("body") != "cached-official.zip"
+            or not isinstance(download.get("cachedArchiveEvidence"), dict)
+            or captures != work / "artifact" / "captures"):
+        raise ValueError("Cached archive retention requires the private verified copy")
+    source, target = work / "cached-official.zip", captures / "official-timetable.zip"
+    for directory in (work, work / "artifact", captures):
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError("Cached archive retention directory is not private")
+    if work.stat().st_mode & 0o077:
+        raise ValueError("Cached archive retention requires private work custody")
+    if target.exists() or target.is_symlink():
+        raise ValueError("Cached archive retention destination already exists")
+    with bounded_source_file(source, 256 * MIB) as (opened, size):
+        info = os.fstat(opened.fileno())
+        current = source.lstat()
+        if (size != download.get("bytes") or info.st_nlink != 1
+                or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)
+                or info.st_dev != captures.stat().st_dev):
+            raise ValueError("Cached archive retention lost exclusive same-filesystem custody")
+        # Both names are inside the one exclusive TemporaryDirectory. Rename
+        # keeps the same verified inode/bytes and allocates no second ZIP copy.
+        # EXDEV and other errors propagate; constrained mode never falls back.
+        source.rename(target)
+        retained = target.lstat()
+        if (retained.st_dev, retained.st_ino, retained.st_size) != (info.st_dev, info.st_ino, size):
+            raise ValueError("Cached archive retention identity changed")
+    return target
+
+
 def acquire_current_zip(work, publication, deadline):
     download = fetch(work, "official", unique_url(qualifier.SOURCE_URL), 256 * MIB, deadline,
                      allowed=(200, 403))
@@ -1006,7 +1039,10 @@ def prepare(publication, output, *, same_edition=False, additive_only=False, exp
                     "finalObservation": download["cachedArchiveEvidence"]["after"],
                     "cachedArchiveEvidence": download["cachedArchiveEvidence"]})
         archive = work / download["body"]
-        shutil.copyfile(archive, captures / "official-timetable.zip")
+        if source_archive is None or requested_scopes is None:
+            shutil.copyfile(archive, captures / "official-timetable.zip")
+        else:
+            archive = retain_verified_cached_archive(work, captures, download)
         download_evidence = dict(download, body="official-timetable.zip")
         write_json(captures / "publication-download.json", download_evidence)
         holiday = fetch(captures, "bank-holidays", HOLIDAYS, MIB, deadline)
