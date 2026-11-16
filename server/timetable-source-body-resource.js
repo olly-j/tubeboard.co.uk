@@ -131,7 +131,7 @@ export function validateSourceManifest(bytes, publicationSHA256, proofBodySHA256
   return value;
 }
 
-async function readBoundedFile(directory, relativePath, maximumBytes) {
+export async function readBoundedFile(directory, relativePath, maximumBytes) {
   const handle = await fs.open(path.join(directory, relativePath), constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = await handle.stat();

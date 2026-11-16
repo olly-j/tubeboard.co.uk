@@ -10,6 +10,7 @@ import { WIDGET_PUSH_PATH, WidgetPushStore, WidgetPushAdmission, loadWidgetPushC
 import { PrimaryArrivalsSource, loadPrimaryArrivalsConfig, handlePrimaryArrivalsSource } from './primary-arrivals-source.js';
 import { startOperatorObservation, selectedPresence } from './operator-observation.js';
 import { handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from './timetable-publication-resource.js';
+import { handleWindowResource, loadBundledWindows, WINDOW_DIRECTORY, WINDOW_PREFIX } from './timetable-window-resource.js';
 import { handleSourceBodyResource, loadSourceBodyArchiveIndex, SOURCE_ARCHIVE_DIRECTORY } from './timetable-source-body-resource.js';
 import { TimetablePublicationAdmissionStore } from './timetable-publication-admission-store.js';
 import {
@@ -51,6 +52,10 @@ const publicationAssetDirectory = path.resolve(projectRoot,
   process.env.TUBEBOARD_TIMETABLE_PUBLICATION_ASSET_DIRECTORY || PUBLICATION_ASSET_DIRECTORY);
 const sourceArchiveDirectory = path.resolve(projectRoot,
   process.env.TUBEBOARD_TIMETABLE_SOURCE_ARCHIVE_DIRECTORY || SOURCE_ARCHIVE_DIRECTORY);
+const windowPackages = loadBundledWindows(WINDOW_DIRECTORY, publicationAssetDirectory).catch(() => {
+  console.warn(JSON.stringify({ event: 'timetable-window-package-invalid' }));
+  return null;
+});
 const timetableEdition = new TimetableEditionObservation();
 const timetableSourceArchiveTransfer = new TimetableSourceArchiveTransfer({ observation: timetableEdition });
 const primaryArrivalsSource = new PrimaryArrivalsSource(loadPrimaryArrivalsConfig());
@@ -158,6 +163,7 @@ const server = http.createServer(async (request, response) => {
         widgetPushWorkerEnabled: widgetPushConfig.enabled && widgetPushConfig.encryptionKey?.length === 32,
         timetablePublicationAdmissionConfigured: publicationAdmissionConfigured,
         timetablePublicationAdmissionReady: Boolean(admissionStore),
+        timetableWindowResourcesReady: Boolean(await windowPackages) && (admissionStore?.windowResourcesReady ?? !publicationAdmissionConfigured),
         sourceRevision: SOURCE_REVISION
       });
       return;
@@ -181,7 +187,7 @@ const server = http.createServer(async (request, response) => {
 
     const admissionReadPath = url.pathname.startsWith('/api/timetable-publication-candidates/v1/')
       || url.pathname.startsWith('/api/timetable-publications/v1/')
-      || url.pathname.startsWith('/api/timetable-source-bodies/v1/');
+      || url.pathname.startsWith('/api/timetable-source-bodies/v1/') || url.pathname.startsWith(WINDOW_PREFIX);
     const publicationAdmissionStore = admissionReadPath ? await timetablePublicationAdmissionStore : null;
     if (publicationAdmissionStore && await publicationAdmissionStore.handle(request, response, url)) return;
 
@@ -200,6 +206,8 @@ const server = http.createServer(async (request, response) => {
       directory: publicationAssetDirectory,
       ...(publicationAdmissionStore ? { readBytes: sha => publicationAdmissionStore.readPublicPublicationBytes(sha) } : {})
     })) return;
+
+    if (await handleWindowResource(request, response, url, windowPackages, key => publicationAdmissionStore?.windowPackage(key))) return;
 
     // Exact archived Unified JSON bodies are available only when their scope
     // is bound by the installed proof and its matching local manifest.
