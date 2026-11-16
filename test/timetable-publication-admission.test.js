@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { canonicalResource, PUBLICATION_ASSET_DIRECTORY, readPublicationAsset } from '../server/timetable-publication-resource.js';
 import { SOURCE_ARCHIVE_DIRECTORY, loadSourceBodyArchiveIndex } from '../server/timetable-source-body-resource.js';
-import { evaluateNewEditionAdmission, hasPreservedPublicationCoverage, publicationResourceSHA256 } from '../server/timetable-publication-admission.js';
+import { evaluateNewEditionAdmission, evaluateAdditiveRevisionAdmission, hasPreservedPublicationCoverage, publicationResourceSHA256 } from '../server/timetable-publication-admission.js';
 
 const previousSHA = '788955e868b7ae85219db15b4e05c2f187bdf3be1767f16b1c369b60dea08ad7';
 const previousProofSHA = '0c5fba0afe99c032a4477fc9126158f26aeafc3ad9fdd173c3d6c489f2fb191c';
@@ -14,12 +14,12 @@ const archivePath = path.join(SOURCE_ARCHIVE_DIRECTORY, previousSHA, previousPro
 const now = Date.parse('2026-11-10T20:00:00Z');
 const digest = value => createHash('sha256').update(value).digest('hex');
 
-async function candidatePackage(t, { mutateProof = () => {}, omitBody = false } = {}) {
+async function candidatePackage(t, { mutateProof = () => {}, omitBody = false, sameEdition = false } = {}) {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-publication-admission-'));
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
   const publicationDirectory = path.join(temp, 'proofs');
   const archiveDirectory = path.join(temp, 'archives');
-  const candidateSHA = 'b'.repeat(64);
+  const candidateSHA = sameEdition ? previousSHA : 'b'.repeat(64);
   const candidateProofSHA = 'a'.repeat(64); // Replaced after exact proof serialization below.
   const previousAsset = await readPublicationAsset(previousSHA);
   const proof = structuredClone(previousAsset.proof);
@@ -28,7 +28,8 @@ async function candidatePackage(t, { mutateProof = () => {}, omitBody = false } 
   mutateProof(proof);
   const proofBytes = Buffer.from(JSON.stringify(proof, null, 2) + '\n');
   const actualProofSHA = digest(proofBytes);
-  const wrapper = canonicalResource({ schemaVersion: 1, publicationSHA256: candidateSHA, proofRevision: 1,
+  const wrapper = canonicalResource({ schemaVersion: 1, publicationSHA256: candidateSHA,
+    proofRevision: sameEdition ? previousAsset.identity.proofRevision + 1 : 1,
     proofBodySHA256: actualProofSHA, proofBodyBase64: proofBytes.toString('base64') });
   const candidateDirectory = path.join(publicationDirectory, `${candidateSHA}.json`);
   await fs.mkdir(publicationDirectory, { recursive: true });
@@ -137,4 +138,73 @@ test('missing comparison body prevents admission even when the official edition 
     ifMatchPreviousResourceSHA256: publicationResourceSHA256(fixture.previousAsset), now });
   assert.equal(result.eligible, false);
   assert.equal(result.reason, 'comparison-archive-incomplete');
+});
+
+const additiveInput = fixture => ({ ...fixture, officialObservation: observationFor(fixture.candidateSHA),
+  admissionRevision: 4, ifMatchPreviousResourceSHA256: publicationResourceSHA256(fixture.previousAsset), now });
+
+test('same-edition additive revisions preserve exact entries and admit new scopes without activation', async t => {
+  const fixture = await candidatePackage(t, { sameEdition: true, mutateProof(proof) {
+    proof.entries.push({ ...structuredClone(proof.entries.find(e => e.status === 'gap')), stationID: '940GZZLUTST' });
+  } });
+  const result = evaluateAdditiveRevisionAdmission(additiveInput(fixture));
+  assert.equal(result.eligible, true);
+  assert.equal(result.admissionRevision, 5);
+  assert.equal(result.proofRevision, fixture.previousAsset.identity.proofRevision + 1);
+  assert.equal(result.activatesPublication, false);
+  assert.equal(evaluateNewEditionAdmission(additiveInput(fixture)).reason, 'same-edition-not-admissible');
+});
+
+test('additive recovery upgrades a gap only with complete comparison evidence', async t => {
+  const fixture = await candidatePackage(t, { sameEdition: true, mutateProof(proof) {
+    const index = proof.entries.findIndex(e => e.status === 'gap');
+    const old = proof.entries[index];
+    proof.entries[index] = { ...structuredClone(proof.entries.find(e => e.status === 'qualified')),
+      lineID: old.lineID, stationID: old.stationID };
+  } });
+  assert.equal(evaluateAdditiveRevisionAdmission(additiveInput(fixture)).reason, 'comparison-archive-incomplete');
+  // The pure evaluator consumes an already validated archive index. The store
+  // owns body validation; this index double supplies the newly qualified scope.
+  const comparisonIndex = { isUnavailable: () => false, get: () => Buffer.from('validated comparison body') };
+  assert.equal(evaluateAdditiveRevisionAdmission({ ...additiveInput(fixture), comparisonIndex }).eligible, true);
+});
+
+test('additive revisions reject old entry removal, overwrite and global calendar reinterpretation', async t => {
+  for (const [name, mutateProof, reason] of [
+    ['remove', p => { p.entries.pop(); }, 'previous-entry-removed'],
+    ['overwrite', p => { p.entries.find(e => e.status === 'qualified').profiles[0].count++; }, 'previous-entry-overwritten'],
+    ['direction', p => {
+      const e = p.entries.find(e => e.directionalDefinitions?.length > 1);
+      e.directionalDefinitions.pop(); e.directionalSourceEvidence.pop();
+    }, 'previous-entry-overwritten'],
+    ['rewrite-gap', p => { p.entries.find(e => e.status === 'gap').gapReason += ' changed'; }, 'previous-entry-overwritten'],
+    ['holiday-add', p => { p.bankHolidayDates.push('2026-11-10'); }, 'previous-qualification-semantics-changed'],
+    ['calendar', p => { p.holidayCoverageStart = '2026-11-07'; }, 'previous-qualification-semantics-changed']
+  ]) {
+    const fixture = await candidatePackage(t, { sameEdition: true, mutateProof });
+    assert.equal(evaluateAdditiveRevisionAdmission(additiveInput(fixture)).reason, reason, name);
+  }
+});
+
+test('additive admission keeps exact revision, source, precondition and archive fences', async t => {
+  const fixture = await candidatePackage(t, { sameEdition: true });
+  const base = additiveInput(fixture);
+  for (const revision of [fixture.previousAsset.identity.proofRevision, fixture.previousAsset.identity.proofRevision + 2]) {
+    assert.equal(evaluateAdditiveRevisionAdmission({ ...base, candidateAsset: { ...fixture.candidateAsset,
+      identity: { ...fixture.candidateAsset.identity, proofRevision: revision } } }).reason, 'additive-proof-revision-invalid');
+  }
+  for (const patch of [
+    { officialObservation: { ...base.officialObservation, expiresAt: new Date(now).toISOString() } },
+    { officialObservation: observationFor('c'.repeat(64)) }
+  ]) assert.equal(evaluateAdditiveRevisionAdmission({ ...base, ...patch }).reason, 'official-edition-observation-stale-or-mismatched');
+  assert.equal(evaluateAdditiveRevisionAdmission({ ...base, ifMatchPreviousResourceSHA256: 'c'.repeat(64) }).reason,
+    'previous-publication-precondition-failed');
+  assert.equal(evaluateAdditiveRevisionAdmission({ ...base, admissionRevision: Number.MAX_SAFE_INTEGER }).reason,
+    'admission-revision-invalid');
+  assert.equal(evaluateAdditiveRevisionAdmission({ ...base, candidateAsset: { ...fixture.candidateAsset,
+    proofBytes: Buffer.from('{}') } }).reason, 'proof-identity-invalid');
+  const different = await candidatePackage(t);
+  assert.equal(evaluateAdditiveRevisionAdmission(additiveInput(different)).reason, 'additive-edition-mismatch');
+  const incomplete = await candidatePackage(t, { sameEdition: true, omitBody: true });
+  assert.equal(evaluateAdditiveRevisionAdmission(additiveInput(incomplete)).reason, 'comparison-archive-incomplete');
 });

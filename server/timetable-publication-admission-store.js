@@ -13,7 +13,7 @@ import { validateSourceManifest, loadSourceBodyArchiveIndex, SOURCE_ARCHIVE_DIRE
   MAX_SOURCE_MANIFEST_BYTES, MAX_SOURCE_BODY_BYTES, MAX_SOURCE_ARCHIVE_BYTES,
   MAX_SOURCE_INDEX_ARCHIVES } from './timetable-source-body-resource.js';
 import { decodeWindowTransport, MAX_WINDOW_TRANSPORT_BYTES } from './timetable-window-resource.js';
-import { evaluateNewEditionAdmission, hasCompleteComparisonArchive,
+import { evaluateNewEditionAdmission, evaluateAdditiveRevisionAdmission, hasCompleteComparisonArchive,
   publicationResourceSHA256 } from './timetable-publication-admission.js';
 
 export const PUBLICATION_CANDIDATE_PREFIX = '/api/timetable-publication-candidates/v1/';
@@ -39,6 +39,9 @@ const jsonBytes = value => Buffer.from(JSON.stringify(value, null, 2) + '\n', 'u
 const exactKeys = (value, keys) => value !== null && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 const validSHA = value => typeof value === 'string' && SHA.test(value);
+const derivedPackageKey = identity => `${identity.publicationSHA256}-${identity.proofRevision}-${identity.proofBodySHA256}`;
+const receiptPackageKey = receipt => receipt.packageKey ?? receipt.publicationSHA256;
+const validPackageKey = value => validSHA(value) || typeof value === 'string' && /^[a-f0-9]{64}-[1-9][0-9]*-[a-f0-9]{64}$/.test(value);
 const receiptCoreKeys = ['schemaVersion', 'status', 'admissionRevision', 'publicationSHA256', 'proofRevision',
   'proofBodySHA256', 'resourceSHA256', 'sourceManifestSHA256', 'sourceCount', 'uniqueBodyCount',
   'totalBodyBytes', 'previousPublicationSHA256', 'previousResourceSHA256', 'observedAt'];
@@ -182,10 +185,14 @@ async function writeImmutable(root, target, bytes) {
 function receiptHash(core) { return digest(jsonBytes(core)); }
 function makeReceipt(core) { return { ...core, receiptSHA256: receiptHash(core) }; }
 function validReceipt(value, revision) {
-  const keys = value && Object.hasOwn(value, 'windowIndexSHA256') ? [...receiptCoreKeys, 'windowIndexSHA256'] : receiptCoreKeys;
-  if ((keys !== receiptCoreKeys && !validSHA(value.windowIndexSHA256)) || !exactKeys(value, [...keys, 'receiptSHA256']) || value.schemaVersion !== 1
+  const keys = [...receiptCoreKeys];
+  if (value && Object.hasOwn(value, 'windowIndexSHA256')) keys.push('windowIndexSHA256');
+  if (value && Object.hasOwn(value, 'packageKey')) keys.push('packageKey');
+  if ((Object.hasOwn(value ?? {}, 'windowIndexSHA256') && !validSHA(value.windowIndexSHA256))
+      || (Object.hasOwn(value ?? {}, 'packageKey') && value.packageKey !== derivedPackageKey(value)) || !exactKeys(value, [...keys, 'receiptSHA256']) || value.schemaVersion !== 1
       || value.status !== 'admitted' || value.admissionRevision !== revision
-      || !validSHA(value.publicationSHA256) || value.proofRevision !== 1
+      || !validSHA(value.publicationSHA256) || !Number.isSafeInteger(value.proofRevision) || value.proofRevision < 1
+      || (!value.packageKey && value.proofRevision !== 1)
       || !validSHA(value.proofBodySHA256) || !validSHA(value.resourceSHA256)
       || !validSHA(value.sourceManifestSHA256) || !Number.isSafeInteger(value.sourceCount) || value.sourceCount < 1
       || !Number.isSafeInteger(value.uniqueBodyCount) || value.uniqueBodyCount < 1
@@ -291,12 +298,17 @@ export class TimetablePublicationAdmissionStore {
         : ledger.records[i - 1].receipt.publicationSHA256;
       const expectedPreviousResource = i === 0 ? baseResourceSHA256 : ledger.records[i - 1].receipt.resourceSHA256;
       if (!ledgerRecord(record) || !validReceipt(receipt, i + 1)
-          || record.retained !== expectedRetained || seen.has(receipt.publicationSHA256)
+          || record.retained !== expectedRetained || seen.has(receiptPackageKey(receipt))
           || receipt.previousPublicationSHA256 !== expectedPreviousSHA
           || receipt.previousResourceSHA256 !== expectedPreviousResource) throw fail(503, 'admission-ledger-invalid');
-      seen.add(receipt.publicationSHA256);
+      const previousIdentity = i === 0 ? baselineAsset.identity : ledger.records[i - 1].receipt;
+      if (receipt.publicationSHA256 === previousIdentity.publicationSHA256) {
+        if (!receipt.packageKey || receipt.proofRevision !== previousIdentity.proofRevision + 1) throw fail(503, 'admission-ledger-invalid');
+      } else if (receipt.proofRevision !== 1 || ledger.records.slice(0, i).some(r => r.receipt.publicationSHA256 === receipt.publicationSHA256)
+          || receipt.publicationSHA256 === baselineAsset.identity.publicationSHA256) throw fail(503, 'admission-ledger-invalid');
+      seen.add(receiptPackageKey(receipt));
       if (!record.retained) { previousResourceSHA256 = receipt.resourceSHA256; continue; }
-      const packageRoot = this.#admittedPackage(receipt.publicationSHA256);
+      const packageRoot = this.#admittedPackage(receiptPackageKey(receipt));
       const proofDirectory = path.join(packageRoot, 'proofs');
       const archiveDirectory = path.join(packageRoot, 'archives');
       const asset = await readPublicationAsset(receipt.publicationSHA256, proofDirectory);
@@ -309,7 +321,7 @@ export class TimetablePublicationAdmissionStore {
       if (index.bytes + candidateIndex.bytes > MAX_SOURCE_ARCHIVE_BYTES) throw fail(503, 'source-index-storage-limit');
       if (index.archiveCount + candidateIndex.archiveCount > MAX_SOURCE_INDEX_ARCHIVES) throw fail(503, 'source-index-count-limit');
       index = combineIndexes(index, candidateIndex);
-      retainedIndexes.set(receipt.publicationSHA256, candidateIndex);
+      retainedIndexes.set(receiptPackageKey(receipt), candidateIndex);
       if (receipt.windowIndexSHA256) {
         const key = receipt.publicationSHA256 + '/' + receipt.proofBodySHA256;
         try { windowPackages.set(key, await readCandidateWindows(packageRoot, asset.identity, receipt.windowIndexSHA256)); }
@@ -333,22 +345,113 @@ export class TimetablePublicationAdmissionStore {
 
   windowPackage(key) { return this.#snapshot?.windowPackages.get(key); }
 
+  get latestAdmittedIdentity() {
+    if (!this.#snapshot) return null;
+    return Object.freeze({ ...this.#snapshot.previousAsset.identity,
+      resourceSHA256: this.#snapshot.previousResourceSHA256, admissionRevision: this.#snapshot.ledger.revision });
+  }
+
+  // Trusted in-process producer boundary. No HTTP identity is fabricated and
+  // public callers cannot select this method. All publication checks and the
+  // atomic commit are shared with authenticated external admission.
+  async admitTrustedPackage({ resourceBytes, manifestBytes, readBody, windowsBytes,
+    previousResourceSHA256, signal } = {}) {
+    const bounded = (bytes, maximum) => {
+      if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > maximum) throw fail(413, 'candidate-storage-limit');
+      return Buffer.from(bytes);
+    };
+    resourceBytes = bounded(resourceBytes, MAX_RESOURCE_BYTES);
+    manifestBytes = bounded(manifestBytes, MAX_SOURCE_MANIFEST_BYTES);
+    if (windowsBytes !== undefined) windowsBytes = bounded(windowsBytes, MAX_WINDOW_TRANSPORT_BYTES);
+    if (typeof readBody !== 'function' || !validSHA(previousResourceSHA256)) throw fail(400, 'trusted-package-invalid');
+    return this.#serialize(async () => {
+      signal?.throwIfAborted();
+      if (!this.#snapshot) throw fail(503, 'admission-store-unavailable');
+      const wrapper = JSON.parse(resourceBytes);
+      if (!validSHA(wrapper.publicationSHA256)) throw fail(422, 'proof-identity-invalid');
+      const sha = wrapper.publicationSHA256;
+      const metadata = validatePublicationResource(resourceBytes, sha);
+      const identity = { publicationSHA256: sha, proofRevision: metadata.revision, proofBodySHA256: metadata.proofBodySHA256 };
+      const manifest = validateSourceManifest(manifestBytes, sha, metadata.proofBodySHA256);
+      let claimedWindows;
+      if (windowsBytes) claimedWindows = (await decodeWindowTransport(windowsBytes,
+        identity)).indexSHA256;
+      const resourceClaim = digest(resourceBytes);
+      const replay = this.#snapshot.ledger.records.find(row => row.receipt.resourceSHA256 === resourceClaim);
+      if (replay) {
+        const receipt = replay.receipt;
+        if (!replay.retained) throw fail(409, 'candidate-package-retired');
+        if (receipt.previousResourceSHA256 !== previousResourceSHA256
+            || receipt.sourceManifestSHA256 !== digest(manifestBytes)
+            || receipt.windowIndexSHA256 !== claimedWindows) throw fail(409, 'admitted-candidate-is-immutable');
+        const retained = await readBoundedFile(path.join(this.#admittedPackage(receiptPackageKey(receipt)), 'proofs'),
+          `${sha}.json`, MAX_RESOURCE_BYTES);
+        if (digest(retained) !== resourceClaim) throw fail(503, 'admitted-object-invalid');
+        if (receipt.windowIndexSHA256 && this.windowPackage(sha + '/' + receipt.proofBodySHA256) === false) {
+          throw fail(503, 'admitted-window-package-unavailable');
+        }
+        return structuredClone(receipt);
+      }
+      // An older edition must never become current again through this route.
+      if (sha !== this.#snapshot.previousAsset.identity.publicationSHA256
+          && (sha === this.baselineSHA256 || this.#snapshot.ledger.records.some(row => row.receipt.publicationSHA256 === sha))) {
+        throw fail(409, 'candidate-already-admitted');
+      }
+      if (this.#snapshot.previousResourceSHA256 !== previousResourceSHA256) throw fail(412, 'previous-publication-precondition-failed');
+      const packageKey = derivedPackageKey(identity);
+      const packageRoot = await this.#ensureStage(packageKey);
+      try {
+        const write = async (relative, bytes) => {
+          const target = path.join(packageRoot, relative);
+          const created = await writeImmutable(this.directory, target, bytes);
+          if (await treeBytes(packageRoot) > MAX_STAGED_PACKAGE_BYTES) {
+            if (created) await fs.unlink(target);
+            throw fail(413, 'candidate-storage-limit');
+          }
+        };
+        await write(path.join('proofs', `${sha}.json`), resourceBytes);
+        const archiveRoot = path.join('archives', sha, metadata.proofBodySHA256);
+        await write(path.join(archiveRoot, 'manifest.json'), manifestBytes);
+        const bodies = new Map(manifest.sources.map(source => [source.bodySHA256, source]));
+        for (const [hash, source] of bodies) {
+          signal?.throwIfAborted();
+          const body = bounded(await readBody(hash), MAX_SOURCE_BODY_BYTES);
+          signal?.throwIfAborted();
+          if (body.length !== source.bodyBytes || digest(body) !== hash) throw fail(422, 'body-not-bound-to-manifest');
+          await write(path.join(archiveRoot, source.bodyPath), body);
+        }
+        if (windowsBytes) await write('windows.json', windowsBytes);
+        return await this.#commitPackage({ packageRoot, sha, claimedWindows, expectedPrevious: previousResourceSHA256,
+          resourceClaim, packageKey, signal });
+      } catch (error) {
+        // This in-process attempt owns its private revision stage. A rejected
+        // demand must not occupy the single stage slot for the next 24 hours.
+        // An already promoted orphan is retained for exact crash retry.
+        if (packageRoot === this.#stagedPackage(packageKey)) {
+          try { await fs.rm(packageRoot, { recursive: true, force: true }); await fsyncDirectory(this.stagingDirectory); }
+          catch { /* Preserve the admission failure; startup expiry owns cleanup. */ }
+        }
+        throw error;
+      }
+    });
+  }
+
   get sourceBodyIndex() { return this.#snapshot?.index ?? this.baseSourceIndex; }
 
   async readPublicPublicationBytes(sha) {
     if (!validSHA(sha)) throw Object.assign(new Error('Not found'), { code: 'ENOENT' });
+    const record = this.#snapshot?.ledger.records.findLast(value => value.receipt.publicationSHA256 === sha && value.retained);
+    if (record) {
+      const bytes = await readBoundedFile(path.join(this.#admittedPackage(receiptPackageKey(record.receipt)), 'proofs'), `${sha}.json`, MAX_RESOURCE_BYTES);
+      if (digest(bytes) !== record.receipt.resourceSHA256) throw fail(503, 'admitted-object-invalid');
+      return bytes;
+    }
     try { return await readBoundedFile(this.publicationDirectory, `${sha}.json`, MAX_RESOURCE_BYTES); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (sha === this.baselineSHA256) {
       const bytes = await readBoundedFile(path.join(this.baselineDirectory, sha, 'proofs'), `${sha}.json`, MAX_RESOURCE_BYTES);
       const pointer = JSON.parse((await readBoundedFile(this.directory, 'baseline.json', 4096)).toString('utf8'));
       if (digest(bytes) !== pointer.resourceSHA256) throw fail(503, 'baseline-invalid');
-      return bytes;
-    }
-    const record = this.#snapshot?.ledger.records.find(value => value.receipt.publicationSHA256 === sha && value.retained);
-    if (record) {
-      const bytes = await readBoundedFile(path.join(this.#admittedPackage(sha), 'proofs'), `${sha}.json`, MAX_RESOURCE_BYTES);
-      if (digest(bytes) !== record.receipt.resourceSHA256) throw fail(503, 'admitted-object-invalid');
       return bytes;
     }
     throw Object.assign(new Error('Not found'), { code: 'ENOENT' });
@@ -404,9 +507,9 @@ export class TimetablePublicationAdmissionStore {
   #admittedPackage(sha) { return path.join(this.admittedDirectory, sha); }
 
   async #cleanupSuperseded(ledger) {
-    const bySHA = new Map(ledger.records.map(value => [value.receipt.publicationSHA256, value]));
+    const bySHA = new Map(ledger.records.map(value => [receiptPackageKey(value.receipt), value]));
     for (const item of await fs.readdir(this.admittedDirectory, { withFileTypes: true })) {
-      if (!validSHA(item.name)) continue;
+      if (!validPackageKey(item.name)) continue;
       const record = bySHA.get(item.name);
       if (!record || record.retained) continue;
       const target = path.join(this.admittedDirectory, item.name);
@@ -495,7 +598,7 @@ export class TimetablePublicationAdmissionStore {
     try { await fs.lstat(this.#admittedPackage(sha)); return this.#admittedPackage(sha); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     for (const item of await fs.readdir(this.stagingDirectory, { withFileTypes: true })) {
-      if (!item.isDirectory() || !validSHA(item.name)) throw fail(503, 'staged-metadata-invalid');
+      if (!item.isDirectory() || !validPackageKey(item.name)) throw fail(503, 'staged-metadata-invalid');
       const staged = this.#stagedPackage(item.name);
       let createdAt;
       try { createdAt = Date.parse((await this.#readStageMetadata(item.name)).createdAt); }
@@ -514,7 +617,7 @@ export class TimetablePublicationAdmissionStore {
     try { await readBoundedFile(packageRoot, 'stage.json', 1024); }
     catch (error) {
       if (error.code !== 'ENOENT') throw error;
-      const metadata = jsonBytes({ schemaVersion: 1, publicationSHA256: sha, createdAt: new Date(this.now()).toISOString() });
+      const metadata = jsonBytes({ schemaVersion: 1, publicationSHA256: sha.split('-')[0], createdAt: new Date(this.now()).toISOString() });
       await writeImmutable(this.directory, metaPath, metadata);
     }
     return packageRoot;
@@ -524,7 +627,7 @@ export class TimetablePublicationAdmissionStore {
     const bytes = await readBoundedFile(this.#stagedPackage(sha), 'stage.json', 1024);
     const value = JSON.parse(bytes.toString('utf8'));
     if (!exactKeys(value, ['schemaVersion', 'publicationSHA256', 'createdAt']) || value.schemaVersion !== 1
-        || value.publicationSHA256 !== sha || !Number.isFinite(Date.parse(value.createdAt))) throw fail(503, 'staged-metadata-invalid');
+        || value.publicationSHA256 !== sha.split('-')[0] || !Number.isFinite(Date.parse(value.createdAt))) throw fail(503, 'staged-metadata-invalid');
     return value;
   }
 
@@ -553,7 +656,7 @@ export class TimetablePublicationAdmissionStore {
     const contentType = String(request.headers['content-type'] ?? '').toLowerCase();
     if (!/^application\/json(?:\s*;|$)/.test(contentType)) throw fail(415, 'unsupported-content-type');
     if (kind === 'windows') {
-      const record = this.#snapshot.ledger.records.find(row => row.receipt.publicationSHA256 === sha);
+      const record = this.#snapshot.ledger.records.find(row => row.receipt.publicationSHA256 === sha && row.receipt.proofBodySHA256 === proofBodySHA256);
       if (record) {
         await this.#restoreRetainedWindows(record, proofBodySHA256, bytes);
         sendBytes(response, 204, Buffer.alloc(0), { 'x-tubeboard-object-sha256': digest(bytes) });
@@ -602,7 +705,7 @@ export class TimetablePublicationAdmissionStore {
     try { verified = await decodeWindowTransport(bytes, receipt, receipt.windowIndexSHA256); }
     catch { throw fail(422, 'window-package-invalid'); }
     if (this.windowPackage(key) !== false) return;
-    const root = this.#admittedPackage(receipt.publicationSHA256);
+    const root = this.#admittedPackage(receiptPackageKey(receipt));
     const target = path.join(root, 'windows.json');
     let previousSize = 0;
     try {
@@ -642,7 +745,7 @@ export class TimetablePublicationAdmissionStore {
         throw fail(503, 'admitted-window-package-unavailable');
       }
       if (existingRecord.retained) {
-        const proofBytes = await readBoundedFile(path.join(this.#admittedPackage(sha), 'proofs'), `${sha}.json`, MAX_RESOURCE_BYTES);
+        const proofBytes = await readBoundedFile(path.join(this.#admittedPackage(receiptPackageKey(existing)), 'proofs'), `${sha}.json`, MAX_RESOURCE_BYTES);
         if (digest(proofBytes) !== existing.resourceSHA256) throw fail(503, 'admitted-object-invalid');
       }
       await this.#cleanupSuperseded(this.#snapshot.ledger);
@@ -654,25 +757,31 @@ export class TimetablePublicationAdmissionStore {
       const stage = await this.#readStageMetadata(sha);
       if (this.now() - Date.parse(stage.createdAt) >= MAX_STAGE_AGE_MS) throw fail(409, 'candidate-stage-expired');
     }
+    const receipt = await this.#commitPackage({ packageRoot, sha, claimedWindows,
+      expectedPrevious: typeof request.headers['if-match'] === 'string' && /^"([a-f0-9]{64})"$/.exec(request.headers['if-match'])?.[1],
+      resourceClaim: request.headers['x-tubeboard-resource-sha256'] });
+    sendBytes(response, 201, jsonBytes(receipt), { 'content-type': 'application/json; charset=utf-8' });
+  }
+
+  async #commitPackage({ packageRoot, sha, claimedWindows, expectedPrevious, resourceClaim, packageKey = sha, signal }) {
+    signal?.throwIfAborted();
     const proofDirectory = path.join(packageRoot, 'proofs');
     const proofBytes = await readBoundedFile(proofDirectory, `${sha}.json`, MAX_RESOURCE_BYTES);
     const metadata = validatePublicationResource(proofBytes, sha);
     const candidateAsset = await readPublicationAsset(sha, proofDirectory);
     await readCandidateWindows(packageRoot, candidateAsset.identity, claimedWindows);
     const resourceSHA256 = digest(proofBytes);
-    if (request.headers['x-tubeboard-resource-sha256'] !== resourceSHA256) {
+    if (resourceClaim !== resourceSHA256) {
       throw fail(409, 'candidate-resource-digest-mismatch');
     }
     if (this.#snapshot.ledger.revision >= MAX_ADMISSION_HISTORY) throw fail(507, 'admission-history-limit');
     const previousAsset = this.#snapshot.previousAsset;
     const previousResourceSHA256 = this.#snapshot.previousResourceSHA256;
-    const ifMatch = request.headers['if-match'];
-    const expectedPrevious = typeof ifMatch === 'string' && /^"([a-f0-9]{64})"$/.exec(ifMatch)?.[1];
     if (expectedPrevious !== previousResourceSHA256) throw fail(412, 'previous-publication-precondition-failed');
 
     const archiveDirectory = path.join(packageRoot, 'archives');
     const candidateIndex = await loadSourceBodyArchiveIndex({ publicationDirectory: proofDirectory, archiveDirectory });
-    const priorRetainedSHA = this.#snapshot.ledger.records.at(-1)?.receipt.publicationSHA256;
+    const priorRetainedSHA = this.#snapshot.ledger.records.at(-1) ? receiptPackageKey(this.#snapshot.ledger.records.at(-1).receipt) : null;
     const priorRetainedIndex = priorRetainedSHA ? this.#snapshot.retainedIndexes.get(priorRetainedSHA) : null;
     let nextIndex = this.#snapshot.baseIndex;
     if (priorRetainedIndex && this.maxRetainedPackages > 1) nextIndex = combineIndexes(nextIndex, priorRetainedIndex);
@@ -682,7 +791,9 @@ export class TimetablePublicationAdmissionStore {
     const manifestBytes = await readBoundedFile(path.dirname(manifestPath), 'manifest.json', MAX_SOURCE_MANIFEST_BYTES);
     const manifest = validateSourceManifest(manifestBytes, sha, metadata.proofBodySHA256);
     const officialObservation = this.observation.current();
-    const result = evaluateNewEditionAdmission({ previousAsset, candidateAsset, comparisonIndex: candidateIndex,
+    const evaluator = packageKey !== sha && previousAsset.identity.publicationSHA256 === sha
+      ? evaluateAdditiveRevisionAdmission : evaluateNewEditionAdmission;
+    const result = evaluator({ previousAsset, candidateAsset, comparisonIndex: candidateIndex,
       officialObservation, admissionRevision: this.#snapshot.ledger.revision,
       ifMatchPreviousResourceSHA256: expectedPrevious, now: this.now() });
     if (!result.eligible) throw fail(422, result.reason);
@@ -698,17 +809,19 @@ export class TimetablePublicationAdmissionStore {
     if (nextAdmittedBytes > this.maxAdmittedBytes) throw fail(507, 'admitted-storage-limit');
     const core = {
       schemaVersion: 1, status: 'admitted', admissionRevision: result.admissionRevision,
-      publicationSHA256: sha, proofRevision: 1, proofBodySHA256: candidateAsset.identity.proofBodySHA256,
+      publicationSHA256: sha, proofRevision: candidateAsset.identity.proofRevision, proofBodySHA256: candidateAsset.identity.proofBodySHA256,
       resourceSHA256, sourceManifestSHA256: digest(manifestBytes), sourceCount: manifest.sourceCount,
       uniqueBodyCount: manifest.uniqueBodyCount, totalBodyBytes: manifest.totalBodyBytes,
       previousPublicationSHA256: previousAsset.identity.publicationSHA256,
       previousResourceSHA256, observedAt: officialObservation.observedAt,
-      ...(claimedWindows === undefined ? {} : { windowIndexSHA256: claimedWindows })
+      ...(claimedWindows === undefined ? {} : { windowIndexSHA256: claimedWindows }),
+      ...(packageKey === sha ? {} : { packageKey })
     };
     const receipt = makeReceipt(core);
-    const committedPackage = this.#admittedPackage(sha);
+    const committedPackage = this.#admittedPackage(packageKey);
     await ensureDirectory(this.admittedDirectory);
-    try { await fs.rename(packageRoot, committedPackage); await fsyncDirectory(this.admittedDirectory); }
+    signal?.throwIfAborted();
+    if (packageRoot !== committedPackage) try { await fs.rename(packageRoot, committedPackage); await fsyncDirectory(this.admittedDirectory); }
     catch (error) {
       if (error.code !== 'EEXIST' && error.code !== 'ENOTEMPTY') throw error;
       if (!await this.#sameTree(packageRoot, committedPackage)) throw fail(409, 'admitted-package-conflict');
@@ -737,27 +850,28 @@ export class TimetablePublicationAdmissionStore {
     const windowPackages = new Map();
     for (const record of records.filter(item => item.retained)) {
       const key = record.receipt.publicationSHA256 + '/' + record.receipt.proofBodySHA256;
-      const bundle = record.receipt.publicationSHA256 === sha ? windows : this.#snapshot.windowPackages.get(key);
+      const bundle = receiptPackageKey(record.receipt) === packageKey ? windows : this.#snapshot.windowPackages.get(key);
       if (bundle != null) windowPackages.set(key, bundle);
     }
     if (!sameFreshOfficialObservation(officialObservation, this.observation.current(), sha, this.now())) {
-      if (packageRoot === this.#stagedPackage(sha)) {
+      if (packageRoot.startsWith(this.stagingDirectory + path.sep)) {
         await fs.rename(committedPackage, packageRoot);
         await fsyncDirectory(this.admittedDirectory);
         await fsyncDirectory(this.stagingDirectory);
       }
       throw fail(409, 'official-edition-changed-during-admission');
     }
+    signal?.throwIfAborted();
     await this.#writeLedger(ledger);
     const retainedIndexes = new Map();
     if (priorRetainedIndex && this.maxRetainedPackages > 1) retainedIndexes.set(priorRetainedSHA, priorRetainedIndex);
-    retainedIndexes.set(sha, committedIndex);
+    retainedIndexes.set(packageKey, committedIndex);
     this.#snapshot = Object.freeze({ ledger, index: committedCombinedIndex,
       baseIndex: this.#snapshot.baseIndex, retainedIndexes, windowPackages,
       previousAsset: candidateAsset, previousResourceSHA256: resourceSHA256,
       admittedBytes: nextAdmittedBytes });
     await this.#cleanupSuperseded(ledger);
-    sendBytes(response, 201, jsonBytes(receipt), { 'content-type': 'application/json; charset=utf-8' });
+    return structuredClone(receipt);
   }
 
   async #sameTree(left, right) {
@@ -809,11 +923,13 @@ export class TimetablePublicationAdmissionStore {
   }
 
   async #readback(response, sha, pathKey) {
-    const record = this.#snapshot.ledger.records.find(value => value.receipt.publicationSHA256 === sha);
+    const requestedProof = /^archives\/([a-f0-9]{64})\//.exec(pathKey)?.[1];
+    const record = this.#snapshot.ledger.records.findLast(value => value.receipt.publicationSHA256 === sha
+      && (!requestedProof || value.receipt.proofBodySHA256 === requestedProof));
     if (!record) { errorResponse(response, 404, 'candidate-not-found'); return true; }
     const receipt = record.receipt;
     if (pathKey !== '' && !record.retained) { errorResponse(response, 410, 'candidate-package-rotated'); return true; }
-    const packageRoot = this.#admittedPackage(sha);
+    const packageRoot = this.#admittedPackage(receiptPackageKey(receipt));
     const proofDirectory = path.join(packageRoot, 'proofs');
     const archiveRoot = path.join(packageRoot, 'archives', sha, receipt.proofBodySHA256);
     if (pathKey === '') {

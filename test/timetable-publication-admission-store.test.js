@@ -21,7 +21,7 @@ const observedAt = Date.parse('2026-11-10T19:55:00Z');
 const now = Date.parse('2026-11-10T20:00:00Z');
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
-async function setup(t, { maxAdmittedPackages = 2 } = {}) {
+async function setup(t, { maxAdmittedPackages = 2, baselineSHA256 = priorSHA } = {}) {
   const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-publication-admission-http-'));
   t.after(() => fs.rm(temp, { recursive: true, force: true }));
   const publicationDirectory = path.join(temp, 'prior-proof-only');
@@ -29,8 +29,8 @@ async function setup(t, { maxAdmittedPackages = 2 } = {}) {
   const storeDirectory = path.join(temp, 'store');
   await fs.mkdir(publicationDirectory, { recursive: true });
   await fs.mkdir(sourceArchiveDirectory, { recursive: true });
-  await fs.copyFile(path.join(PUBLICATION_ASSET_DIRECTORY, `${priorSHA}.json`),
-    path.join(publicationDirectory, `${priorSHA}.json`));
+  await fs.copyFile(path.join(PUBLICATION_ASSET_DIRECTORY, `${baselineSHA256}.json`),
+    path.join(publicationDirectory, `${baselineSHA256}.json`));
   const baseSourceIndex = await loadSourceBodyArchiveIndex({ publicationDirectory, archiveDirectory: sourceArchiveDirectory });
   let observedSHA = candidateSHA;
   let observationSequence = null;
@@ -40,7 +40,7 @@ async function setup(t, { maxAdmittedPackages = 2 } = {}) {
       expiresAt: new Date(observedAt + 10 * 60_000).toISOString()
     }) }) };
   const openStore = async () => new TimetablePublicationAdmissionStore({ directory: storeDirectory,
-    baselineSHA256: priorSHA, observation, baseSourceIndex, publicationDirectory,
+    baselineSHA256, observation, baseSourceIndex, publicationDirectory,
     archiveDirectory: sourceArchiveDirectory, verifyOIDC: async token => token === 'offline-test-token',
     now: () => now, maxAdmittedPackages }).initialize();
   let store = await openStore();
@@ -101,6 +101,7 @@ async function setup(t, { maxAdmittedPackages = 2 } = {}) {
   const restart = async () => { store = await openStore(); };
   return { origin, storeDirectory, stage, restart, candidateFor, put,
     publicationDirectory,
+    setObservedSHA: value => { observedSHA = value; },
     setObservationSequence: value => { observationSequence = value; },
     tokenHeaders, store: () => store };
 }
@@ -159,6 +160,114 @@ test('staging stays private; complete admission exposes the same proof and bodie
   const privateManifest = await fetch(`${candidateBase}/archives/${candidate.proofBodySHA}/manifest`, { headers: fixture.tokenHeaders });
   assert.equal(privateManifest.status, 200);
   assert.deepEqual(Buffer.from(await privateManifest.arrayBuffer()), candidate.manifestBytes);
+});
+
+function revisedPackage(candidate, revision, mutate = () => {}) {
+  const proof = JSON.parse(Buffer.from(JSON.parse(candidate.resource).proofBodyBase64, 'base64'));
+  mutate(proof);
+  const bytes = Buffer.from(JSON.stringify(proof, null, 2) + '\n');
+  const proofBodySHA = digest(bytes);
+  const resource = canonicalResource({ schemaVersion: 1, publicationSHA256: candidate.sha, proofRevision: revision,
+    proofBodySHA256: proofBodySHA, proofBodyBase64: bytes.toString('base64') });
+  const manifest = { ...structuredClone(candidate.manifest), proofBodySHA256: proofBodySHA };
+  return { ...candidate, resource, proofBodySHA, manifest, manifestBytes: Buffer.from(JSON.stringify(manifest, null, 2) + '\n') };
+}
+
+const trustedInput = (candidate, previousResourceSHA256, extra = {}) => ({
+  resourceBytes: candidate.resource, manifestBytes: candidate.manifestBytes, previousResourceSHA256,
+  readBody: hash => fs.readFile(path.join(archivePath, 'bodies', `${hash}.json`)), ...extra
+});
+
+test('trusted same-edition revisions keep immutable bindings, latest wrapper and receipts across restart', async t => {
+  const f = await setup(t);
+  assert.equal(f.store().latestAdmittedIdentity.admissionRevision, 0);
+  const candidate = await f.candidateFor(candidateSHA);
+  const initial = f.store().latestAdmittedIdentity.resourceSHA256;
+  const first = await f.store().admitTrustedPackage(trustedInput(candidate, initial));
+  const addGap = proof => proof.entries.push({ ...structuredClone(proof.entries.find(e => e.status === 'gap')),
+    stationID: '940GZZLUTST' });
+  const second = revisedPackage(candidate, 2, addGap);
+  const receipt2 = await f.store().admitTrustedPackage(trustedInput(second, first.resourceSHA256));
+  assert.equal(receipt2.proofRevision, 2);
+  assert.equal(receipt2.admissionRevision, 2);
+  assert.notEqual(receipt2.packageKey, first.packageKey);
+  assert.deepEqual(await f.store().readPublicPublicationBytes(candidateSHA), second.resource);
+  assert.deepEqual(await f.store().admitTrustedPackage(trustedInput(second, first.resourceSHA256)), receipt2);
+  await f.restart();
+  assert.equal(f.store().latestAdmittedIdentity.proofRevision, 2);
+  assert.deepEqual(await f.store().readPublicPublicationBytes(candidateSHA), second.resource);
+  const third = revisedPackage(second, 3);
+  const receipt3 = await f.store().admitTrustedPackage(trustedInput(third, receipt2.resourceSHA256));
+  assert.equal(receipt3.admissionRevision, 3);
+  assert.deepEqual(await f.store().readPublicPublicationBytes(candidateSHA), third.resource);
+  await assert.rejects(f.store().admitTrustedPackage(trustedInput(candidate, initial)), /candidate-package-retired/);
+  await f.restart();
+  assert.equal(f.store().latestAdmittedIdentity.resourceSHA256, receipt3.resourceSHA256);
+  assert.deepEqual(await f.store().admitTrustedPackage(trustedInput(third, receipt2.resourceSHA256)), receipt3);
+  const source = second.manifest.sources[0];
+  assert.ok(f.store().sourceBodyIndex.get([candidateSHA, second.proofBodySHA, source.lineID, source.stationID,
+    source.direction ?? 'default', source.bodySHA256].join('\u0000')));
+  assert.equal((await fetch(f.origin + PUBLICATION_CANDIDATE_PREFIX + candidateSHA)).status, 401);
+  const privateRoot = f.origin + PUBLICATION_CANDIDATE_PREFIX + candidateSHA;
+  assert.deepEqual(Buffer.from(await (await fetch(privateRoot + `/archives/${second.proofBodySHA}/manifest`,
+    { headers: f.tokenHeaders })).arrayBuffer()), second.manifestBytes);
+});
+
+test('trusted admission shares rejection gates and never publishes incomplete or cancelled input', async t => {
+  const f = await setup(t);
+  const candidate = await f.candidateFor(candidateSHA);
+  const initial = f.store().latestAdmittedIdentity.resourceSHA256;
+  await assert.rejects(f.store().admitTrustedPackage(trustedInput(candidate, initial,
+    { readBody: async () => Buffer.from('{}') })), /body-not-bound-to-manifest/);
+  assert.equal(f.store().latestAdmittedIdentity.admissionRevision, 0);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(f.store().admitTrustedPackage(trustedInput(candidate, initial, { signal: controller.signal })), /abort/i);
+  const first = await f.store().admitTrustedPackage(trustedInput(candidate, initial));
+  for (const [name, revision, mutate] of [
+    ['overwrite', 2, p => { p.entries.find(e => e.status === 'qualified').profiles[0].count++; }],
+    ['calendar', 2, p => { p.bankHolidayDates.push('2026-11-10'); }],
+    ['rollback', 1, p => { p.publication.capturedAt = '2026-11-10T19:56:00Z'; }],
+    ['skip', 3, () => {}]
+  ]) {
+    const bad = revisedPackage(candidate, revision, mutate);
+    await assert.rejects(f.store().admitTrustedPackage(trustedInput(bad, first.resourceSHA256)), undefined, name);
+    assert.equal(f.store().latestAdmittedIdentity.admissionRevision, 1);
+    assert.deepEqual(await f.store().readPublicPublicationBytes(candidateSHA), candidate.resource);
+    assert.deepEqual(await fs.readdir(path.join(f.storeDirectory, 'staging')), []);
+  }
+  const second = revisedPackage(candidate, 2);
+  await assert.rejects(f.store().admitTrustedPackage(trustedInput(second, 'f'.repeat(64))), /precondition/);
+});
+
+test('trusted additive baseline revision shadows bundled wrapper and publishes receipt-bound windows', async t => {
+  const f = await setup(t, { baselineSHA256: candidateSHA });
+  const baseline = f.store().latestAdmittedIdentity;
+  assert.equal(baseline.admissionRevision, 0);
+  assert.equal(baseline.publicationSHA256, candidateSHA);
+  const original = await f.store().readPublicPublicationBytes(candidateSHA);
+  const manifest = JSON.parse(await fs.readFile(path.join(archivePath, 'manifest.json')));
+  const candidate = revisedPackage({ sha: candidateSHA, resource: original, manifest }, baseline.proofRevision + 1);
+  const fields = { schemaVersion: 1, canonicalizerVersion: 'tb085-counted-minute-ordered-path-multiset-v1',
+    publicationSHA256: candidateSHA, proofRevision: baseline.proofRevision + 1, proofBodySHA256: candidate.proofBodySHA };
+  const scope = { lineID: 'central', stationID: '940GZZLUEPG', requestDirection: 'default' };
+  const body = Buffer.from(JSON.stringify({ ...fields, ...scope, responseDirection: 'outbound',
+    sourceEndpoint: 'https://api.tfl.gov.uk/Line/central/Timetable/940GZZLUEPG',
+    sourceCapturedAt: '2026-11-09T12:00:00Z', sourceAgeSeconds: 0, sourceBodySHA256: 'c'.repeat(64),
+    profiles: [{ name: 'Monday', weekdays: [2], count: 3, sha256: 'd'.repeat(64) }],
+    serviceRanges: [{ startDate: '2026-11-09', endDate: '2026-11-09', profileName: 'Monday', disputedMinutes: [] }] }));
+  const sha = digest(body);
+  const index = Buffer.from(JSON.stringify({ ...fields, resources: [{ ...scope, sha256: sha, bytes: body.length,
+    path: `resources/${sha}.json` }] }));
+  const windowsBytes = Buffer.from(JSON.stringify({ indexBase64: index.toString('base64'),
+    resources: { [sha]: body.toString('base64') } }));
+  const receipt = await f.store().admitTrustedPackage(trustedInput(candidate, baseline.resourceSHA256, { windowsBytes }));
+  assert.equal(receipt.windowIndexSHA256, digest(index));
+  assert.deepEqual(await f.store().readPublicPublicationBytes(candidateSHA), candidate.resource);
+  await f.restart();
+  assert.equal(f.store().latestAdmittedIdentity.proofRevision, baseline.proofRevision + 1);
+  assert.equal(f.store().windowResourcesReady, true);
+  assert.deepEqual(await f.store().readPublicPublicationBytes(candidateSHA), candidate.resource);
+  assert.deepEqual(f.store().windowPackage(candidateSHA + '/' + candidate.proofBodySHA).get(`resources/${sha}.json`).bytes, body);
 });
 
 test('admission is atomic, concurrency-safe and exactly idempotent across restart', async t => {

@@ -2,6 +2,7 @@
 // validates proof and comparison-package completeness; it never writes files,
 // changes the active publication, or qualifies departures.
 import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { TIMETABLE_PUBLICATION_URL } from './station-board-seed.js';
 import { selectedTimetableEntry, validatedPublicationProof } from './station-board-timetable.js';
 import { londonLocal } from './station-board-v2.js';
@@ -116,8 +117,8 @@ export function hasCompleteComparisonArchive(asset, index) {
   return true;
 }
 
-export function evaluateNewEditionAdmission({ previousAsset, candidateAsset, comparisonIndex,
-  officialObservation, admissionRevision, ifMatchPreviousResourceSHA256, now = Date.now() }) {
+function admissionPreconditions({ previousAsset, candidateAsset,
+  officialObservation, admissionRevision, ifMatchPreviousResourceSHA256, now }, additive = false) {
   const identity = candidateAsset?.identity;
   const previousIdentity = previousAsset?.identity;
   const reject = reason => ({ eligible: false, reason });
@@ -125,8 +126,14 @@ export function evaluateNewEditionAdmission({ previousAsset, candidateAsset, com
       || !identity || !previousIdentity || !validSHA(identity.publicationSHA256)
       || !validSHA(identity.proofBodySHA256) || !Number.isSafeInteger(identity.proofRevision)
       || !validSHA(previousIdentity.publicationSHA256)) return reject('proof-identity-invalid');
-  if (identity.publicationSHA256 === previousIdentity.publicationSHA256) return reject('same-edition-not-admissible');
-  if (identity.proofRevision !== 1) return reject('new-edition-must-start-at-revision-one');
+  if (additive) {
+    if (identity.publicationSHA256 !== previousIdentity.publicationSHA256) return reject('additive-edition-mismatch');
+    if (previousIdentity.proofRevision === Number.MAX_SAFE_INTEGER
+        || identity.proofRevision !== previousIdentity.proofRevision + 1) return reject('additive-proof-revision-invalid');
+  } else {
+    if (identity.publicationSHA256 === previousIdentity.publicationSHA256) return reject('same-edition-not-admissible');
+    if (identity.proofRevision !== 1) return reject('new-edition-must-start-at-revision-one');
+  }
   const previousResourceSHA256 = publicationResourceSHA256(previousAsset);
   if (!validSHA(ifMatchPreviousResourceSHA256) || ifMatchPreviousResourceSHA256 !== previousResourceSHA256) {
     return reject('previous-publication-precondition-failed');
@@ -141,6 +148,25 @@ export function evaluateNewEditionAdmission({ previousAsset, candidateAsset, com
       || observedAt > now || now >= expiresAt || expiresAt - observedAt > 600_000) {
     return reject('official-edition-observation-stale-or-mismatched');
   }
+  return { identity, previousIdentity, previousResourceSHA256 };
+}
+
+function admissionResult(context, candidateAsset, admissionRevision, reason) {
+  const { identity, previousIdentity, previousResourceSHA256 } = context;
+  return {
+    eligible: true, reason, admissionRevision: admissionRevision + 1,
+    previousPublicationSHA256: previousIdentity.publicationSHA256, previousResourceSHA256,
+    publicationSHA256: identity.publicationSHA256, proofRevision: identity.proofRevision,
+    proofBodySHA256: identity.proofBodySHA256, resourceSHA256: publicationResourceSHA256(candidateAsset),
+    comparisonSourceCount: expectedComparisonSourceCount(candidateAsset), activatesPublication: false
+  };
+}
+
+export function evaluateNewEditionAdmission(input) {
+  const { previousAsset, candidateAsset, comparisonIndex, admissionRevision, now = Date.now() } = input;
+  const context = admissionPreconditions({ ...input, now });
+  if (context.eligible === false) return context;
+  const reject = reason => ({ eligible: false, reason });
   try {
     const currentServiceDate = londonLocal(now).slice(0, 10);
     const preservationStart = new Date(`${currentServiceDate}T12:00:00Z`);
@@ -153,17 +179,41 @@ export function evaluateNewEditionAdmission({ previousAsset, candidateAsset, com
   } catch (error) {
     return reject(typeof error?.admissionReason === 'string' ? error.admissionReason : 'candidate-proof-invalid');
   }
-  return {
-    eligible: true,
-    reason: 'new-edition-package-complete',
-    admissionRevision: admissionRevision + 1,
-    previousPublicationSHA256: previousIdentity.publicationSHA256,
-    previousResourceSHA256,
-    publicationSHA256: identity.publicationSHA256,
-    proofRevision: identity.proofRevision,
-    proofBodySHA256: identity.proofBodySHA256,
-    resourceSHA256: publicationResourceSHA256(candidateAsset),
-    comparisonSourceCount: expectedComparisonSourceCount(candidateAsset),
-    activatesPublication: false
-  };
+  return admissionResult(context, candidateAsset, admissionRevision, 'new-edition-package-complete');
+}
+
+// Same-edition recovery may add evidence, never reinterpret an already
+// qualified station. This pure decision does not publish or activate anything.
+export function evaluateAdditiveRevisionAdmission(input) {
+  const { previousAsset, candidateAsset, comparisonIndex, admissionRevision, now = Date.now() } = input;
+  const context = admissionPreconditions({ ...input, now }, true);
+  if (context.eligible === false) return context;
+  const reject = reason => ({ eligible: false, reason });
+  try {
+    const previous = previousAsset.proof, candidate = candidateAsset.proof;
+    const semantics = proof => {
+      const { entries, coverage, ...globals } = proof;
+      const { capturedAt, ...publication } = globals.publication;
+      return { ...globals, publication };
+    };
+    if (!isDeepStrictEqual(semantics(previous), semantics(candidate))) {
+      return reject('previous-qualification-semantics-changed');
+    }
+    const key = entry => `${entry.lineID}\u0000${entry.stationID}`;
+    const candidates = new Map(candidate.entries.map(entry => [key(entry), entry]));
+    for (const entry of previous.entries) {
+      const next = candidates.get(key(entry));
+      if (!next) return reject('previous-entry-removed');
+      if (!isDeepStrictEqual(entry, next) && (entry.status === 'qualified' || next.status !== 'qualified')) {
+        return reject('previous-entry-overwritten');
+      }
+    }
+    if (!hasPreservedPublicationCoverage(previousAsset, candidateAsset)) {
+      return reject('previous-date-or-direction-coverage-reduced');
+    }
+    if (!hasCompleteComparisonArchive(candidateAsset, comparisonIndex)) return reject('comparison-archive-incomplete');
+  } catch (error) {
+    return reject(typeof error?.admissionReason === 'string' ? error.admissionReason : 'candidate-proof-invalid');
+  }
+  return admissionResult(context, candidateAsset, admissionRevision, 'additive-revision-package-complete');
 }
