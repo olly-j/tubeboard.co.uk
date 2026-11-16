@@ -220,3 +220,69 @@ test('abrupt termination preserves attempt budget and pending incident for resta
   assert.equal(state.alerts.length, 1);
   assert.equal((await resumed.status()).alertPending, false);
 });
+
+// Integration uses the real durable transport with offline HTTP only.
+import { GitHubTimetableRecoveryAlert } from '../server/timetable-recovery-github-alert.js';
+const issueURL = 'https://api.github.com/repos/olly-j/My-Train-Times/issues/298';
+async function alertIntegration(t) {
+  const f = await fixture(t); const comments = []; const posts = [];
+  const transportOptions = { filePath: `${f.options.filePath}.alerts`, token: 'injected-test-token', actorID: 42, now: () => f.state.now,
+    fetchImpl: async (url, options) => {
+      if (options.method === 'GET') return new Response(JSON.stringify(comments));
+      const comment = { id: posts.length + 1, issue_url: issueURL, user: { id: 42 }, body: JSON.parse(options.body).body };
+      comments.push(comment); posts.push(comment); return new Response(JSON.stringify(comment), { status: 201 });
+    } };
+  const transport = new GitHubTimetableRecoveryAlert(transportOptions);
+  f.worker.alert = request => transport.deliver(request);
+  f.worker.authorizeAlertEdition = request => transport.authorizeEdition(request);
+  f.worker.recover = async () => { throw Error('fixed synthetic failure'); };
+  const failThree = async worker => { await worker.tick(); f.state.now += 60000; await worker.tick(); f.state.now += 300000; await worker.tick(); };
+  return { ...f, transportOptions, transport, posts, failThree };
+}
+
+test('real alert transport authorizes empty state then rollover alerts without manual supersession', async t => {
+  const f = await alertIntegration(t); await f.failThree(f.worker); assert.equal(f.posts.length, 1);
+  f.state.edition = NEXT; await f.failThree(f.worker); assert.equal(f.posts.length, 2);
+  assert.match(f.posts[0].body, new RegExp(EDITION)); assert.match(f.posts[1].body, new RegExp(NEXT));
+  await assert.rejects(f.transport.deliver({ publicationSHA256: EDITION, key: (await import('node:crypto')).createHash('sha256').update(`timetable-recovery:${EDITION}`).digest('hex'), reason: 'qualification-recovery-failed' }));
+  await assert.rejects(f.transport.authorizeEdition({ publicationSHA256: EDITION, generation: 1 }));
+});
+
+test('restart repairs crash after coordinator commit before alert store synchronization', async t => {
+  const f = await alertIntegration(t); await f.failThree(f.worker); f.state.edition = NEXT;
+  f.worker.authorizeAlertEdition = async () => { throw Error('process interrupted before alert store commit'); };
+  await f.worker.tick(); await f.worker.stop();
+  const coordinator = JSON.parse(await fs.readFile(f.options.filePath)); assert.equal(coordinator.edition, NEXT); assert.equal(coordinator.editionGeneration, 2);
+  const transport = new GitHubTimetableRecoveryAlert(f.transportOptions);
+  const resumed = new TimetableRecovery({ ...f.options, recover: async () => { throw Error('failed'); }, alert: r => transport.deliver(r), authorizeAlertEdition: r => transport.authorizeEdition(r) }); t.after(() => resumed.stop());
+  f.state.now += 21600000; await f.failThree(resumed); assert.equal(f.posts.length, 2);
+  assert.equal(JSON.parse(await fs.readFile(f.transportOptions.filePath)).authorityGeneration, 2);
+});
+
+test('restart repairs synchronization whose acknowledgement was lost after alert store commit', async t => {
+  const f = await alertIntegration(t); let lost = true;
+  f.worker.authorizeAlertEdition = async request => { await f.transport.authorizeEdition(request); if (lost) { lost = false; throw Error('ack lost'); } };
+  await f.worker.tick(); assert.equal(f.posts.length, 0); await f.worker.stop();
+  const transport = new GitHubTimetableRecoveryAlert(f.transportOptions);
+  const resumed = new TimetableRecovery({ ...f.options, recover: async () => { throw Error('failed'); }, alert: r => transport.deliver(r), authorizeAlertEdition: r => transport.authorizeEdition(r) }); t.after(() => resumed.stop());
+  f.state.now += 21600000; await f.failThree(resumed); assert.equal(f.posts.length, 1);
+  await assert.rejects(transport.authorizeEdition({ publicationSHA256: NEXT, generation: 1 }));
+});
+
+test('alert authorization storage failure does not block successful timetable recovery', async t => {
+  const f = await fixture(t, { authorizeAlertEdition: async () => { throw Error('alert storage unavailable'); } });
+  await f.worker.tick();
+  assert.equal(f.state.calls.length, 1); assert.equal(f.state.admitted, EDITION);
+  const status = await f.worker.status(); assert.equal(status.failures, 0); assert.equal(status.nextAttemptAt, 0);
+  assert.equal(status.alertPending, false); assert.equal(f.state.alerts.length, 0); assert.equal(f.state.timers.size, 0);
+});
+
+test('failed recovery retains pending incident while failed authorization prevents alert delivery', async t => {
+  const f = await fixture(t, { authorizeAlertEdition: async () => { throw Error('alert storage unavailable'); }, recover: async () => { throw Error('provider failure'); } });
+  await f.worker.tick(); f.state.now += 60000; await f.worker.tick(); f.state.now += 300000; await f.worker.tick();
+  assert.equal((await f.worker.status()).failures, 3); assert.equal((await f.worker.status()).alertPending, true);
+  assert.equal(f.state.alerts.length, 0); assert.equal(f.state.timers.size, 1);
+  f.worker.authorizeAlertEdition = async () => {};
+  f.state.now += 21600000; await f.worker.tick();
+  assert.equal(f.state.alerts.length, 1); assert.equal((await f.worker.status()).alertPending, false);
+});

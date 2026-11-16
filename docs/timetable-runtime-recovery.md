@@ -46,11 +46,16 @@ response, a later complete lookup and at least 30 minutes of quiescence permit
 a retry. A delayed original comment can therefore produce a duplicate. This
 bounded retry is intentional so an uncertain response does not permanently
 silence an operational alert. Incomplete or rate-limited lookups remain pending.
-Edition changes require explicit serialized supersession from the recovery
-controller before activation; unit tests alone do not establish that wiring.
-The reviewed transport and coordinator passed 39 focused tests, including
+The prepared coordinator now persists an edition generation before handing
+authority to the alert transport. Idempotent replay repairs either cross-store
+crash window, while older generations cannot restore a superseded incident.
+Alert authorization failure suppresses delivery for that attempt but does not
+prevent healthy timetable recovery. Server construction and credential
+configuration remain activation gates; this source is not running in production.
+The reviewed transport and coordinator passed 45 focused tests, including
 ambiguous delivery, rate limits, bounded pagination, durable restart and
-supersession. Each authorized edition starts its own lookup horizon so old
+supersession, both cross-store crash windows and failed alert authorization.
+Each authorized edition starts its own lookup horizon so old
 issue history cannot permanently exhaust the page bound for later incidents.
 
 Required before activation:

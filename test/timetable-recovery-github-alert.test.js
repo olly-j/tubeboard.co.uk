@@ -215,3 +215,14 @@ test('supersession resets bounded lookup horizon despite more than five pages of
   assert.equal((await f.disk()).firstAttemptAt, f.state.now); assert.equal(f.state.posts, 2);
   await new GitHubTimetableRecoveryAlert(f.options).deliver(request('b'.repeat(64))); assert.equal(f.state.posts, 2);
 });
+test('controller generation replay is idempotent and delayed authority cannot roll back after restart', async t => {
+  const f = await fixture(t); await f.worker.authorizeEdition({ publicationSHA256: edition, generation: 1 });
+  await f.worker.deliver(request()); const original = await f.disk();
+  await f.worker.authorizeEdition({ publicationSHA256: edition, generation: 1 }); assert.deepEqual(await f.disk(), original);
+  await f.worker.authorizeEdition({ publicationSHA256: 'b'.repeat(64), generation: 2 });
+  const restarted = new GitHubTimetableRecoveryAlert(f.options);
+  await assert.rejects(restarted.authorizeEdition({ publicationSHA256: edition, generation: 1 }));
+  await assert.rejects(restarted.authorizeEdition({ publicationSHA256: edition, generation: 2 }));
+  await assert.rejects(restarted.supersede({ expectedPublicationSHA256: 'b'.repeat(64), publicationSHA256: edition }));
+  const saved = await f.disk(); assert.equal(saved.authorityGeneration, 2); assert.equal(saved.authorizedEdition, 'b'.repeat(64)); assert.equal(saved.firstAttemptAt, null);
+});

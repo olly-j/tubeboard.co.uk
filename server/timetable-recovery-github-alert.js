@@ -11,14 +11,14 @@ const keyFor = edition => createHash('sha256').update(`timetable-recovery:${edit
 const valid = value => /^[a-f0-9]{64}$/.test(value || '');
 function normalize(state) {
   const incident = state?.incident;
-  if (state?.version !== 2 || !(state.authorizedEdition === null || valid(state.authorizedEdition)) || !(state.firstAttemptAt === null || Number.isSafeInteger(state.firstAttemptAt) && state.firstAttemptAt >= 0)
+  if (state?.version !== 2 || !(state.authorityGeneration == null || Number.isSafeInteger(state.authorityGeneration) && state.authorityGeneration >= 0) || !(state.authorizedEdition === null || valid(state.authorizedEdition)) || !(state.firstAttemptAt === null || Number.isSafeInteger(state.firstAttemptAt) && state.firstAttemptAt >= 0)
     || !(incident === null || incident && typeof incident === 'object' && !Array.isArray(incident))
     || incident && (!valid(incident.edition) || incident.key !== keyFor(incident.edition)
       || typeof incident.postStarted !== 'boolean' || typeof incident.delivered !== 'boolean'
       || !(incident.postAttemptAt === null || Number.isSafeInteger(incident.postAttemptAt) && incident.postAttemptAt >= 0)
       || incident.postStarted && incident.postAttemptAt === null || state.authorizedEdition !== incident.edition
       || !Number.isSafeInteger(incident.notBefore) || incident.notBefore < 0 || state.firstAttemptAt === null)) throw pending();
-  return { version: 2, authorizedEdition: state.authorizedEdition, firstAttemptAt: state.firstAttemptAt, incident: incident || null };
+  return { version: 2, authorityGeneration: state.authorityGeneration ?? null, authorizedEdition: state.authorizedEdition, firstAttemptAt: state.firstAttemptAt, incident: incident || null };
 }
 function bodyFor(edition, key) {
   return `Timetable recovery could not qualify publication \`${edition}\`.\n\nReason: qualification-recovery-failed.\n\n<!-- tubeboard-timetable-recovery:${key} -->`;
@@ -34,10 +34,31 @@ export class GitHubTimetableRecoveryAlert {
     this.#quiescence = quiescenceMs;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000) throw pending();
     this.#token = token; this.#actorID = actorID; this.#fetch = fetchImpl; this.#now = now; this.#timeout = timeoutMs;
-    this.#store = new TransactionalJsonStore(filePath, { version: 2, authorizedEdition: null, firstAttemptAt: null, incident: null }, normalize);
+    this.#store = new TransactionalJsonStore(filePath, { version: 2, authorityGeneration: null, authorizedEdition: null, firstAttemptAt: null, incident: null }, normalize);
   }
   deliver(request) {
     const operation = this.#tail.then(() => this.#deliver(request));
+    this.#tail = operation.catch(() => {});
+    return operation;
+  }
+  // Controller-persisted monotonically increasing generation is authoritative.
+  // Same-generation replay repairs a crash between the two durable stores;
+  // delayed callbacks cannot roll this store back to an older edition.
+  authorizeEdition({ publicationSHA256, generation }) {
+    const operation = this.#tail.then(async () => {
+      if (!valid(publicationSHA256) || !Number.isSafeInteger(generation) || generation < 0) throw pending();
+      await this.#store.transaction(state => {
+        if (state.authorityGeneration !== null && generation < state.authorityGeneration) throw pending();
+        if (state.authorityGeneration === generation) {
+          if (state.authorizedEdition !== publicationSHA256) throw pending();
+          return { changed: false };
+        }
+        state.authorityGeneration = generation;
+        if (state.authorizedEdition !== publicationSHA256) {
+          state.authorizedEdition = publicationSHA256; state.incident = null; state.firstAttemptAt = null;
+        }
+      });
+    });
     this.#tail = operation.catch(() => {});
     return operation;
   }
@@ -48,7 +69,7 @@ export class GitHubTimetableRecoveryAlert {
     const operation = this.#tail.then(async () => {
       if (!valid(expectedPublicationSHA256) || !valid(publicationSHA256) || expectedPublicationSHA256 === publicationSHA256) throw pending();
       await this.#store.transaction(state => {
-        if (state.authorizedEdition !== expectedPublicationSHA256) throw pending();
+        if (state.authorityGeneration !== null || state.authorizedEdition !== expectedPublicationSHA256) throw pending();
         // Old callbacks are fenced by authorizedEdition; their history must
         // not consume the finite lookup budget of the newly authorized edition.
         state.authorizedEdition = publicationSHA256; state.incident = null; state.firstAttemptAt = null;

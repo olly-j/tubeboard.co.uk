@@ -6,7 +6,7 @@ const SHA = /^[a-f0-9]{64}$/;
 const MAX_SCOPES = 256;
 const BATCH_SIZE = 32;
 const RETRY_MS = [60_000, 300_000, 1_800_000, 21_600_000];
-const INITIAL = { version: 1, edition: null, pending: [], completed: [], failures: 0,
+const INITIAL = { version: 1, edition: null, editionGeneration: 0, pending: [], completed: [], failures: 0,
   nextAttemptAt: 0, incident: null };
 
 function normalize(value) {
@@ -19,14 +19,16 @@ function normalize(value) {
       new Set([...value.pending, ...value.completed]).size !== value.pending.length + value.completed.length ||
       !(value.incident === null || SHA.test(value.incident?.key) &&
         typeof value.incident.delivered === 'boolean')) throw new Error('Invalid timetable recovery state');
-  return structuredClone(value);
+  const generation = value.editionGeneration ?? 0;
+  if (!Number.isSafeInteger(generation) || generation < 0) throw new Error('Invalid timetable recovery state');
+  return { ...structuredClone(value), editionGeneration: generation };
 }
 
 // One service process owns this durable queue. No GitHub job, client identity,
 // location, or upstream response is stored. The producer/admission boundary
 // alone decides whether coverage is qualified; this worker never supplies it.
 export class TimetableRecovery {
-  constructor({ filePath, observation, latestIdentity, validScope, recover, alert,
+  constructor({ filePath, observation, latestIdentity, validScope, recover, alert, authorizeAlertEdition,
     now = Date.now, schedule = setTimeout, cancel = clearTimeout, onError = () => {} }) {
     this.store = new TransactionalJsonStore(filePath, INITIAL, normalize);
     this.observation = observation;
@@ -34,6 +36,7 @@ export class TimetableRecovery {
     this.validScope = validScope;
     this.recover = recover;
     this.alert = alert;
+    this.authorizeAlertEdition = authorizeAlertEdition;
     this.now = now;
     this.worker = new SerialWorker({ run: signal => this.#run(signal),
       onError, schedule, cancel });
@@ -69,6 +72,8 @@ export class TimetableRecovery {
     const edition = observed.publicationSHA256;
     await this.store.transaction(state => {
       if (state.edition === edition) return { changed: false };
+      if (state.editionGeneration === Number.MAX_SAFE_INTEGER) throw new Error('Timetable edition generation exhausted');
+      state.editionGeneration++;
       state.edition = edition;
       // Already admitted scopes are supplied by the producer from the previous
       // proof, not re-enqueued as user traffic. Unresolved requests survive.
@@ -78,10 +83,27 @@ export class TimetableRecovery {
       state.incident = null;
     });
     let state = this.store.state;
+    let alertAuthorized = true;
+    // Persist controller authority first. A crash before/after the second store
+    // is repaired by this idempotent handoff on every subsequent worker run.
+    if (this.authorizeAlertEdition) {
+      signal.throwIfAborted();
+      try {
+        await this.authorizeAlertEdition({ publicationSHA256: edition, generation: state.editionGeneration });
+      } catch {
+        signal.throwIfAborted();
+        // Alert storage cannot gate timetable preparation/admission. Keep the
+        // incident pending and retry authorization on the next existing run.
+        alertAuthorized = false;
+      }
+      signal.throwIfAborted();
+      const current = this.observation.current();
+      if (current?.publicationSHA256 !== edition || !(Date.parse(current.observedAt) <= this.now() && Date.parse(current.expiresAt) > this.now())) return;
+    }
     const latest = await this.latestIdentity();
     if (latest?.publicationSHA256 === edition && state.pending.length === 0) {
       if (state.incident && !state.incident.delivered) {
-        if (state.nextAttemptAt <= this.now()) await this.#deliverIncident(edition, signal);
+        if (state.nextAttemptAt <= this.now()) await this.#deliverIncident(edition, signal, alertAuthorized);
         state = this.store.state;
         if (!state.incident.delivered) this.worker.scheduleRerun('recovery', Math.max(0, state.nextAttemptAt - this.now()));
       }
@@ -147,7 +169,7 @@ export class TimetableRecovery {
       }
     });
     state = this.store.state;
-    await this.#deliverIncident(edition, signal);
+    await this.#deliverIncident(edition, signal, alertAuthorized);
     state = this.store.state;
     if (failure || state.pending.length > 0) {
       this.worker.scheduleRerun('recovery', Math.max(0, state.nextAttemptAt - this.now()));
@@ -156,9 +178,12 @@ export class TimetableRecovery {
     }
   }
 
-  async #deliverIncident(edition, signal) {
+  async #deliverIncident(edition, signal, alertAuthorized = true) {
     const state = this.store.state;
-    if (state.incident && !state.incident.delivered && this.alert) {
+    const current = this.observation.current();
+    if (state.edition !== edition || current?.publicationSHA256 !== edition ||
+        !(Date.parse(current.observedAt) <= this.now() && Date.parse(current.expiresAt) > this.now())) return;
+    if (state.incident && !state.incident.delivered && this.alert && alertAuthorized) {
       try {
         // The stable incident key lets the transport deduplicate ordinary
         // restart retries. Ambiguous GitHub delivery remains best-effort;
