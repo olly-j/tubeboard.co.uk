@@ -92,6 +92,17 @@ progress does not extend it. APNs streams and their dedicated sessions are
 disposed on completion, failure or cancellation. Requests remain sequential
 within a cycle, so total cycle time still depends on the number of due records.
 
+TB-150 in service `1.4.9` admits the first remote observation after a durable,
+accepted active station-board-v2 registration. If the already armed regular
+cycle is within the existing 30-second source-attempt floor, that cycle handles
+it; otherwise registration wakes the same serialized worker for a full source
+acquisition. Duplicate pre-first-push wakes coalesce, and registration after a
+successful push does not add a wake. Full-source eligibility stays aligned with
+the existing periodic phase. Source timestamps, validity, request/APNs backoff,
+registration contracts and the 90-second cadence are unchanged. This is source
+behavior until the exact revision is deployed and read back; it does not claim
+physical-device delivery or remove stale handling for late provider data.
+
 `SIGTERM` and `SIGINT` cancel notification requests and owned timers immediately,
 stop the status monitor, and allow HTTP handlers and persistence to drain for
 up to five seconds. A graceful drain exits successfully; an exceeded deadline
