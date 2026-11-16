@@ -89,7 +89,7 @@ validates the full receipt chain and retained packages before exposing them.
 ## Bounds and rollback
 
 At most one incomplete candidate is staged at a time; staging expires after
-24 hours, with a maximum package budget of about 34 MiB. The next authenticated
+24 hours, with a maximum package budget of about 37 MiB. The next authenticated
 upload can restart an expired partial transfer for the same or a newer TfL
 edition. An interrupted directory created before its timestamp was written
 uses its last modification time for recovery. The service retains
