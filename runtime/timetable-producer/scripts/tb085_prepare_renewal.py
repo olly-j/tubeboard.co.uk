@@ -4,6 +4,7 @@ import argparse
 import base64
 import copy
 from contextlib import contextmanager
+import errno
 import hashlib
 import json
 import os
@@ -790,6 +791,27 @@ def retain_verified_cached_archive(work, captures, download):
                 or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)
                 or info.st_dev != captures.stat().st_dev):
             raise ValueError("Cached archive retention lost exclusive same-filesystem custody")
+        # Only this exclusive verified private inode may be synchronized/advised.
+        # A writable descriptor keeps fsync portable without changing any bytes.
+        private_fd = os.open(source, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            writable = os.fstat(private_fd)
+            if ((writable.st_dev, writable.st_ino, writable.st_size, writable.st_nlink)
+                    != (info.st_dev, info.st_ino, size, 1)):
+                raise ValueError("Cached archive synchronization identity changed")
+            os.fsync(private_fd)
+            advise = getattr(os, "posix_fadvise", None)
+            dontneed = getattr(os, "POSIX_FADV_DONTNEED", None)
+            if advise is not None and dontneed is not None:
+                try:
+                    # Advice is optional and does not guarantee eviction or fit.
+                    # Sync first so these completed writes are eligible for release.
+                    advise(private_fd, 0, 0, dontneed)
+                except OSError as error:
+                    if error.errno not in {errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP}:
+                        raise
+        finally:
+            os.close(private_fd)
         # Both names are inside the one exclusive TemporaryDirectory. Rename
         # keeps the same verified inode/bytes and allocates no second ZIP copy.
         # EXDEV and other errors propagate; constrained mode never falls back.
