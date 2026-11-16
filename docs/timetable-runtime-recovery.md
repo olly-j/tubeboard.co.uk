@@ -129,3 +129,7 @@ The integrated prepared service passed `npm run check` on Node 22.21.1:
 516 tests passed, followed by syntax, repository and 12-file bundle-provenance
 checks. Fly configuration validation passed. These checks do not activate the
 new modules or replace the unresolved production resource and delivery gates.
+Seven local HTTP checks also passed with all workers disabled: health, home,
+privacy, support, a bundled publication, missing publication and disabled
+observer. Earlier diagnostic attempts used incorrect health/publication paths;
+their failures are retained alongside the corrected canonical-route check.
