@@ -13,9 +13,11 @@ export class SerialWorker {
   #cyclesStarted = 0;
   #cyclesCompleted = 0;
   #aborted = 0;
+  #nextIntervalAt = null;
 
-  constructor({ run, intervalMs, initialDelayMs, onError = () => {}, onObserve = null, schedule = setTimeout, cancel = clearTimeout }) {
+  constructor({ run, intervalMs, initialDelayMs, onError = () => {}, onObserve = null, schedule = setTimeout, cancel = clearTimeout, clock = Date.now }) {
     this.run = run;
+    this.clock = clock;
     this.intervalMs = intervalMs;
     this.initialDelayMs = initialDelayMs;
     this.onError = onError;
@@ -23,6 +25,8 @@ export class SerialWorker {
     this.cancel = cancel;
     this.onObserve = onObserve;
   }
+
+  get nextIntervalAt() { return this.#stopped ? null : this.#nextIntervalAt; }
 
   start() {
     if (this.#started || this.#stopped) return;
@@ -82,6 +86,7 @@ export class SerialWorker {
   }
 
   #scheduleInterval() {
+    this.#nextIntervalAt = this.clock() + this.intervalMs;
     this.#schedule('interval', this.intervalMs, () => {
       this.#scheduleInterval();
       return this.trigger();

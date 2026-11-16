@@ -26,6 +26,25 @@ function connect(socketPath) {
     while ((end = raw.indexOf('\n')) >= 0) { frames.push(JSON.parse(raw.slice(0, end))); raw = raw.slice(end + 1); } });
   return { client, frames };
 }
+async function connectReady(socketPath) {
+  const deadline = Date.now() + 2000;
+  for (let attempt = 0; attempt < 4 && Date.now() < deadline; attempt += 1) {
+    const stream = connect(socketPath);
+    const ready = await new Promise((resolve) => {
+      const finish = (value) => {
+        clearTimeout(timer); stream.client.off('data', onData); stream.client.off('close', onClose); resolve(value);
+      };
+      const onData = () => { if (stream.frames.some((frame) => frame.version === 1)) finish(true); };
+      const onClose = () => finish(false);
+      const timer = setTimeout(() => finish(false), Math.max(0, deadline - Date.now()));
+      stream.client.on('data', onData); stream.client.once('close', onClose);
+    });
+    if (ready) return stream;
+    stream.client.destroy();
+  }
+  assert.fail('Bounded local observation unavailable');
+}
+
 async function until(predicate, milliseconds = 2000) {
   const start = Date.now();
   while (!await predicate()) { if (Date.now() - start >= milliseconds) assert.fail('Bounded local observation unavailable'); await new Promise((resolve) => setTimeout(resolve, 5)); }
@@ -137,6 +156,21 @@ test('absolute lease and frame limits close observation without touching busines
   await closed; assert.ok(second.frames.length <= 128);
 });
 
+test('observation readiness retries early closes and bounds failed connections', async (t) => {
+  const f = await fixture(t); let attempts = 0; const clients = new Set();
+  const server = net.createServer((client) => {
+    clients.add(client); client.once('close', () => clients.delete(client));
+    if (++attempts === 4) client.end(JSON.stringify({ version: 1 }) + '\n');
+    else client.destroy();
+  });
+  t.after(() => { for (const client of clients) client.destroy(); server.close(); });
+  server.listen(f.socketPath); await once(server, 'listening');
+  const stream = await connectReady(f.socketPath); stream.client.destroy();
+  assert.equal(attempts, 4); assert.equal(stream.frames[0].version, 1);
+  await assert.rejects(connectReady(f.socketPath), /Bounded local observation unavailable/);
+  assert.equal(attempts, 8);
+});
+
 test('real accepted HTTP persistence drains with a connected private observer and workers disabled', { timeout: 10000 }, async (t) => {
   const f = await fixture(t); const dataFile = path.join(f.directory, 'activities.json');
   const child = spawn(process.execPath, ['server/index.js'], { cwd: new URL('..', import.meta.url),
@@ -145,9 +179,8 @@ test('real accepted HTTP persistence drains with a connected private observer an
   const exited = once(child, 'exit'); t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
   const port = await new Promise((resolve, reject) => { let output = ''; child.stdout.on('data', (data) => { output += data; const match = /localhost:(\d+)/.exec(output); if (match) resolve(Number(match[1])); }); child.once('error', reject); });
   await until(async () => { try { return (await fs.stat(f.socketPath)).isSocket(); } catch { return false; } });
-  // Socket creation/readiness is observed without retrying any business request.
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  const stream = connect(f.socketPath); t.after(() => stream.client.destroy()); await until(() => stream.frames.length);
+  // Retry only pre-readiness observation connections, never a business request.
+  const stream = await connectReady(f.socketPath); t.after(() => stream.client.destroy());
   const fixtureBody = JSON.parse(await fs.readFile(new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url)));
   const body = JSON.stringify({ ...fixtureBody, installID: OWNED, tokenUpdatedAt: new Date().toISOString() });
   const response = new Promise((resolve, reject) => {
