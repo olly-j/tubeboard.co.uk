@@ -95,7 +95,7 @@ Narrower API batches cannot eliminate the full-archive parse cost. Preserve
 production configuration while reducing and measuring that cost.
 
 The source bundle under `runtime/timetable-producer` pins the app producer's
-exact commit and all 12 file hashes. `scripts/sync-timetable-producer.py` copies
+exact commit and all 13 file hashes. `scripts/sync-timetable-producer.py` copies
 only that reviewed committed import/data closure; `--check` verifies it without
 network or access to the app checkout. Repository checks also import its CLI.
 The Docker image does not copy or run this bundle yet. Updating the producer
@@ -133,3 +133,13 @@ Seven local HTTP checks also passed with all workers disabled: health, home,
 privacy, support, a bundled publication, missing publication and disabled
 observer. Earlier diagnostic attempts used incorrect health/publication paths;
 their failures are retained alongside the corrected canonical-route check.
+
+A later real live-parity attempt exposed a missing lazy data dependency:
+`PublishedLineMaps.json`, used by the Tram catalogue even while checking Tube
+lines. The bundle now includes that exact committed file. The deterministic
+repository check loads the real live-parity and Tram catalogues offline
+(20 lines, 39 Tram stations); a separate missing-map copy reproduces the failure.
+All original 12 files remain unchanged in this closure correction. Monitor-only
+workflow fingerprinting and the standalone API-health fixture CLI have separate
+data dependencies outside this preparation/live-parity runtime path; no claim
+of completeness is made for those dormant entry points.

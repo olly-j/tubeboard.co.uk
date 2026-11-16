@@ -50,6 +50,10 @@
     "TubeBoard Watch App/TubeStationCatalog.json": {
       "bytes": 129798,
       "sha256": "f98fbbe6e4c343fe53a99a471dd8e9c21049651717af681fc1509f33838f5590"
+    },
+    "My Train Times/PublishedLineMaps.json": {
+      "bytes": 221857,
+      "sha256": "a57b819cfe5485dedbdf761e179c3b3d7e3c4a3fef1f74684bf35d7402c40a27"
     }
   }
 }

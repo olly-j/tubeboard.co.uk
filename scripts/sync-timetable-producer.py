@@ -14,7 +14,8 @@ MODULES = ["tb085_prepare_renewal", "tb085_package_timetable_proof",
            "tb085_reference_readback", "tb085_live_parity", "tb085_tram_stations",
            "check_tfl_api_health"]
 FILES = [f"scripts/{name}.py" for name in MODULES] + [
-    "scripts/tb085_renewal_roster.json", "TubeBoard Watch App/TubeStationCatalog.json"]
+    "scripts/tb085_renewal_roster.json", "TubeBoard Watch App/TubeStationCatalog.json",
+    "My Train Times/PublishedLineMaps.json"]
 
 
 def safe_target(relative):

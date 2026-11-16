@@ -68,6 +68,22 @@ openssl x509 -in certificates/AppleRootCA-G3.pem -noout -subject -fingerprint -s
 python3 -c 'import pathlib, tomllib; tomllib.loads(pathlib.Path("fly.toml").read_text())'
 python3 scripts/sync-timetable-producer.py --check
 PYTHONDONTWRITEBYTECODE=1 python3 runtime/timetable-producer/scripts/tb085_prepare_renewal.py --help >/dev/null
+# Imports/--help do not exercise lazy catalogue dependencies. Load the exact
+# runtime path offline so missing bundled route maps fail before any HTTP work.
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PYTHON'
+import sys
+sys.path.insert(0, 'runtime/timetable-producer/scripts')
+from tb085_live_parity import catalogue
+from tb085_tram_stations import stations
+lines = catalogue()
+tram = stations()
+if not lines.get('central') or not tram or lines.get('tram') != tram:
+    raise ValueError('Bundled Tube/Tram catalogue is unavailable or inconsistent')
+if any(not isinstance(ident, str) or not ident or not isinstance(name, str) or not name
+       for stops in lines.values() for ident, name in stops.items()):
+    raise ValueError('Invalid bundled live-parity station identity')
+print(f"Verified offline live-parity catalogue: {len(lines)} lines, {len(tram)} Tram stations")
+PYTHON
 
 if grep -Rqs -- 'flyctl deploy' .github/workflows; then
   echo "Production deployment must not run in GitHub Actions." >&2
