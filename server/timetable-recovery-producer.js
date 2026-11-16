@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { validBoard } from './station-board-v2.js';
+import { validBoard, londonLocal } from './station-board-v2.js';
 import { validatePublicationResource, MAX_RESOURCE_BYTES } from './timetable-publication-resource.js';
 import { readBoundedFile, validateSourceManifest, MAX_SOURCE_MANIFEST_BYTES, MAX_SOURCE_BODY_BYTES, MAX_SOURCE_ARCHIVE_BYTES } from './timetable-source-body-resource.js';
 import { MAX_SOURCE_ZIP_BYTES } from './timetable-source-archive-transfer.js';
+import { assessCurrentPublicationCoverage } from './timetable-current-coverage.js';
 
 const BUNDLE = fileURLToPath(new URL('../runtime/timetable-producer/', import.meta.url));
 const SHA = /^[a-f0-9]{64}$/;
@@ -141,13 +142,37 @@ finally:
 
 export class TimetableRecoveryProducer {
   constructor({cacheDirectory,workDirectory,admissionStore,readCurrentResource,
-    timeoutMs=300000,outputLimit=65536,spawnChild=spawn}={}) {
+    timeoutMs=300000,outputLimit=65536,spawnChild=spawn,now=Date.now}={}) {
     if(typeof cacheDirectory!=='string' || typeof workDirectory!=='string' || !admissionStore
-        || typeof admissionStore.admitTrustedPackage!=='function' || typeof readCurrentResource!=='function'
+        || typeof admissionStore.admitTrustedPackage!=='function' || typeof readCurrentResource!=='function' || typeof now!=='function'
         || !Number.isSafeInteger(timeoutMs) || timeoutMs<1 || timeoutMs>300000
         || !Number.isSafeInteger(outputLimit) || outputLimit<1 || outputLimit>65536)throw failure('configuration');
-    Object.assign(this,{cacheDirectory,workDirectory,admissionStore,readCurrentResource,timeoutMs,outputLimit,spawnChild});
+    Object.assign(this,{cacheDirectory,workDirectory,admissionStore,readCurrentResource,timeoutMs,outputLimit,spawnChild,now});
     this.active=false;
+  }
+  // Assess the actually admitted immutable bytes, never a candidate's status
+  // label or an invented fresh response. Callers still own observation freshness.
+  async assessCurrentCoverage({identity,requestedScopes=[],at=this.now(),signal=new AbortController().signal}={}) {
+    signal?.throwIfAborted();
+    const current=this.admissionStore.latestAdmittedIdentity;
+    const same=(a,b)=>a && b && ['publicationSHA256','proofRevision','proofBodySHA256','resourceSHA256']
+      .every(key=>a[key]===b[key]);
+    if(!current || identity && !same(identity,current))throw failure('assessment-identity-changed');
+    const snapshot={...current};
+    const bytes=await this.readCurrentResource(snapshot,{signal});
+    signal?.throwIfAborted();
+    if(!same(snapshot,this.admissionStore.latestAdmittedIdentity))throw failure('assessment-identity-changed');
+    if(!Buffer.isBuffer(bytes) || bytes.length>MAX_RESOURCE_BYTES || hash(bytes)!==snapshot.resourceSHA256)
+      throw failure('assessment-resource-mismatch');
+    const metadata=validatePublicationResource(bytes,snapshot.publicationSHA256);
+    if(metadata.revision!==snapshot.proofRevision || metadata.proofBodySHA256!==snapshot.proofBodySHA256)
+      throw failure('assessment-resource-mismatch');
+    const wrapper=JSON.parse(bytes),proofBytes=Buffer.from(wrapper.proofBodyBase64,'base64');
+    const result=assessCurrentPublicationCoverage({asset:{identity:snapshot,proofBytes,proof:JSON.parse(proofBytes)},
+      comparisonIndex:this.admissionStore.sourceBodyIndex,requestedScopes,at});
+    signal?.throwIfAborted();
+    if(!same(snapshot,this.admissionStore.latestAdmittedIdentity))throw failure('assessment-identity-changed');
+    return result;
   }
   async #openHolder(roots,signal,deadline,onLost) {
     const events=new EventEmitter();let pending='',closed=false;
@@ -284,14 +309,17 @@ export class TimetableRecoveryProducer {
       const manifest=validateSourceManifest(manifestBytes,publication,candidateMetadata.proofBodySHA256);
       if(manifest.totalBodyBytes>MAX_SOURCE_ARCHIVE_BYTES)throw failure('output-limit');
       const sources=new Map(manifest.sources.map(s=>[s.bodySHA256,s]));
-      const proof=JSON.parse(Buffer.from(JSON.parse(resourceBytes).proofBodyBase64,'base64'));
-      const unresolvedScopes=scopes.filter(scope=>!proof.entries.some(e=>`${e.lineID}/${e.stationID}`===scope && e.status==='qualified'));
       signal?.throwIfAborted();
       const admitted=await this.admissionStore.admitTrustedPackage({resourceBytes,manifestBytes,previousResourceSHA256:previous.resourceSHA256,signal,
         readBody:async sha=>{const source=sources.get(sha);if(!source)throw failure('output-path');return bounded(candidate,'source-archive/'+source.bodyPath,MAX_SOURCE_BODY_BYTES);}});
       if(admitted.publicationSHA256!==publication || admitted.proofRevision!==candidateMetadata.revision
           || admitted.proofBodySHA256!==candidateMetadata.proofBodySHA256)throw failure('admission-mismatch');
-      return {unresolvedScopes};
+      const assessment=await this.assessCurrentCoverage({requestedScopes:scopes,signal});
+      if(assessment.publicationSHA256!==admitted.publicationSHA256 || assessment.proofRevision!==admitted.proofRevision
+          || assessment.proofBodySHA256!==admitted.proofBodySHA256)throw failure('admission-mismatch');
+      if(assessment.valid && assessment.serviceDay!==londonLocal(this.now()).slice(0,10))
+        throw failure('assessment-date-changed');
+      return {unresolvedScopes:assessment.valid ? scopes.filter(scope=>!assessment.coveredScopes.includes(scope)) : [...scopes]};
     }catch(error){if(signal?.aborted)throw signal.reason??failure('cancelled');
       if(error.producerReason)throw error;throw failure('failed');
     }finally{clearTimeout(deadlineTimer);

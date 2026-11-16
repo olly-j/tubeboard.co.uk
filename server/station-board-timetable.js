@@ -272,15 +272,17 @@ function departureInstant(day,serviceMinute) {
   const departure=londonClock(serviceDay+'T'+String(Math.floor(minute/60)).padStart(2,'0')+':'+String(minute%60).padStart(2,'0')+':00');
   if(!Number.isFinite(departure))fail('unsupportedCalendar');return departure;
 }
-export function qualifyTimetable(asset,responses,record,{head,serviceObservation,stationObservation,at}) {
+// Pure comparison/calendar qualification. Archived bytes can establish current
+// calendar coverage, never HTTP freshness, current status or departures to serve.
+export function assessTimetableComparison(asset,responses,record,at) {
   const {proof,entry,sets}=selectedTimetableEntry(asset,record);
-  if(!head || head.sha256!==asset.identity.publicationSHA256 || !serviceObservation || serviceObservation.expiresAt<=at || !stationObservation || stationObservation.expiresAt<=at || head.expiresAt<=at || !Array.isArray(responses) || responses.length!==sets.length)fail('unavailable');
-  const observations=[head.observedAt,serviceObservation.observedAt,stationObservation.observedAt]; const rawHashes=[], events=[], rowEvidence=[], qualification=[]; const scopedKeys=new Map();
+  if(!Number.isFinite(at) || !Array.isArray(responses) || responses.length!==sets.length)fail('unavailable');
+  const rawHashes=[],events=[],rowEvidence=[],qualification=[],scopedKeys=new Map();
   const today=londonLocal(at).slice(0,10),tomorrow=londonClock(civilNext(today,1)+'T00:00:00');
   for(const scope of sets){
     const matched=responses.filter(r=>r.direction===scope.direction);if(matched.length!==1)fail('unavailable');
-    const resource=matched[0],response=resource.value,observation=timetableHTTPObservation(resource.headers,resource.completedAt);
-    if(!resource.ok || !sha(resource.bodySHA256) || !observation || observation.expiresAt<=at)fail('unavailable');observations.push(observation.observedAt);responseShape(response);
+    const resource=matched[0],response=resource.value;
+    if(!sha(resource.bodySHA256))fail('unavailable');responseShape(response);
     if(response.lineId!==record.lineID || response.timetable.departureStopId!==record.stationID || scope.direction!==null && response.direction!==scope.direction)fail();
     const stationNames=new Map();for(const station of response.stations){if(stationNames.has(station.id))fail();stationNames.set(station.id,station.name);}
     const offered=new Set(response.timetable.routes.flatMap(r=>r.schedules.map(s=>s.name))), declared=new Set(scope.profiles.map(p=>p.name));if(offered.size!==declared.size || [...offered].some(n=>!declared.has(n)))fail();
@@ -289,15 +291,16 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
     const keys=new Set(offeredRows.map(r=>r.key));
     for(const old of scopedKeys.values())if([...keys].some(k=>old.has(k)))fail();scopedKeys.set(scope.direction,keys);
     rawHashes.push({direction:scope.direction,sha256:resource.bodySHA256});
-    const dateGaps=scope.direction===null ? entry.originatingDateGaps??[]
-      : entry.directionalSourceEvidence?.find(value=>value.direction===scope.direction)?.originatingDateGaps??[];
+    const metadata=scope.direction===null?entry:(entry.directionalSourceEvidence?.find(value=>value.direction===scope.direction)??entry);
+    if(!metadata || !dateKey(metadata.operatingStartDate) || !dateKey(metadata.operatingEndDate))fail('unsupportedCalendar');
+    const dateGaps=metadata.originatingDateGaps??[];
     const yesterday=civilNext(today,-1),start=londonClock(today+'T00:00:00');
     // Convert every offered row before choosing: no excluded/wrong-profile row
     // or later ambiguous clock may become evidence that yesterday is absent.
     const previousDepartures=offeredRows.map(row=>departureInstant(yesterday,row.minute));
     const days=previousDepartures.some(departure=>departure>=Math.max(at,start) && departure<tomorrow)?[yesterday,today]:[today];
     for(const day of days){
-      if(day<entry.operatingStartDate || day>entry.operatingEndDate || day<proof.holidayCoverageStart || day>proof.holidayCoverageEnd)fail('unsupportedCalendar');
+      if(day<entry.operatingStartDate || day>entry.operatingEndDate || day<metadata.operatingStartDate || day>metadata.operatingEndDate || day<proof.holidayCoverageStart || day>proof.holidayCoverageEnd)fail('unsupportedCalendar');
       if(dateGaps.some(gap=>gap.serviceDate===day))fail('unsupportedCalendar');
       if(proof.bankHolidayDates.includes(day)){if(scope.profiles.some(p=>p.originatingServiceDateRanges!==undefined))fail('unsupportedCalendar');continue;}
       const eligible=scope.profiles.filter(p=>p.weekdays.includes(weekday(day)) && (p.originatingServiceDateRanges===undefined || p.originatingServiceDateRanges.some(r=>r.startDate<=day && day<=r.endDate)));
@@ -321,6 +324,16 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
       }
     }
   }
+  return {proof,entry,sets,rawHashes,events,rowEvidence,qualification,tomorrow};
+}
+export function qualifyTimetable(asset,responses,record,{head,serviceObservation,stationObservation,at}) {
+  const selected=selectedTimetableEntry(asset,record);
+  if(!head || head.sha256!==asset.identity.publicationSHA256 || !serviceObservation || serviceObservation.expiresAt<=at || !stationObservation || stationObservation.expiresAt<=at || head.expiresAt<=at || !Array.isArray(responses) || responses.length!==selected.sets.length)fail('unavailable');
+  const observations=[head.observedAt,serviceObservation.observedAt,stationObservation.observedAt];
+  for(const scope of selected.sets){const matched=responses.filter(r=>r.direction===scope.direction);if(matched.length!==1)fail('unavailable');
+    const resource=matched[0],observation=timetableHTTPObservation(resource.headers,resource.completedAt);
+    if(!resource.ok || !sha(resource.bodySHA256) || !observation || observation.expiresAt<=at)fail('unavailable');observations.push(observation.observedAt);}
+  const {proof,entry,sets,rawHashes,events,rowEvidence,qualification,tomorrow}=assessTimetableComparison(asset,responses,record,at);
   const observedAt=Math.min(...observations), expiresAt=Math.min(observedAt+600000,tomorrow);
   if(!Number.isFinite(observedAt) || observedAt>at || at>=expiresAt || new Set(events.map(e=>e.id)).size!==events.length)fail('unavailable');
   for(const e of events){e.receivedAt=observedAt;e.expiresAt=expiresAt;}

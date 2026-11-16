@@ -21,8 +21,8 @@ Do not replace or reset the ledger to make an old binary start.
 
 `TimetableRecovery` is a prepared coordinator; it is not wired into the server.
 It joins repeated validated station requests, limits each batch to 32 scopes
-and the queue plus completed set to 256 scopes, and runs one preparation at a
-time through the existing `SerialWorker`. Healthy unchanged editions do no
+and reserves up to 256 required scopes plus 256 nonmandatory demands. It runs
+one preparation at a time through the existing `SerialWorker`. Healthy unchanged editions do no
 preparation. The existing observer is the intended trigger; this module adds
 no periodic polling loop. Qualification success requires a matching admitted
 identity and a still-current official edition. The producer must report any
@@ -32,7 +32,7 @@ Attempt reservations survive restart. Failures retry after 1, 5 and 30 minutes,
 then at most every six hours, rotating unresolved requests so other stations
 can progress. A new official edition resets the old edition's retry budget.
 Graceful cancellation retains pending work without counting a failed attempt.
-Three unsuccessful attempts retain one incident per edition. The injected
+Three unsuccessful attempts retain one incident per continuous unresolved episode. The injected
 alert transport uses its stable incident key for best-effort deduplication. Failed or absent alert
 delivery remains pending; it is never recorded as acknowledged. Neither raw
 provider errors nor customer identifiers are persisted in this state.
@@ -98,7 +98,7 @@ The source bundle under `runtime/timetable-producer` pins the app producer's
 exact commit and all 13 file hashes. `scripts/sync-timetable-producer.py` copies
 only that reviewed committed import/data closure; `--check` verifies it without
 network or access to the app checkout. Repository checks also import its CLI.
-The Docker image does not copy or run this bundle yet. Updating the producer
+The prepared Docker image copies this closure; server recovery is not activated. Updating the producer
 requires a reviewed source commit and an explicit bundle sync, not downloading
 arbitrary code into the running service.
 
@@ -235,6 +235,53 @@ This does not establish notification cohosting or full recovery capacity.
 Actual retained child stderr confirms that preparation then failed the
 unchanged prior-date coverage guard for twelve station/date pairs. No live
 comparison or admission ran, and no packaged proof was emitted. Historical
-source clocks and cache receipts remain byte-identical. The current-service-day
-contract correction is still a proposal; neither admission nor calendar guards
-have been weakened. Production and server activation remain unchanged.
+source clocks and cache receipts remain byte-identical. At that checkpoint the current-service-day correction remained a proposal.
+Production and server activation were unchanged; the subsequent implementation
+is described below.
+
+
+## Current service-day recovery (ADR024, prepared)
+
+The canonical app ADR024 and producer bundle at
+`f8e224b292e1cc0949b3719a8a03c614fc697963` replace the cross-edition demand to
+preserve every old future date with verified coverage of the full current
+London service day. Every previously qualified station/direction remains
+mandatory. Yesterday is also required when structurally valid offered rows
+can still contribute at the assessment instant. Future conflicts remain
+explicit gaps: no conflicting XML winner, copied trains or inferred closure.
+Same-edition additive immutability remains unchanged.
+
+Admission, producer readback and recovery use the same pure comparison core
+as runtime qualification, with the actual archived source bytes bound to the
+exact publication and proof identity. Observation freshness remains a separate
+runtime gate. Recovery reassesses the current day and proof on the existing
+worker, including after restart; it cannot treat an old completed request as
+permanent coverage. Required scopes and accepted demand have separate bounded
+reservations of 256 each, with batches of 32. The combined queue never exceeds
+512 scopes.
+
+An unresolved incident continues across calendar changes. A verified healthy
+interval permits a distinct later incident for the same edition. Durable
+transport custody and one bounded oldest resolution handoff preserve recovery
+messages through offline periods and restart. This adds no polling job or
+scheduled GitHub workflow. A rollback reader must support the new incident
+episode semantics; an older reader is not a verified rollback merely because
+it accepts the outer state version.
+
+The initial integrated source check passed all 588 Node 22 tests. Independent
+review then found a new-request race at the queued healthy-state write; its
+correction rechecks pending requests within the transaction. Both prior-phase
+regressions and all 110 affected coordinator, transport, producer and assessment
+tests passed. Integration acceptance remains separate.
+The canonical producer separately passed 53 preparation and 16 live-parity
+tests. These are source checks, not production or end-to-end capacity proof.
+
+The offline image harness replays retained HTTP responses at their original
+clocks. It assesses after the latest retained comparison response; repeated
+final-resource, official-HEAD and missing-resource checks explicitly reuse
+original captures, including the original 404. This historical boundary replay
+is not a temporally coherent fresh network acceptance run or production
+readback. Full preparation/local admission, current live comparisons,
+notification cohosting at the existing memory limit, server activation and
+restricted alert credentials remain delivery gates. No hosting increase or
+production activation is included in this prepared change.

@@ -18,19 +18,34 @@ const archive=Buffer.from('offline adapter archive fixture');
 const publication=hash(archive);
 const priorPub='788955e868b7ae85219db15b4e05c2f187bdf3be1767f16b1c369b60dea08ad7';
 const sourceRoot=path.join(root,'server/timetable-source-archives/v1',priorPub,'0c5fba0afe99c032a4477fc9126158f26aeafc3ad9fdd173c3d6c489f2fb191c');
+const seedWrapper=JSON.parse(await fs.readFile(path.join(root,'server/timetable-publications/v1',priorPub+'.json')));
+const seedProof=JSON.parse(Buffer.from(seedWrapper.proofBodyBase64,'base64'));
+const seedManifest=JSON.parse(await fs.readFile(path.join(sourceRoot,'manifest.json')));
+const seedSources=await Promise.all(seedManifest.sources.map(async source=>({...source,body:await fs.readFile(path.join(sourceRoot,source.bodyPath))})));
+const calendarNow=Date.parse('2026-11-16T20:51:30Z');
 function resource(pub,entries,revision=1){
- const proof=Buffer.from(JSON.stringify({schemaVersion:1,timezone:'Europe/London',publication:{sha256:pub,url:'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip'},entries}));
+ const proof=Buffer.from(JSON.stringify({...seedProof,publication:{...seedProof.publication,sha256:pub},
+  entries:entries.map(entry=>({...structuredClone(seedProof.entries.find(seed=>seed.lineID===entry.lineID && seed.stationID===entry.stationID)),...entry}))}));
  return canonicalResource({schemaVersion:1,publicationSHA256:pub,proofRevision:revision,proofBodySHA256:hash(proof),proofBodyBase64:proof.toString('base64')});
 }
 async function setup(t,options={}){
  const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'tb-recovery-producer-'));t.after(()=>fs.rm(tmp,{recursive:true,force:true}));
  const fixtureArchive=options.archive??archive;
  const priorBytes=resource(priorPub,[{lineID:'northern',stationID:'940GZZLUEGW',status:'qualified'}]);
- const priorWrapper=JSON.parse(priorBytes),calls=[],admissions=[];
+ const priorWrapper=JSON.parse(priorBytes),calls=[],admissions=[];let currentBytes=priorBytes;
  const store={latestAdmittedIdentity:{publicationSHA256:priorPub,resourceSHA256:hash(priorBytes),proofBodySHA256:priorWrapper.proofBodySHA256,proofRevision:1},
   async admitTrustedPackage(value){admissions.push(value);const wrapper=JSON.parse(value.resourceBytes),manifest=JSON.parse(value.manifestBytes);
    const first=manifest.sources[0];assert.equal(hash(await value.readBody(first.bodySHA256)),first.bodySHA256);
+   currentBytes=value.resourceBytes;
+   this.latestAdmittedIdentity={publicationSHA256:wrapper.publicationSHA256,proofRevision:wrapper.proofRevision,
+    proofBodySHA256:wrapper.proofBodySHA256,resourceSHA256:hash(currentBytes)};
    return {publicationSHA256:wrapper.publicationSHA256,proofRevision:wrapper.proofRevision,proofBodySHA256:wrapper.proofBodySHA256};}};
+ Object.defineProperty(store,'sourceBodyIndex',{get(){
+  const identity=this.latestAdmittedIdentity;
+  const records=new Map(seedSources.map(source=>{const record={...source,...identity,direction:source.direction??'default'};
+   return [[identity.publicationSHA256,identity.proofBodySHA256,source.lineID,source.stationID,record.direction,source.bodySHA256].join('\0'),record];}));
+  return {isUnavailable:(pub,proof)=>pub!==identity.publicationSHA256 || proof!==identity.proofBodySHA256,get:key=>records.get(key)};
+ },configurable:true});
  const spawnChild=(command,args,opts)=>{
   assert.equal(command,'/usr/bin/python3');assert.deepEqual(args.slice(0,3),['-I','-B','-c']);
   assert.deepEqual(Object.keys(opts.env).sort(),['LANG','PATH','TEMP','TMP','TMPDIR']);
@@ -69,7 +84,7 @@ async function setup(t,options={}){
   }catch{emit({status:'done',code:1});}});
   });return child;
  };
- const config={cacheDirectory:path.join(tmp,'cache'),workDirectory:path.join(tmp,'work'),admissionStore:store,readCurrentResource:async()=>priorBytes,spawnChild,...options.config};
+ const config={cacheDirectory:path.join(tmp,'cache'),workDirectory:path.join(tmp,'work'),admissionStore:store,readCurrentResource:async()=>currentBytes,spawnChild,now:()=>calendarNow,...options.config};
  const producer=new TimetableRecoveryProducer(config);
  return {producer,tmp,calls,admissions,store,priorBytes,config};
 }
@@ -82,6 +97,68 @@ test('verified predecessor, bounded bundle and cache are passed to preparation; 
  await x.producer.recover({publicationSHA256:publication,scopes:[scope]});
  assert.equal(x.calls.filter(c=>c.mode==='acquire').length,1);assert.deepEqual(await fs.readFile(path.join(x.tmp,'cache',publication,'metadata.json')),metadata);
  assert.deepEqual((await fs.readdir(path.join(x.tmp,'work'))).filter(n=>n!=='.producer-lock'),[]);
+});
+
+test('current assessment reads real comparison bytes and rejects missing archives despite qualified status',async t=>{
+ const x=await setup(t);
+ const first=await x.producer.assessCurrentCoverage({requestedScopes:[scope]});
+ assert.equal(first.valid,true);assert.deepEqual(first.coveredScopes,[scope]);
+ assert.equal(first.serviceDay,'2026-11-16');assert.equal(first.assessedAt,calendarNow);
+ Object.defineProperty(x.store,'sourceBodyIndex',{value:{isUnavailable:()=>false,get:()=>undefined}});
+ assert.deepEqual(await x.producer.recover({publicationSHA256:publication,scopes:[scope]}),{unresolvedScopes:[scope]});
+});
+
+test('an admitted qualified entry with a current date gap remains unresolved',async t=>{
+ const x=await setup(t,{entries:[{lineID:'northern',stationID:'940GZZLUEGW',status:'qualified',
+  originatingDateGaps:[{serviceDate:'2026-11-16',reason:'publication member conflict'}]}]});
+ assert.deepEqual(await x.producer.recover({publicationSHA256:publication,scopes:[scope]}),{unresolvedScopes:[scope]});
+ assert.equal(x.admissions.length,1);
+});
+
+test('future gap does not claim current failure but becomes unresolved on its service day',async t=>{
+ const x=await setup(t,{entries:[{lineID:'northern',stationID:'940GZZLUEGW',status:'qualified',
+  originatingDateGaps:[{serviceDate:'2026-11-17',reason:'publication member conflict'}]}]});
+ assert.deepEqual(await x.producer.recover({publicationSHA256:publication,scopes:[scope]}),{unresolvedScopes:[]});
+ const tomorrow=await x.producer.assessCurrentCoverage({requestedScopes:[scope],at:Date.parse('2026-11-17T20:51:30Z')});
+ assert.deepEqual(tomorrow.coveredScopes,[]);assert.deepEqual(tomorrow.unresolvedScopes,[scope]);
+});
+
+test('assessment fences exact identity changes while the admitted resource is being read',async t=>{
+ const x=await setup(t),identity={...x.store.latestAdmittedIdentity};
+ const producer=new TimetableRecoveryProducer({...x.config,readCurrentResource:async()=>{
+  x.store.latestAdmittedIdentity={...identity,resourceSHA256:'f'.repeat(64)};return x.priorBytes;
+ }});
+ await assert.rejects(producer.assessCurrentCoverage({identity,requestedScopes:[scope]}),/assessment-identity-changed/);
+ await assert.rejects(x.producer.assessCurrentCoverage({identity,requestedScopes:[scope]}),/assessment-identity-changed/);
+});
+
+test('assessment rejects replaced resource bytes and preserves cancellation',async t=>{
+ const x=await setup(t);
+ const producer=new TimetableRecoveryProducer({...x.config,readCurrentResource:async()=>Buffer.from('{}')});
+ await assert.rejects(producer.assessCurrentCoverage({requestedScopes:[scope]}),/assessment-resource-mismatch/);
+ const controller=new AbortController();controller.abort(new Error('cancelled assessment'));
+ await assert.rejects(x.producer.assessCurrentCoverage({requestedScopes:[scope],signal:controller.signal}),/cancelled assessment/);
+});
+
+test('standalone assessment supplies a signal to the existing resource reader',async t=>{
+ const x=await setup(t);
+ const producer=new TimetableRecoveryProducer({...x.config,readCurrentResource:async(identity,{signal})=>{
+  assert.ok(signal instanceof AbortSignal);signal.throwIfAborted();
+  return x.config.readCurrentResource(identity,{signal});
+ }});
+ assert.deepEqual((await producer.assessCurrentCoverage({requestedScopes:[scope]})).coveredScopes,[scope]);
+});
+
+test('recovery cannot complete from yesterday assessment when its read crosses midnight',async t=>{
+ let clock=calendarNow;
+ const x=await setup(t,{config:{now:()=>clock}});
+ const producer=new TimetableRecoveryProducer({...x.config,readCurrentResource:async(...args)=>{
+  const bytes=await x.config.readCurrentResource(...args);
+  if(x.store.latestAdmittedIdentity.publicationSHA256===publication)clock=Date.parse('2026-11-17T00:00:00Z');
+  return bytes;
+ }});
+ await assert.rejects(producer.recover({publicationSHA256:publication,scopes:[scope]}),/assessment-date-changed/);
+ assert.equal(x.admissions.length,1);
 });
 test('rollover without pending scopes seeds only actual validated prior qualification; no history fails closed',async t=>{
  const x=await setup(t);await x.producer.recover({publicationSHA256:publication,scopes:[]});assert.deepEqual(x.calls[1].scopes,[scope]);

@@ -145,6 +145,36 @@ def require_no_date_coverage_loss(previous_body, candidate_body, *, from_date=No
         raise ValueError("Previously admitted operating dates lost: " + "; ".join(losses[:12]))
 
 
+def require_preserved_station_directions(previous_body, candidate_body):
+    """ADR024: retain all qualified scopes; new editions do not promise old dates."""
+    def indexed(body):
+        entries = {(e["lineID"], e["stationID"]): e for e in body["entries"]}
+        if len(entries) != len(body["entries"]):
+            raise ValueError("Duplicate publication station scope")
+        return entries
+    def directions(entry):
+        definitions = entry.get("directionalDefinitions")
+        if definitions is None:
+            if not entry["profiles"]:
+                raise ValueError("Missing qualified origin profiles")
+            return {None}
+        values = [d["direction"] for d in definitions]
+        evidence = [d["direction"] for d in entry.get("directionalSourceEvidence", [])]
+        if (entry["profiles"] or not 1 <= len(values) <= 2 or len(set(values)) != len(values)
+                or any(v not in {"inbound", "outbound"} for v in values)
+                or sorted(values) != sorted(evidence)):
+            raise ValueError("Invalid qualified direction evidence")
+        return set(values)
+    candidates = indexed(candidate_body)
+    for pair, previous in indexed(previous_body).items():
+        if previous.get("status") != "qualified":
+            continue
+        candidate = candidates.get(pair)
+        if (candidate is None or candidate.get("status") != "qualified"
+                or not directions(previous) <= directions(candidate)):
+            raise ValueError("Previously qualified station/direction lost: " + "/".join(pair))
+
+
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
@@ -1090,8 +1120,10 @@ def prepare(publication, output, *, same_edition=False, additive_only=False, exp
                                                  monitor.request, monitor.check_fresh, deadline)
         coverage = coverage_report(roster, proof)
         # Departures after midnight can still belong to yesterday's service day.
-        require_no_date_coverage_loss(previous_body, proof,
-                                      from_date=None if same_edition else today - timedelta(days=1))
+        if same_edition:
+            require_no_date_coverage_loss(previous_body, proof)
+        else:
+            require_preserved_station_directions(previous_body, proof)
         if not additive_only:
             live_errors = monitor.check_live_coverage(proof, roster, today, monitor.request)
             if live_errors:

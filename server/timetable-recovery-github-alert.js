@@ -7,18 +7,20 @@ const ISSUE = 'https://api.github.com/repos/olly-j/My-Train-Times/issues/298';
 const LIMIT = 262144, PAGES = 5;
 export const ALERT_QUIESCENCE_MS = 30 * 60 * 1000;
 const pending = () => new Error('Timetable operator alert remains pending');
-const keyFor = edition => createHash('sha256').update(`timetable-recovery:${edition}`).digest('hex');
+const keyFor = (edition, episode = 0) => createHash('sha256').update(`timetable-recovery:${edition}${episode ? `:episode:${episode}` : ''}`).digest('hex');
 const valid = value => /^[a-f0-9]{64}$/.test(value || '');
 function normalize(state) {
   const incident = state?.incident;
-  if (state?.version !== 2 || !(state.authorityGeneration == null || Number.isSafeInteger(state.authorityGeneration) && state.authorityGeneration >= 0) || !(state.authorizedEdition === null || valid(state.authorizedEdition)) || !(state.firstAttemptAt === null || Number.isSafeInteger(state.firstAttemptAt) && state.firstAttemptAt >= 0)
+  const episode = state?.authorizedEpisode ?? 0, resolved = state?.authorizedResolved ?? false;
+  if (!Number.isSafeInteger(episode) || episode < 0 || typeof resolved !== 'boolean' || state?.version !== 2 || !(state.authorityGeneration == null || Number.isSafeInteger(state.authorityGeneration) && state.authorityGeneration >= 0) || !(state.authorizedEdition === null || valid(state.authorizedEdition)) || !(state.firstAttemptAt === null || Number.isSafeInteger(state.firstAttemptAt) && state.firstAttemptAt >= 0)
     || !(incident === null || incident && typeof incident === 'object' && !Array.isArray(incident))
-    || incident && (!valid(incident.edition) || incident.key !== keyFor(incident.edition)
+    || incident && (!valid(incident.edition) || incident.key !== keyFor(incident.edition, episode)
+      || !(incident.resolved === undefined || typeof incident.resolved === 'boolean') || Boolean(incident.resolved) !== resolved
       || typeof incident.postStarted !== 'boolean' || typeof incident.delivered !== 'boolean'
       || !(incident.postAttemptAt === null || Number.isSafeInteger(incident.postAttemptAt) && incident.postAttemptAt >= 0)
       || incident.postStarted && incident.postAttemptAt === null || state.authorizedEdition !== incident.edition
       || !Number.isSafeInteger(incident.notBefore) || incident.notBefore < 0 || state.firstAttemptAt === null)) throw pending();
-  return { version: 2, authorityGeneration: state.authorityGeneration ?? null, authorizedEdition: state.authorizedEdition, firstAttemptAt: state.firstAttemptAt, incident: incident || null };
+  return { version: 2, authorizedEpisode: episode, authorizedResolved: resolved, authorityGeneration: state.authorityGeneration ?? null, authorizedEdition: state.authorizedEdition, firstAttemptAt: state.firstAttemptAt, incident: incident || null };
 }
 function bodyFor(edition, key) {
   return `Timetable recovery could not qualify publication \`${edition}\`.\n\nReason: qualification-recovery-failed.\n\n<!-- tubeboard-timetable-recovery:${key} -->`;
@@ -34,7 +36,7 @@ export class GitHubTimetableRecoveryAlert {
     this.#quiescence = quiescenceMs;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 10000) throw pending();
     this.#token = token; this.#actorID = actorID; this.#fetch = fetchImpl; this.#now = now; this.#timeout = timeoutMs;
-    this.#store = new TransactionalJsonStore(filePath, { version: 2, authorityGeneration: null, authorizedEdition: null, firstAttemptAt: null, incident: null }, normalize);
+    this.#store = new TransactionalJsonStore(filePath, { version: 2, authorizedEpisode: 0, authorizedResolved: false, authorityGeneration: null, authorizedEdition: null, firstAttemptAt: null, incident: null }, normalize);
   }
   deliver(request) {
     const operation = this.#tail.then(() => this.#deliver(request));
@@ -44,19 +46,31 @@ export class GitHubTimetableRecoveryAlert {
   // Controller-persisted monotonically increasing generation is authoritative.
   // Same-generation replay repairs a crash between the two durable stores;
   // delayed callbacks cannot roll this store back to an older edition.
-  authorizeEdition({ publicationSHA256, generation }) {
+  authorizeEdition({ publicationSHA256, generation, episode = 0, resolved = false }) {
     const operation = this.#tail.then(async () => {
-      if (!valid(publicationSHA256) || !Number.isSafeInteger(generation) || generation < 0) throw pending();
+      if (!valid(publicationSHA256) || !Number.isSafeInteger(generation) || generation < 0
+        || !Number.isSafeInteger(episode) || episode < 0 || typeof resolved !== 'boolean') throw pending();
       await this.#store.transaction(state => {
         if (state.authorityGeneration !== null && generation < state.authorityGeneration) throw pending();
         if (state.authorityGeneration === generation) {
-          if (state.authorizedEdition !== publicationSHA256) throw pending();
+          if (state.authorizedEdition !== publicationSHA256 || state.authorizedEpisode !== episode || state.authorizedResolved !== resolved) throw pending();
           return { changed: false };
         }
+        if (state.authorizedEdition === publicationSHA256) {
+          if (episode === state.authorizedEpisode) {
+            if (state.authorizedResolved && !resolved) throw pending();
+          } else if (episode <= state.authorizedEpisode || !state.authorizedResolved) throw pending();
+        } else if (episode !== 0) throw pending();
         state.authorityGeneration = generation;
-        if (state.authorizedEdition !== publicationSHA256) {
-          state.authorizedEdition = publicationSHA256; state.incident = null; state.firstAttemptAt = null;
+        if (state.authorizedEdition !== publicationSHA256 || state.authorizedEpisode !== episode) {
+          state.incident = null; state.firstAttemptAt = null;
         }
+        state.authorizedEdition = publicationSHA256; state.authorizedEpisode = episode; state.authorizedResolved = resolved;
+        // Unobserved episodes that recovered while transport was unavailable may
+        // be coalesced, only after the retained active episode was resolved.
+        // Resolution is not delivery. Retain ambiguous/pending custody until a
+        // later explicitly authorized episode supersedes this resolved record.
+        if (resolved && state.incident) state.incident.resolved = true;
       });
     });
     this.#tail = operation.catch(() => {});
@@ -72,25 +86,26 @@ export class GitHubTimetableRecoveryAlert {
         if (state.authorityGeneration !== null || state.authorizedEdition !== expectedPublicationSHA256) throw pending();
         // Old callbacks are fenced by authorizedEdition; their history must
         // not consume the finite lookup budget of the newly authorized edition.
-        state.authorizedEdition = publicationSHA256; state.incident = null; state.firstAttemptAt = null;
+        state.authorizedEdition = publicationSHA256; state.authorizedEpisode = 0; state.authorizedResolved = false; state.incident = null; state.firstAttemptAt = null;
       });
     });
     this.#tail = operation.catch(() => {});
     return operation;
   }
-  async #deliver({ key, publicationSHA256: edition, reason, signal }) {
-    if (!valid(edition) || key !== keyFor(edition) || reason !== 'qualification-recovery-failed'
+  async #deliver({ key, publicationSHA256: edition, episode = 0, reason, signal }) {
+    if (!Number.isSafeInteger(episode) || episode < 0 || !valid(edition) || key !== keyFor(edition, episode) || reason !== 'qualification-recovery-failed'
       || !Number.isSafeInteger(this.#actorID) || this.#actorID < 1
       || typeof this.#token !== 'string' || !this.#token.trim() || signal?.aborted) throw pending();
     const now = this.#now();
     if (!Number.isSafeInteger(now) || now < 0) throw pending();
     await this.#store.transaction(state => {
+      if (state.authorizedResolved || episode !== state.authorizedEpisode || state.authorityGeneration === null && episode !== 0) throw pending();
       if (state.authorizedEdition !== null && state.authorizedEdition !== edition) throw pending();
       state.authorizedEdition ??= edition;
       if (state.incident?.key === key) return { changed: false };
       if (state.incident && !state.incident.delivered) throw pending();
       state.firstAttemptAt ??= now;
-      state.incident = { key, edition, postStarted: false, postAttemptAt: null, delivered: false, notBefore: 0 };
+      state.incident = { key, edition, postStarted: false, postAttemptAt: null, delivered: false, resolved: false, notBefore: 0 };
     });
     if (this.#store.state.incident.delivered) return;
     if (this.#store.state.incident.notBefore > now) throw pending();
@@ -106,7 +121,7 @@ export class GitHubTimetableRecoveryAlert {
     finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   }
   async #request(url, method, body, signal) {
-    signal.throwIfAborted();
+    signal.throwIfAborted(); const expectedKey = this.#store.state.incident?.key;
     const response = await this.#fetch(url, { method, signal, redirect: 'error', headers: {
       Accept: 'application/vnd.github+json', Authorization: `Bearer ${this.#token}`,
       'X-GitHub-Api-Version': '2026-03-10', 'User-Agent': 'TubeBoard-timetable-recovery',
@@ -120,13 +135,15 @@ export class GitHubTimetableRecoveryAlert {
       if (retry !== null) delay = /^\d+$/.test(retry) ? Number(retry) * 1000 : Date.parse(retry) - this.#now();
       if (response.headers.get('x-ratelimit-remaining') === '0') delay = Math.max(delay || 0, Number(response.headers.get('x-ratelimit-reset')) * 1000 - this.#now());
       if (Number.isFinite(delay) && delay > 0) {
+        signal.throwIfAborted();
         const deadline = Math.min(Number.MAX_SAFE_INTEGER, this.#now() + Math.ceil(delay));
-        await this.#store.transaction(state => { state.incident.notBefore = Math.max(state.incident.notBefore, deadline); });
+        await this.#store.transaction(state => { signal.throwIfAborted(); if (state.incident?.key !== expectedKey || state.incident.resolved) throw pending(); state.incident.notBefore = Math.max(state.incident.notBefore, deadline); });
       }
       // Explicit rejection can retry on the next coordinator attempt. Ambiguous
       // failures instead require quiescence plus a complete marker lookup.
+      signal.throwIfAborted();
       if (method === 'POST' && [400, 401, 403, 404, 422, 429].includes(response.status)) {
-        await this.#store.transaction(state => { state.incident.postStarted = false; });
+        await this.#store.transaction(state => { signal.throwIfAborted(); if (state.incident?.key !== expectedKey || state.incident.resolved) throw pending(); state.incident.postStarted = false; });
       }
       throw pending();
     }
@@ -151,7 +168,7 @@ export class GitHubTimetableRecoveryAlert {
       const response = await this.#request(url.href, 'GET', null, signal);
       if (response.status !== 200 || !Array.isArray(response.value) || response.value.length > 100
         || response.value.some(comment => !Number.isSafeInteger(comment?.id) || comment.id < 1 || typeof comment.body !== 'string' || comment.issue_url !== ISSUE)) throw pending();
-      if (response.value.some(matches)) { await this.#markDelivered(signal); return; }
+      if (response.value.some(matches)) { await this.#markDelivered(signal, key); return; }
       const links = response.link?.split(',') || [];
       if (links.some(link => !/^\s*<[^>]+>;\s*rel="(?:next|prev|first|last)"\s*$/.test(link))) throw pending();
       const next = links.filter(link => /rel="next"/.test(link));
@@ -169,14 +186,14 @@ export class GitHubTimetableRecoveryAlert {
     // accepted comment can appear after this complete lookup, causing a rare
     // duplicate. Delayed retry favors eventual alert delivery over silent loss.
     signal.throwIfAborted();
-    await this.#store.transaction(state => { state.incident.postStarted = true; state.incident.postAttemptAt = this.#now(); });
+    await this.#store.transaction(state => { signal.throwIfAborted(); if (state.incident?.key !== key || state.incident.resolved) throw pending(); state.incident.postStarted = true; state.incident.postAttemptAt = this.#now(); });
     signal.throwIfAborted();
     const response = await this.#request(COMMENTS, 'POST', body, signal);
     if (response.status !== 201 || !matches(response.value)) throw pending();
-    await this.#markDelivered(signal);
+    await this.#markDelivered(signal, key);
   }
-  async #markDelivered(signal) {
+  async #markDelivered(signal, key) {
     signal.throwIfAborted();
-    await this.#store.transaction(state => { state.incident.delivered = true; });
+    await this.#store.transaction(state => { signal.throwIfAborted(); if (state.incident?.key !== key || state.incident.resolved) throw pending(); state.incident.delivered = true; });
   }
 }

@@ -37,8 +37,15 @@ const priorBytes=await fs.readFile(path.join(fixtures,'previous-resource.body'))
 const priorDirectory=path.join(evidence,'prior'),emptyArchives=path.join(evidence,'empty-archives');
 await fs.mkdir(priorDirectory,{recursive:true});await fs.mkdir(emptyArchives,{recursive:true});
 await fs.writeFile(path.join(priorDirectory,priorWrapper.publicationSHA256+'.json'),priorBytes);
-const clock=Date.parse('2026-11-16T20:51:30.845807Z');
-const observation={current:()=>({schemaVersion:1,source:'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip',publicationSHA256:publication,observedAt:new Date(clock).toISOString(),expiresAt:new Date(clock+600000).toISOString()})};
+const observedAt=Date.parse('2026-11-16T20:51:30.845807Z');
+const retainedComparisons=JSON.parse(await fs.readFile(path.join(fixtures,'live-fourteen-current/summary.json'))).requests;
+// Assess only after every retained comparison was received. Preserve the actual
+// observation clock; these original HTTP boundaries are not a fresh live run.
+const comparisonTimes=retainedComparisons.map(record=>Date.parse(record.receivedAt));
+assert.ok(comparisonTimes.length>0 && comparisonTimes.every(Number.isFinite));
+const clock=Math.max(observedAt,...comparisonTimes)+1;
+assert.ok(clock<observedAt+600000);
+const observation={current:()=>({schemaVersion:1,source:'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip',publicationSHA256:publication,observedAt:new Date(observedAt).toISOString(),expiresAt:new Date(observedAt+600000).toISOString()})};
 const baseSourceIndex=await loadSourceBodyArchiveIndex({publicationDirectory:priorDirectory,archiveDirectory:emptyArchives});
 await phase('before-store-initialize');
 const store=await new TimetablePublicationAdmissionStore({directory:path.join(evidence,'admission'),baselineSHA256:priorWrapper.publicationSHA256,publicationDirectory:priorDirectory,archiveDirectory:emptyArchives,observation,baseSourceIndex,now:()=>clock}).initialize();
@@ -64,8 +71,10 @@ def key(url):
  u=urlsplit(url);return u.scheme,u.hostname,u.path,parse_qs(u.query).get('direction')
 def fetch(directory,name,url,limit,deadline,*,head=False,allowed=(200,)):
  # Final readback reuses the actual original previous resource; final official
- # HEAD reuses the captured after-HEAD. Each original HTTP clock remains intact.
- selected='previous-resource' if name=='final-resource' else 'cached-official-after' if name=='cached-official-final' else name
+ # HEAD reuses the captured after-HEAD. The second missing-resource check
+ # replays the same captured 404; this is not a fresh production readback.
+ # Each original HTTP clock remains intact.
+ selected={'final-resource':'previous-resource','cached-official-final':'cached-official-after','still-unserved':'existing'}.get(name,name)
  matches=[r for r in records if Path(r['body']).stem==selected and key(r['url'])==key(url)]
  if not matches:raise ValueError('No retained transport capture for '+name)
  record=matches[-1];body=(fixtures/'retained-fetches'/record['retainedBody']).read_bytes()
@@ -88,7 +97,7 @@ atexit.register(lambda:Path('/evidence/transport-replay.json').write_text(json.d
 `;
 const replayPath=path.join(evidence,'offline-transport.py');await fs.writeFile(replayPath,replay);
 const children=[];const diagnostic=[];let diagnosticBytes=0;
-const producer=new TimetableRecoveryProducer({cacheDirectory:path.join(evidence,'cache'),workDirectory:path.join(evidence,'work'),admissionStore:store,
+const producer=new TimetableRecoveryProducer({cacheDirectory:path.join(evidence,'cache'),workDirectory:path.join(evidence,'work'),admissionStore:store,now:()=>clock,
  readCurrentResource:(identity,{signal})=>{signal.throwIfAborted();return store.readPublicPublicationBytes(identity.publicationSHA256);},
  spawnChild:(command,args,options)=>{
   const config=JSON.parse(args.at(-1));

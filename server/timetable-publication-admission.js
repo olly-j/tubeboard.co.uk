@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { TIMETABLE_PUBLICATION_URL } from './station-board-seed.js';
 import { selectedTimetableEntry, validatedPublicationProof } from './station-board-timetable.js';
-import { londonLocal } from './station-board-v2.js';
+import { assessCurrentPublicationCoverage } from './timetable-current-coverage.js';
 import { canonicalResource } from './timetable-publication-resource.js';
 
 const MAX_COVERAGE_DAYS = 3660;
@@ -28,7 +28,7 @@ function validAsset(asset) {
       || !Number.isSafeInteger(asset.identity.proofRevision) || asset.identity.proofRevision < 1) return false;
   try {
     const proof = validatedPublicationProof(asset);
-    return proof.publication.sha256 === asset.identity.publicationSHA256;
+    return proof.publication.sha256 === asset.identity.publicationSHA256 && isDeepStrictEqual(asset.proof,JSON.parse(asset.proofBytes.toString('utf8')));
   } catch { return false; }
 }
 
@@ -96,6 +96,13 @@ export function hasPreservedPublicationCoverage(previousAsset, candidateAsset, {
     for (const date of oldDates) if (date >= fromDate && !newDates.has(date)) return false;
   }
   return true;
+}
+
+// New editions preserve station/direction authority, not superseded future dates.
+export function hasPreservedRequiredScopes(previousAsset,candidateAsset) {
+  const candidates=sourceScopes(candidateAsset);
+  return sourceScopes(previousAsset).every(previous=>candidates.some(candidate=>
+    candidate.lineID===previous.lineID && candidate.stationID===previous.stationID && candidate.direction===previous.direction));
 }
 
 export function expectedComparisonSourceCount(asset) {
@@ -168,14 +175,10 @@ export function evaluateNewEditionAdmission(input) {
   if (context.eligible === false) return context;
   const reject = reason => ({ eligible: false, reason });
   try {
-    const currentServiceDate = londonLocal(now).slice(0, 10);
-    const preservationStart = new Date(`${currentServiceDate}T12:00:00Z`);
-    preservationStart.setUTCDate(preservationStart.getUTCDate() - 1);
-    const fromDate = preservationStart.toISOString().slice(0, 10);
-    if (!hasPreservedPublicationCoverage(previousAsset, candidateAsset, { fromDate })) {
-      return reject('previous-date-or-direction-coverage-reduced');
-    }
+    if (!hasPreservedRequiredScopes(previousAsset,candidateAsset)) return reject('previous-station-or-direction-coverage-reduced');
     if (!hasCompleteComparisonArchive(candidateAsset, comparisonIndex)) return reject('comparison-archive-incomplete');
+    const assessment=assessCurrentPublicationCoverage({asset:candidateAsset,comparisonIndex,at:now});
+    if(!assessment.valid || assessment.unresolvedScopes.length) return reject('current-service-day-coverage-incomplete');
   } catch (error) {
     return reject(typeof error?.admissionReason === 'string' ? error.admissionReason : 'candidate-proof-invalid');
   }
@@ -212,6 +215,12 @@ export function evaluateAdditiveRevisionAdmission(input) {
       return reject('previous-date-or-direction-coverage-reduced');
     }
     if (!hasCompleteComparisonArchive(candidateAsset, comparisonIndex)) return reject('comparison-archive-incomplete');
+    const newlyQualified=candidate.entries.filter(entry=>entry.status==='qualified' &&
+      previous.entries.find(old=>key(old)===key(entry))?.status!=='qualified').map(entry=>`${entry.lineID}/${entry.stationID}`);
+    if(newlyQualified.length){
+      const assessment=assessCurrentPublicationCoverage({asset:candidateAsset,comparisonIndex,at:now});
+      if(!assessment.valid || newlyQualified.some(scope=>!assessment.coveredScopes.includes(scope)))return reject('new-scope-current-service-day-coverage-incomplete');
+    }
   } catch (error) {
     return reject(typeof error?.admissionReason === 'string' ? error.admissionReason : 'candidate-proof-invalid');
   }

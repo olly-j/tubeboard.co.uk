@@ -226,3 +226,47 @@ test('controller generation replay is idempotent and delayed authority cannot ro
   await assert.rejects(restarted.supersede({ expectedPublicationSHA256: 'b'.repeat(64), publicationSHA256: edition }));
   const saved = await f.disk(); assert.equal(saved.authorityGeneration, 2); assert.equal(saved.authorizedEdition, 'b'.repeat(64)); assert.equal(saved.firstAttemptAt, null);
 });
+
+const episodeRequest = episode => ({ ...request(), episode,
+  key: createHash('sha256').update(`timetable-recovery:${edition}:episode:${episode}`).digest('hex') });
+test('verified healthy resolution retains ambiguous-not-delivered custody before a later episode', async t => {
+  const f = await fixture(t, (url, options, state) => {
+    if (options.method === 'GET') return json([]);
+    state.posts++; if (state.posts === 1) throw Error('accepted status unknown');
+    return json({ id: 2, issue_url: issue, user: { id: 42 }, body: JSON.parse(options.body).body }, 201);
+  });
+  await f.worker.authorizeEdition({ publicationSHA256: edition, generation: 1 });
+  await assert.rejects(f.worker.deliver(request()));
+  await assert.rejects(f.worker.authorizeEdition({ publicationSHA256: edition, generation: 2, episode: 1 }));
+  await f.worker.authorizeEdition({ publicationSHA256: edition, generation: 2, resolved: true });
+  const resolved = await f.disk(); assert.equal(resolved.incident.delivered, false); assert.equal(resolved.incident.resolved, true);
+  assert.equal(resolved.incident.postStarted, true); assert.equal(resolved.incident.key, request().key);
+  const restarted = new GitHubTimetableRecoveryAlert(f.options);
+  await restarted.authorizeEdition({ publicationSHA256: edition, generation: 2, resolved: true });
+  await assert.rejects(restarted.deliver(request()));
+  await restarted.authorizeEdition({ publicationSHA256: edition, generation: 3, episode: 1 });
+  await assert.rejects(restarted.authorizeEdition({ publicationSHA256: edition, generation: 2, resolved: true }));
+  await restarted.deliver(episodeRequest(1)); assert.equal(f.state.posts, 2);
+});
+test('legacy edition-only durable alert state still reconciles the original marker', async t => {
+  const f = await fixture(t, (url, options, state) => {
+    if (options.method === 'GET') return json(state.comments);
+    state.posts++; state.comments.push({ id: 7, issue_url: issue, user: { id: 42 }, body: JSON.parse(options.body).body }); throw Error('lost');
+  });
+  await assert.rejects(f.worker.deliver(request()));
+  const legacy = await f.disk(); delete legacy.authorizedEpisode; delete legacy.authorizedResolved; delete legacy.incident.resolved;
+  await fs.writeFile(f.options.filePath, JSON.stringify(legacy));
+  await new GitHubTimetableRecoveryAlert(f.options).deliver(request()); assert.equal(f.state.posts, 1);
+  assert.equal((await f.disk()).incident.delivered, true);
+});
+test('resolved custody can coalesce never-delivered intermediate episodes without reopening old callbacks', async t => {
+  const f = await fixture(t); await f.worker.authorizeEdition({ publicationSHA256: edition, generation: 1 });
+  await f.worker.deliver(request());
+  await f.worker.authorizeEdition({ publicationSHA256: edition, generation: 2, resolved: true });
+  // Intermediate gaps recovered while the alert transport was unavailable.
+  // Only the controller's latest still-unresolved episode needs a new alert.
+  await f.worker.authorizeEdition({ publicationSHA256: edition, generation: 7, episode: 3 });
+  await f.worker.deliver(episodeRequest(3)); assert.equal(f.state.posts, 2);
+  await assert.rejects(f.worker.deliver(episodeRequest(1)));
+  await assert.rejects(f.worker.authorizeEdition({ publicationSHA256: edition, generation: 8, episode: 4 }));
+});

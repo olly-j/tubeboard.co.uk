@@ -88,7 +88,7 @@ test('same-edition revisions, stale or mismatched observations, and exhausted re
     'previous-publication-precondition-failed');
 });
 
-test('previous directional scope and every previously covered operating date must be preserved', async t => {
+test('new editions preserve required directions but do not inherit superseded future date promises', async t => {
   const missingDirection = await candidatePackage(t, { mutateProof(proof) {
     const entry = proof.entries.find(value => value.lineID === 'northern' && value.stationID === '940GZZLUGDG');
     entry.directionalDefinitions.pop();
@@ -103,7 +103,7 @@ test('previous directional scope and every previously covered operating date mus
     for (let time = Date.parse(`${evidence.operatingStartDate}T12:00:00Z`); time <= Date.parse(`${evidence.operatingEndDate}T12:00:00Z`); time += 86_400_000) {
       const date = new Date(time).toISOString().slice(0, 10);
       const weekday = new Date(time).getUTCDay() + 1;
-      if (date >= '2026-11-09' && !proof.bankHolidayDates.includes(date) && profile.weekdays.includes(weekday)
+      if (date >= '2026-11-11' && !proof.bankHolidayDates.includes(date) && profile.weekdays.includes(weekday)
           && (profile.originatingServiceDateRanges === undefined
             || profile.originatingServiceDateRanges.some(range => range.startDate <= date && date <= range.endDate))) {
         evidence.originatingDateGaps.push({ serviceDate: date, reason: 'candidate-gap' });
@@ -116,7 +116,10 @@ test('previous directional scope and every previously covered operating date mus
   const result = evaluateNewEditionAdmission({ ...missingDate,
     officialObservation: observationFor(missingDate.candidateSHA), admissionRevision: 4,
     ifMatchPreviousResourceSHA256: publicationResourceSHA256(missingDate.previousAsset), now });
-  assert.equal(result.reason, 'previous-date-or-direction-coverage-reduced');
+  assert.equal(result.eligible, true);
+  assert.equal(result.reason, 'new-edition-package-complete');
+  const missingDirectionResult=evaluateNewEditionAdmission({...missingDirection,officialObservation:observationFor(missingDirection.candidateSHA),admissionRevision:4,ifMatchPreviousResourceSHA256:publicationResourceSHA256(missingDirection.previousAsset),now});
+  assert.equal(missingDirectionResult.reason,'previous-station-or-direction-coverage-reduced');
 });
 
 test('candidate bank-holiday and holiday-calendar bounds cannot erase prior date support', async t => {
@@ -163,10 +166,9 @@ test('additive recovery upgrades a gap only with complete comparison evidence', 
       lineID: old.lineID, stationID: old.stationID };
   } });
   assert.equal(evaluateAdditiveRevisionAdmission(additiveInput(fixture)).reason, 'comparison-archive-incomplete');
-  // The pure evaluator consumes an already validated archive index. The store
-  // owns body validation; this index double supplies the newly qualified scope.
+  // Presence alone cannot establish the new scope's current-day comparison.
   const comparisonIndex = { isUnavailable: () => false, get: () => Buffer.from('validated comparison body') };
-  assert.equal(evaluateAdditiveRevisionAdmission({ ...additiveInput(fixture), comparisonIndex }).eligible, true);
+  assert.equal(evaluateAdditiveRevisionAdmission({ ...additiveInput(fixture), comparisonIndex }).reason, 'new-scope-current-service-day-coverage-incomplete');
 });
 
 test('additive revisions reject old entry removal, overwrite and global calendar reinterpretation', async t => {
@@ -207,4 +209,37 @@ test('additive admission keeps exact revision, source, precondition and archive 
   assert.equal(evaluateAdditiveRevisionAdmission(additiveInput(different)).reason, 'additive-edition-mismatch');
   const incomplete = await candidatePackage(t, { sameEdition: true, omitBody: true });
   assert.equal(evaluateAdditiveRevisionAdmission(additiveInput(incomplete)).reason, 'comparison-archive-incomplete');
+});
+
+
+test('current-day directional conflict rejects new edition even with complete actual comparison archive',async t=>{
+ const fixture=await candidatePackage(t,{mutateProof(proof){const e=proof.entries.find(e=>e.directionalSourceEvidence?.length);e.directionalSourceEvidence[0].originatingDateGaps.push({serviceDate:'2026-11-10',reason:'current conflict'});}});
+ const result=evaluateNewEditionAdmission({...fixture,officialObservation:observationFor(fixture.candidateSHA),admissionRevision:4,ifMatchPreviousResourceSHA256:publicationResourceSHA256(fixture.previousAsset),now});
+ assert.equal(result.eligible,false);assert.equal(result.reason,'current-service-day-coverage-incomplete');
+});
+test('comparison presence tokens cannot replace actual proof-bound archived response bytes',async t=>{
+ const fixture=await candidatePackage(t);const comparisonIndex={isUnavailable:()=>false,get:()=>Buffer.from('pretend comparison')};
+ const result=evaluateNewEditionAdmission({...fixture,comparisonIndex,officialObservation:observationFor(fixture.candidateSHA),admissionRevision:4,ifMatchPreviousResourceSHA256:publicationResourceSHA256(fixture.previousAsset),now});
+ assert.equal(result.eligible,false);assert.equal(result.reason,'current-service-day-coverage-incomplete');
+});
+
+function previousWithGap(fixture,stationID,copyCandidate=false){
+ const proof=structuredClone(copyCandidate?fixture.candidateAsset.proof:fixture.previousAsset.proof);
+ const entry=proof.entries.find(e=>e.stationID===stationID);Object.assign(entry,{status:'gap',profiles:[],gapReason:'prior unqualified'});
+ for(const field of ['directionalDefinitions','directionalSourceEvidence'])delete entry[field];
+ const proofBytes=Buffer.from(JSON.stringify(proof));fixture.previousAsset={proof,proofBytes,identity:{...fixture.previousAsset.identity,proofBodySHA256:digest(proofBytes)}};
+}
+test('same-edition new scope requires real current coverage while immutable old current gaps remain unresolved',async t=>{
+ const fixture=await candidatePackage(t,{sameEdition:true,mutateProof(proof){const entry=proof.entries.find(e=>e.stationID==='940GZZLUGDG');entry.directionalSourceEvidence[0].originatingDateGaps.push({serviceDate:'2026-11-10',reason:'immutable old current gap'});}});
+ previousWithGap(fixture,'940GZZLUEGW',true);
+ assert.equal(evaluateAdditiveRevisionAdmission(additiveInput(fixture)).eligible,true);
+ const conflict=await candidatePackage(t,{sameEdition:true,mutateProof(proof){const entry=proof.entries.find(e=>e.stationID==='940GZZLUEGW');entry.originatingDateGaps.push({serviceDate:'2026-11-10',reason:'new scope current gap'});}});
+ previousWithGap(conflict,'940GZZLUEGW');
+ assert.equal(evaluateAdditiveRevisionAdmission(additiveInput(conflict)).reason,'new-scope-current-service-day-coverage-incomplete');
+});
+
+test('mutable parsed proof views cannot change required scope authority without matching immutable bytes',async t=>{
+ const fixture=await candidatePackage(t);const proof=structuredClone(fixture.previousAsset.proof);proof.entries=proof.entries.filter(e=>e.status!=='qualified');
+ const previousAsset={...fixture.previousAsset,proof};const result=evaluateNewEditionAdmission({...fixture,previousAsset,officialObservation:observationFor(fixture.candidateSHA),admissionRevision:4,ifMatchPreviousResourceSHA256:publicationResourceSHA256(fixture.previousAsset),now});
+ assert.equal(result.reason,'proof-identity-invalid');
 });
