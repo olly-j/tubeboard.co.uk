@@ -168,8 +168,86 @@ def validate_display_only_overrides(journey: ET.Element, links: list[ET.Element]
             if display.tag!=namespace+'DynamicDestinationDisplay' or not leaf(display):
                 raise ValueError('unsupported journey timing override display')
 
+class _OriginProjection:
+    """Keep origin-validator inputs, without retaining unused timing geometry."""
+    def __init__(self):
+        self.root = None
+        self.stack = []
+        self.builder = None
+        self.record_depth = None
+        self.full_record = False
+        self.full_depth = None
+        namespace = '{' + NS['t'] + '}'
+        self.section = namespace + 'JourneyPatternSection'
+        self.link = namespace + 'JourneyPatternTimingLink'
+        self.records = {namespace + name for name in ('Service', 'StandardService', 'VehicleJourney', 'JourneyPatternSection')}
+        self.sides = {namespace + 'From', namespace + 'To'}
+        self.leaves = {namespace + 'StopPointRef', namespace + 'Activity'}
+
+    def start(self, tag, attributes):
+        depth = len(self.stack) + 1
+        parent = self.stack[-1][0] if self.stack else None
+        kept = False
+        if depth == 1:
+            self.root = ET.Element(tag, attributes)
+        elif self.builder is None:
+            if tag in self.records:
+                self.builder = ET.TreeBuilder()
+                self.record_depth = depth
+                self.full_record = tag != self.section
+                kept = True
+        elif self.full_record or self.full_depth is not None:
+            kept = True
+        else:
+            kept = (tag in self.records or tag == self.link and parent == self.section
+                    or tag in self.sides and parent == self.link or tag in self.leaves and parent in self.sides)
+            if kept and (tag in self.records and tag != self.section or tag in self.leaves):
+                # Keep complete leaves too: nested text/tail must retain the
+                # exact findtext semantics of malformed or annotated input.
+                self.full_depth = depth
+        if kept:
+            self.builder.start(tag, attributes)
+        self.stack.append((tag, kept))
+
+    def data(self, text):
+        if self.builder is not None and self.stack[-1][1]:
+            self.builder.data(text)
+
+    def end(self, tag):
+        depth = len(self.stack)
+        _, kept = self.stack.pop()
+        if kept:
+            self.builder.end(tag)
+        if self.full_depth == depth:
+            self.full_depth = None
+        if self.record_depth == depth:
+            self.root.append(self.builder.close())
+            self.builder = None
+            self.record_depth = None
+            self.full_record = False
+
+    def close(self):
+        return self.root
+
+
+def _read_origin_projection(source):
+    target = _OriginProjection()
+    parser = ET.XMLParser(target=target)
+    digest = hashlib.sha256()
+    while block := source.read(64 * 1024):
+        digest.update(block)
+        parser.feed(block)
+    return parser.close(), digest.hexdigest()
+
+
 def xml_origin_rows(data: bytes, member: str, tram_platforms=None) -> tuple[list[dict], dict]:
-    root=ET.fromstring(data);services=root.findall('.//t:Service',NS)
+    root, raw_sha = _read_origin_projection(io.BytesIO(data))
+    return _origin_rows_from_projection(root, raw_sha, member, tram_platforms)
+
+
+def _origin_rows_from_projection(root, raw_sha, member, tram_platforms=None):
+
+    services=root.findall('.//t:Service',NS)
     if len(services)!=1:raise ValueError('unexpected service count')
     service=services[0];names=[e.text for e in service.findall('t:Lines/t:Line/t:LineName',NS)]
     line = published_line(names[0], tram_platforms) if len(names) == 1 else None
@@ -194,7 +272,7 @@ def xml_origin_rows(data: bytes, member: str, tram_platforms=None) -> tuple[list
         converted=[station_for_stop(stop) for stop,activity in path if activity!='pass']
         rows.append({'lineID':line,'stationID':converted[0],'key':key((hh+24*shift)*60+mm,converted[1:]),
           'originActivity':path[0][1],'weekdays':weekdays,'start':start,'end':end,'member':member})
-    return rows,{'member':member,'lineID':line,'sha256':hashlib.sha256(data).hexdigest(),
+    return rows,{'member':member,'lineID':line,'sha256':raw_sha,
       'publishedAt':root.attrib.get('CreationDateTime'),'operatingStartDate':start,'operatingEndDate':end}
 
 def read_archive(path: Path, tram_platforms=None) -> tuple[list[dict],list[dict]]:
@@ -205,10 +283,11 @@ def read_archive(path: Path, tram_platforms=None) -> tuple[list[dict],list[dict]
         with zipfile.ZipFile(io.BytesIO(outer.read(nested[0]))) as inner:
             for name in inner.namelist():
                 if not name.endswith('.xml'):continue
-                body=inner.read(name)
-                try:parsed,meta=xml_origin_rows(body,name,tram_platforms)
+                with inner.open(name) as source:
+                    root, raw_sha = _read_origin_projection(source)
+                try:parsed,meta=_origin_rows_from_projection(root,raw_sha,name,tram_platforms)
                 except (ValueError,KeyError,TypeError) as error:
-                    root=ET.fromstring(body);service=root.find('.//t:Service',NS)
+                    service=root.find('.//t:Service',NS)
                     line=published_line(service.findtext('t:Lines/t:Line/t:LineName',namespaces=NS),tram_platforms) if service is not None else None
                     if line is None:continue
                     start=service.findtext('t:OperatingPeriod/t:StartDate',namespaces=NS);end=service.findtext('t:OperatingPeriod/t:EndDate',namespaces=NS)
@@ -221,7 +300,7 @@ def read_archive(path: Path, tram_platforms=None) -> tuple[list[dict],list[dict]
                         stop=section.findtext('t:JourneyPatternTimingLink/t:From/t:StopPointRef',namespaces=NS) if section is not None else None
                         origins.add(tram_platforms[stop] if line == 'tram' else txc_station(stop or ''))
                     parsed=[{'lineID':line,'stationID':origin,'start':start,'end':end,'member':name,'qualificationGap':str(error)} for origin in origins]
-                    meta={'member':name,'lineID':line,'sha256':hashlib.sha256(body).hexdigest(),'operatingStartDate':start,'operatingEndDate':end,'qualificationGap':str(error)}
+                    meta={'member':name,'lineID':line,'sha256':raw_sha,'operatingStartDate':start,'operatingEndDate':end,'qualificationGap':str(error)}
                 rows.extend(parsed)
                 if meta:members.append(meta)
     return rows,members

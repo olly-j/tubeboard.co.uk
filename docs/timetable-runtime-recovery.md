@@ -80,3 +80,9 @@ network or access to the app checkout. Repository checks also import its CLI.
 The Docker image does not copy or run this bundle yet. Updating the producer
 requires a reviewed source commit and an explicit bundle sync, not downloading
 arbitrary code into the running service.
+
+The reviewed origin-parser projection is now pinned from app commit
+`940c43a505e3a0cc6bcccefeeeeac8e070a755b8`. It preserves all 51,592 origin rows
+and 21 member records in the real-archive comparison and passed 112 affected
+Python tests. Full qualification measured 691.7 MiB after this change. This is
+still not suitable for the 256 MiB service; selected-call parsing is unchanged.
