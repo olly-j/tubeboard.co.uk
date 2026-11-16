@@ -221,3 +221,20 @@ passed. No production capacity, deployment, scheduled workflow or server
 activation changed. Evidence is retained in the external release evidence
 `20261116-tb085-current-edition/runtime-image/receipt.json`; both OOM results and
 the separate coverage failure remain unresolved acceptance gates.
+
+The subsequent producer bundle at `333aa08dac07fe8560b87c63e219a4df1773913e`
+keeps only one private archive copy, synchronizes its completed writes, and
+requests private cache release where supported. All 51 focused producer tests
+and independent source review passed. A single complete historical replay
+on exact image `sha256:c44d324b6c217d276f2ce0bc7c6bfe3033faef835db18dfcecee70f46fc44f1c`
+finished qualification in 103.463 seconds at 256 MiB without OOM. The recorded
+private-file cache release lowered cgroup usage by about 145 MB at that
+boundary; overall peak still reached 256 MiB with 1,541 pressure events.
+This does not establish notification cohosting or full recovery capacity.
+
+Actual retained child stderr confirms that preparation then failed the
+unchanged prior-date coverage guard for twelve station/date pairs. No live
+comparison or admission ran, and no packaged proof was emitted. Historical
+source clocks and cache receipts remain byte-identical. The current-service-day
+contract correction is still a proposal; neither admission nor calendar guards
+have been weakened. Production and server activation remain unchanged.
