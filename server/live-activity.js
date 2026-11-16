@@ -6,12 +6,27 @@ import path from 'node:path';
 import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
 import { TransactionalJsonStore } from './transactional-json-store.js';
 import { admitPlannedSeed } from './station-board-seed.js';
-import { STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, refreshStationArrivals, StationArrivalReader, buildStationBoardState } from './station-board-v2.js';
+import { STATION_ARRIVAL_ATTEMPT_FLOOR_MS, STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, refreshStationArrivals, StationArrivalReader, buildStationBoardState } from './station-board-v2.js';
 
 // Never log this tuple: it includes token custody and exact selected scope.
 export function registrationTuple(record) {
   return JSON.stringify(['environment','activityID','tokenUpdatedAt','pushTokenHex','stationID','lineID','selectionMode','platformID','platformHeading','platformLabel','platformDirection','activityStartedAt','activityEndsAt','contentStateContract','plannedPresentationVersion','timetablePublicationAuthorityVersion'].map((k) => record[k] ?? null));
 }
+// Use an initial worker opportunity unless the armed regular cycle is already
+// within the existing request floor. No new clock, budget or APNs bypass; SerialWorker and
+// StationArrivalReader retain serialization, admission floors and backoff.
+export async function registerLiveActivityToken(store, payload, { now = new Date(), wakeWorker = null, nextRegularAt = () => null, clock = Date.now } = {}) {
+  const accepted = await store.upsertToken(payload, now);
+  if (accepted.registrationAccepted !== false && accepted.active !== false
+      && accepted.contentStateContract === STATION_BOARD_CONTRACT && !accepted.lastPushAt) {
+    // Read the armed phase after durable registration: it may have advanced
+    // during the upsert. Do not fetch all sources again within the same floor.
+    const next = nextRegularAt(), remaining = next - clock();
+    if (!Number.isFinite(next) || !Number.isFinite(remaining) || remaining < 0 || remaining > STATION_ARRIVAL_ATTEMPT_FLOOR_MS) wakeWorker?.();
+  }
+  return accepted;
+}
+
 export const TUBE_LINES = new Map([
   ['bakerloo', 'Bakerloo'],
   ['central', 'Central'],
@@ -874,7 +889,7 @@ export async function pushLiveActivityUpdate(record, payload, config, options = 
 
 const stationArrivalReaders = new WeakMap();
 
-export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal, cacheOnly = false, sourceOnly = false, clock = () => Date.now(), arrivalReader = null, scheduleSourceRefresh = null }) {
+export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal, cacheOnly = false, sourceOnly = false, clock = () => Date.now(), arrivalReader = null, scheduleSourceRefresh = null, nextFullRefreshAt = null }) {
   signal?.throwIfAborted();
   await store.expireOld(now, config);
   const records = await store.listActive(now, config);
@@ -950,6 +965,12 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
         // Only public HTTP reads are shared. Each activity qualifies those
         // immutable receipts against its own selection and retained context.
         cache = await refreshStationBoard(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, store, arrivalReader);
+        // An initial registration wake must not move full-source eligibility
+        // past the already armed periodic cycle (including rail/destinations).
+        if (Number.isFinite(nextFullRefreshAt) && nextFullRefreshAt >= now.getTime()
+            && nextFullRefreshAt <= now.getTime() + config.workerIntervalMs) {
+          cache.nextRefreshAt = Math.min(cache.nextRefreshAt, nextFullRefreshAt);
+        }
       }
       const effectiveNow = new Date(clock());
       cache = await store.retainStationBoard(record.activityID, record.environment, cache, effectiveNow, expectedTuple);

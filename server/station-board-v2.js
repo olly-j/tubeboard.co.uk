@@ -77,7 +77,7 @@ export function stationArrivalObservation(headers, now) {
   return { observedAt, expiresAt: observedAt + 120000 };
 }
 
-const STATION_ARRIVAL_ATTEMPT_FLOOR_MS = 30000;
+export const STATION_ARRIVAL_ATTEMPT_FLOOR_MS = 30000;
 function retryAfterDelay(value, now) {
   if (typeof value !== 'string') return 0;
   if (/^\d+$/.test(value.trim())) {
