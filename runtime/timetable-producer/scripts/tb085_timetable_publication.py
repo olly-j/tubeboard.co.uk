@@ -1,0 +1,788 @@
+#!/usr/bin/env python3
+"""Qualify current TfL origin timetables against a publisher's TransXChange ZIP.
+
+Generalises the retained calendar-20260927/qualify_timetable.py research without
+Northern pins. Reads an already downloaded official archive and bounded API
+captures; never downloads a large archive on-device or promotes arrivals to
+outgoing clocks. Full ordered paths, repeated stops and duplicate rows survive
+fingerprinting. Missing captures/calendars/parity remain explicit gaps.
+
+Example:
+  python3 scripts/tb085_timetable_publication.py --archive /private/current.zip \
+    --capture-dir /private/captures --output TubeBoardShared/timetable-publication.json
+
+Capture directory supplies publication-download.json (body metadata),
+bank-holidays.body (official GOV.UK JSON), line-station-matrix.json and each
+record's timetableSource.body. Additional bounded records may be supplied in
+extra-line-station-matrix.json. XML origin-only scope is deliberate; intermediate
+stop departure offsets are never inferred. Runtime must recheck publication
+identity, API row parity, calendar, freshness, line and station closures.
+"""
+from __future__ import annotations
+import argparse
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta
+import hashlib
+import io
+import json
+from pathlib import Path
+import re
+import xml.etree.ElementTree as ET
+import zipfile
+from zoneinfo import ZoneInfo
+
+NS = {'t': 'http://www.transxchange.org.uk/'}
+SOURCE_URL = 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip'
+MAX_ORIGIN_INVENTORY_BYTES = 2 * 1024 * 1024
+LINE_NAMES = {'Bakerloo':'bakerloo','Central':'central','Circle':'circle','District':'district',
+ 'Hammersmith & City':'hammersmith-city','Jubilee':'jubilee','Metropolitan':'metropolitan',
+ 'Northern':'northern','Piccadilly':'piccadilly','Victoria':'victoria','Waterloo & City':'waterloo-city','DLR':'dlr'}
+RAIL = {'elizabeth','liberty','lioness','mildmay','suffragette','weaver','windrush'}
+WEEKDAYS = {'Sunday':1,'Monday':2,'Tuesday':3,'Wednesday':4,'Thursday':5,'Friday':6,'Saturday':7}
+DAY_GROUPS = {**{n:{d} for n,d in WEEKDAYS.items()},'MondayToFriday':{2,3,4,5,6},
+ 'MondayToSunday':{1,2,3,4,5,6,7},'Weekend':{1,7},'MondayToSaturday':{2,3,4,5,6,7}}
+API_DAYS = {'Monday - Thursday':{2,3,4,5},'Monday - Friday':{2,3,4,5,6},'Monday to Friday':{2,3,4,5,6},
+ 'Saturday (also Good Friday)':{7},'Saturdays and Public Holidays':{7},'Saturday':{7},'Sunday':{1},
+ **{n:{d} for n,d in WEEKDAYS.items()},**{n+'s':{d} for n,d in WEEKDAYS.items()}}
+
+def published_line(name, tram_platforms):
+    return 'tram' if name == 'Tram' and tram_platforms else LINE_NAMES.get(name)
+
+
+def local_tag(element): return element.tag.rsplit('}',1)[-1]
+def txc_station(stop: str) -> str:
+    """Convert observed TfL directional points to station IDs, never platforms."""
+    if stop in {'9400ZZBPSUST','9400ZZNEUGST'}: return stop.replace('9400','940G',1)
+    match = re.fullmatch(r'9400ZZ(LU|DL)([A-Z0-9]+)[1-9]',stop)
+    if match: return '940GZZ'+match[1]+match[2]
+    raise ValueError('unmapped directional stop '+stop)
+
+def key(minute: int, path: list[str]) -> str:
+    if not 0 <= minute < 2880 or not path: raise ValueError('invalid service clock/path')
+    return f'{minute:04d}|'+'>'.join(path)
+
+def logical_key(raw: str) -> str:
+    """Equate adjacent timing intervals, preserving every nonadjacent revisit."""
+    clock, path = raw.split('|', 1)
+    logical = []
+    for station in path.split('>'):
+        if not logical or logical[-1] != station:
+            logical.append(station)
+    return clock + '|' + '>'.join(logical)
+
+def fingerprint(rows: list[str]) -> dict:
+    return {'count':len(rows),'sha256':hashlib.sha256('\n'.join(sorted(rows)).encode('ascii')).hexdigest()}
+
+def profile_days(profile: ET.Element | None) -> set[int]:
+    if profile is None: raise ValueError('missing calendar')
+    # Unknown special dates, school calendars and service exceptions are withheld.
+    allowed = {'RegularDayType','BankHolidayOperation'}
+    if any(local_tag(child) not in allowed for child in profile): raise ValueError('unqualified calendar exception')
+    days = profile.find('t:RegularDayType/t:DaysOfWeek',NS)
+    if days is None: raise ValueError('missing regular days')
+    result=set()
+    for child in days:
+        if local_tag(child) not in DAY_GROUPS: raise ValueError('unqualified weekday '+local_tag(child))
+        result |= DAY_GROUPS[local_tag(child)]
+    if not result: raise ValueError('empty calendar')
+    return result
+
+def pattern_paths(root: ET.Element) -> dict[str,list[tuple[str,str]]]:
+    # Activity is part of the boundary evidence, not an inferred stop class.
+    known={'pickUp','pickUpAndSetDown','setDown','pass'}
+    sections={}
+    for section in root.findall('.//t:JourneyPatternSection',NS):
+        path=[]
+        for link in section.findall('t:JourneyPatternTimingLink',NS):
+            start=(link.findtext('t:From/t:StopPointRef',namespaces=NS),link.findtext('t:From/t:Activity',namespaces=NS))
+            end=(link.findtext('t:To/t:StopPointRef',namespaces=NS),link.findtext('t:To/t:Activity',namespaces=NS))
+            if any(not stop or activity not in known for stop,activity in (start,end)):
+                raise ValueError('unknown/missing calling activity')
+            if path and path[-1] != start:raise ValueError('disconnected or contradictory timing boundary')
+            if not path:path.append(start)
+            path.append(end)
+        ident=section.attrib.get('id')
+        if not ident or not path or ident in sections:raise ValueError('invalid section identity')
+        sections[ident]=path
+    patterns={}
+    for pattern in root.findall('.//t:StandardService/t:JourneyPattern',NS):
+        path=[]
+        for ref in (pattern.findtext('t:JourneyPatternSectionRefs',namespaces=NS) or '').split():
+            if ref not in sections:raise ValueError('missing pattern section')
+            segment=sections[ref]
+            if path and path[-1]!=segment[0]:raise ValueError('contradictory pattern sections')
+            path.extend(segment if not path else segment[1:])
+        ident=pattern.attrib.get('id')
+        if not ident or not path or ident in patterns:raise ValueError('invalid pattern identity')
+        patterns[ident]=path
+    return patterns
+
+def pattern_timing_links(root: ET.Element) -> dict[str,list[ET.Element]]:
+    """Resolve the same section scope as pattern_paths, not global link IDs.
+
+    Called after pattern_paths has checked section/pattern identity and order.
+    Link IDs are required only when a journey actually supplies annotations;
+    existing no-override origin evidence does not gain a new ID requirement.
+    """
+    sections={s.attrib['id']:s.findall('t:JourneyPatternTimingLink',NS)
+        for s in root.findall('.//t:JourneyPatternSection',NS)}
+    return {p.attrib['id']:[link for ref in (p.findtext('t:JourneyPatternSectionRefs',namespaces=NS) or '').split()
+        for link in sections[ref]] for p in root.findall('.//t:StandardService/t:JourneyPattern',NS)}
+
+def validate_display_only_overrides(journey: ET.Element, links: list[ET.Element]) -> None:
+    """Accept only retained-shaped, reference-scoped display annotations.
+
+    Annotation text never supplies a clock, stop, activity, destination or via.
+    Base-pattern calling paths and API/calendar parity remain authoritative.
+    Every timing/stop/wait override or unrecognised structure is rejected.
+    """
+    namespace='{'+NS['t']+'}'
+    overrides=[child for child in journey if local_tag(child)=='VehicleJourneyTimingLink']
+    if not overrides:return
+    ids=[link.attrib.get('id') for link in links]
+    if any(not ident or ident!=ident.strip() for ident in ids) or len(set(ids))!=len(ids):
+        raise ValueError('ambiguous pattern link identity for journey override')
+    scoped=set(ids);seen=set();override_ids=set()
+    def container(element):
+        return not (element.text or '').strip() and all(not (child.tail or '').strip() for child in element)
+    def leaf(element):
+        return not element.attrib and not list(element) and bool((element.text or '').strip())
+    for override in overrides:
+        if override.tag!=namespace+'VehicleJourneyTimingLink' or set(override.attrib)-{'id'} or not container(override):
+            raise ValueError('unsupported journey timing override')
+        ident=override.attrib.get('id')
+        if ident is not None:
+            if not ident or ident!=ident.strip() or ident in override_ids:raise ValueError('invalid journey override identity')
+            override_ids.add(ident)
+        children=list(override);tags=[child.tag for child in children]
+        permitted=[[namespace+'JourneyPatternTimingLinkRef',namespace+side] for side in ['From','To']]
+        permitted.append([namespace+'JourneyPatternTimingLinkRef',namespace+'From',namespace+'To'])
+        if tags not in permitted or not leaf(children[0]):raise ValueError('unsupported journey timing override structure')
+        ref=children[0].text.strip()
+        if ref not in scoped or ref in seen:raise ValueError('foreign or duplicate journey override reference')
+        seen.add(ref)
+        for usage in children[1:]:
+            if usage.attrib or not container(usage) or len(usage)!=1:
+                raise ValueError('unsupported journey timing override usage')
+            display=usage[0]
+            if display.tag!=namespace+'DynamicDestinationDisplay' or not leaf(display):
+                raise ValueError('unsupported journey timing override display')
+
+def xml_origin_rows(data: bytes, member: str, tram_platforms=None) -> tuple[list[dict], dict]:
+    root=ET.fromstring(data);services=root.findall('.//t:Service',NS)
+    if len(services)!=1:raise ValueError('unexpected service count')
+    service=services[0];names=[e.text for e in service.findall('t:Lines/t:Line/t:LineName',NS)]
+    line = published_line(names[0], tram_platforms) if len(names) == 1 else None
+    if line is None:return [],{}
+    station_for_stop = tram_platforms.__getitem__ if line == 'tram' else txc_station
+    start=service.findtext('t:OperatingPeriod/t:StartDate',namespaces=NS);end=service.findtext('t:OperatingPeriod/t:EndDate',namespaces=NS)
+    if not start or not end or date.fromisoformat(start)>date.fromisoformat(end):raise ValueError('invalid operating period')
+    paths=pattern_paths(root);scoped_links=pattern_timing_links(root);rows=[]
+    for journey in root.findall('.//t:VehicleJourney',NS):
+        path=paths[journey.findtext('t:JourneyPatternRef',namespaces=NS)]
+        if path[0][1] not in {'pickUp','pickUpAndSetDown'}:
+            raise ValueError('non-passenger VehicleJourney origin activity')
+        if path[-1][1] not in {'setDown','pickUpAndSetDown'}:
+            raise ValueError('VehicleJourney destination lacks set-down activity')
+        validate_display_only_overrides(journey,scoped_links[journey.findtext('t:JourneyPatternRef',namespaces=NS)])
+        clock=journey.findtext('t:DepartureTime',namespaces=NS)
+        hh,mm,ss=map(int,clock.split(':'));shift=int(journey.findtext('t:DepartureDayShift',default='0',namespaces=NS))
+        if not(0<=hh<24 and 0<=mm<60 and ss==0 and shift in {0,1}):raise ValueError('unsupported departure clock')
+        profile=journey.find('t:OperatingProfile',NS)
+        if profile is None:profile=service.find('t:OperatingProfile',NS)
+        weekdays=profile_days(profile)
+        converted=[station_for_stop(stop) for stop,activity in path if activity!='pass']
+        rows.append({'lineID':line,'stationID':converted[0],'key':key((hh+24*shift)*60+mm,converted[1:]),
+          'originActivity':path[0][1],'weekdays':weekdays,'start':start,'end':end,'member':member})
+    return rows,{'member':member,'lineID':line,'sha256':hashlib.sha256(data).hexdigest(),
+      'publishedAt':root.attrib.get('CreationDateTime'),'operatingStartDate':start,'operatingEndDate':end}
+
+def read_archive(path: Path, tram_platforms=None) -> tuple[list[dict],list[dict]]:
+    rows=[];members=[]
+    with zipfile.ZipFile(path) as outer:
+        nested=[n for n in outer.namelist() if n.startswith('LULDLRTRAMRIVERCABLE FULL ') and n.endswith('.zip')]
+        if len(nested)!=1:raise ValueError('expected one official LUL/DLR archive')
+        with zipfile.ZipFile(io.BytesIO(outer.read(nested[0]))) as inner:
+            for name in inner.namelist():
+                if not name.endswith('.xml'):continue
+                body=inner.read(name)
+                try:parsed,meta=xml_origin_rows(body,name,tram_platforms)
+                except (ValueError,KeyError,TypeError) as error:
+                    root=ET.fromstring(body);service=root.find('.//t:Service',NS)
+                    line=published_line(service.findtext('t:Lines/t:Line/t:LineName',namespaces=NS),tram_platforms) if service is not None else None
+                    if line is None:continue
+                    start=service.findtext('t:OperatingPeriod/t:StartDate',namespaces=NS);end=service.findtext('t:OperatingPeriod/t:EndDate',namespaces=NS)
+                    if not start or not end:raise ValueError('cannot scope invalid member '+name) from error
+                    origins=set()
+                    for pattern in service.findall('t:StandardService/t:JourneyPattern',NS):
+                        refs=(pattern.findtext('t:JourneyPatternSectionRefs',namespaces=NS) or '').split()
+                        if not refs:raise ValueError('cannot scope invalid pattern '+name) from error
+                        section=root.find(".//t:JourneyPatternSection[@id='"+refs[0]+"']",NS)
+                        stop=section.findtext('t:JourneyPatternTimingLink/t:From/t:StopPointRef',namespaces=NS) if section is not None else None
+                        origins.add(tram_platforms[stop] if line == 'tram' else txc_station(stop or ''))
+                    parsed=[{'lineID':line,'stationID':origin,'start':start,'end':end,'member':name,'qualificationGap':str(error)} for origin in origins]
+                    meta={'member':name,'lineID':line,'sha256':hashlib.sha256(body).hexdigest(),'operatingStartDate':start,'operatingEndDate':end,'qualificationGap':str(error)}
+                rows.extend(parsed)
+                if meta:members.append(meta)
+    return rows,members
+
+def active_service_date(row: dict, today: date, holidays: set[str]) -> date | None:
+    """Return the first current/future published service date for one XML row."""
+    try:
+        start=max(today,date.fromisoformat(row['start']))
+        end=date.fromisoformat(row['end'])
+        weekdays=row['weekdays']
+        if end < start or not weekdays or not set(weekdays) <= set(range(1,8)):
+            return None
+    except (KeyError,TypeError,ValueError):
+        return None
+    # A weekday repeats every seven days. Skip only explicit bank holidays; line
+    # and station closures are runtime evidence and must not erase the source.
+    for weekday in sorted(weekdays):
+        offset=(weekday-(start.isoweekday()%7+1))%7
+        candidate=start+timedelta(days=offset)
+        while candidate <= end and candidate.isoformat() in holidays:
+            candidate+=timedelta(days=7)
+        if candidate <= end:
+            return candidate
+    return None
+
+def passenger_origin_inventory(source_rows: list[dict], members: list[dict], membership: set[tuple[str,str]],
+                               civil: str, holidays: set[str],
+                               expected_xml_lines: set[str] | None = None) -> dict:
+    """Report explicit, active XML passenger starts without changing entry qualification.
+
+    `source_rows` comes from the same bounded official-archive parse as the
+    timetable qualifier. An origin is admitted only when that parser observed
+    a VehicleJourney whose first stop explicitly permits pickup, and the
+    line/station pair exists in the current app catalogue. Through calls,
+    depot movements, closures and route-sequence endpoints are not inferred.
+    """
+    today=date.fromisoformat(civil)
+    aggregates={}
+    malformed=[]
+    for row in source_rows:
+        active=active_service_date(row,today,holidays)
+        if active is None:
+            # Expired or out-of-horizon rows do not advertise a live candidate.
+            # Malformed current rows are retained as an inventory limitation.
+            try:
+                dates=date.fromisoformat(row['start']),date.fromisoformat(row['end'])
+                current=dates[1] >= today
+                has_clock=bool(row.get('weekdays'))
+            except (KeyError,TypeError,ValueError):
+                current,has_clock=True,False
+            if current and not has_clock:
+                malformed.append({'member':row.get('member','unknown'),'lineID':row.get('lineID','unknown'),
+                                  'reason':'missing or invalid operating weekdays'})
+            continue
+        pair=(row['lineID'],row['stationID'])
+        if row.get('originActivity') not in {'pickUp','pickUpAndSetDown'}:
+            malformed.append({'member':row.get('member','unknown'),'lineID':pair[0],
+                               'stationID':pair[1],'reason':'origin lacks explicit passenger pickup'})
+            continue
+        item=aggregates.setdefault(pair,{'lineID':pair[0],'stationID':pair[1],'journeyRows':0,
+            'firstActiveServiceDate':active,'serviceWindows':set()})
+        item['journeyRows']+=1
+        item['serviceWindows'].add((row['start'],row['end'],tuple(sorted(row['weekdays']))))
+        if active < item['firstActiveServiceDate']:
+            item['firstActiveServiceDate']=active
+
+    origins=[];all_origins=[];uncatalogued=defaultdict(list)
+    for pair,item in sorted(aggregates.items()):
+        item['firstActiveServiceDate']=item['firstActiveServiceDate'].isoformat()
+        item['serviceWindows']=[{'startDate':start,'endDate':end,'weekdays':list(weekdays)}
+            for start,end,weekdays in sorted(item['serviceWindows'])]
+        item['catalogued']=pair in membership
+        all_origins.append(item)
+        if item['catalogued']:
+            origins.append(item)
+        else:
+            uncatalogued[pair[0]].append(pair[1])
+
+    unresolved=[]
+    for member in members:
+        if member.get('qualificationGap'):
+            try:
+                active=date.fromisoformat(member['operatingEndDate']) >= today
+            except (KeyError,TypeError,ValueError):
+                active=True
+            if active:
+                unresolved.append({'member':member['member'],'lineID':member['lineID'],
+                    'classification':'explicit-nonboarding-origin' if 'non-passenger VehicleJourney origin activity' in member['qualificationGap'] else 'unresolved-xml-qualification',
+                    'reason':member['qualificationGap'][:180]})
+    malformed=sorted({(item['member'],item['lineID'],item.get('stationID'),item['reason']):item for item in malformed}.values(),
+                     key=lambda item:(item['lineID'],item['member'],item.get('stationID','')))
+    unresolved=sorted(unresolved,key=lambda item:(item['lineID'],item['member']))
+    uncatalogued={line:stations for line,stations in sorted(uncatalogued.items())}
+    xml_lines=sorted({member['lineID'] for member in members})
+    missing_lines=sorted((expected_xml_lines or set())-set(xml_lines))
+    complete=not malformed and not unresolved and not missing_lines
+    all_ends=[item['operatingEndDate'] for item in members if item.get('operatingEndDate')]
+    return {'schemaVersion':1,'discoveryStatus':'complete' if complete else 'incomplete',
+        'source':'same official TXC archive parse as qualification',
+        'originSemantics':'Explicit pickup starts only; through/depot not inferred; route origin/closure not asserted. Tram and rail are separate adapters.',
+        'horizon':{'startDate':civil,'endDate':max(all_ends) if all_ends else civil},
+        'xmlMemberCount':len(members),'xmlLineIDs':xml_lines,'missingXmlLineIDs':missing_lines,
+        'passengerOriginCount':len(origins),'activePassengerOrigins':all_origins,
+        'bankHolidayDates':sorted(holidays),
+        'uncataloguedOriginCount':sum(len(stations) for stations in uncatalogued.values()),
+        'uncataloguedOrigins':uncatalogued,'unresolvedMembers':unresolved,'malformedCurrentRows':malformed}
+
+def inventory_difference_digest(sidecar: dict) -> str:
+    """Stable gap identity excludes capture time/horizon, preventing repeat alerts."""
+    detail=sidecar['inventory']
+    if sidecar.get('inventoryTruncated') is True:
+        difference={'publicationSHA256':sidecar['publicationSHA256'],
+            'xmlPublicationMembers':[[member['member'],member['lineID'],member['sha256']]
+                for member in sidecar['xmlPublicationMembers']],
+            'inventoryUnavailableReason':detail.get('inventoryUnavailableReason'),
+            'passengerOriginCount':detail['passengerOriginCount'],
+            'discoveryStatus':detail['discoveryStatus'],
+            'uncataloguedOriginCount':detail['uncataloguedOriginCount']}
+        return hashlib.sha256(json.dumps(difference,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()
+    active_projection=[{'lineID':origin['lineID'],'stationID':origin['stationID'],
+        'catalogued':origin['catalogued'],'serviceWindows':origin['serviceWindows']}
+        for origin in detail['activePassengerOrigins']]
+    difference={'publicationSHA256':sidecar['publicationSHA256'],
+        'xmlPublicationMembers':[[member['member'],member['lineID'],member['sha256']]
+            for member in sidecar['xmlPublicationMembers']],
+        **{key:detail[key] for key in ('discoveryStatus','bankHolidayDates','missingXmlLineIDs',
+            'unresolvedMembers','malformedCurrentRows')}}
+    difference['activePassengerOrigins']=active_projection
+    return hashlib.sha256(json.dumps(difference,sort_keys=True,separators=(',',':')).encode('utf-8')).hexdigest()
+
+def compact_inventory_failure(sidecar: dict, reason: str) -> dict:
+    detail=sidecar['inventory']
+    sidecar['inventoryTruncated']=True
+    sidecar['inventory']={key:detail[key] for key in (
+        'schemaVersion','source','originSemantics','horizon','xmlMemberCount','xmlLineIDs','missingXmlLineIDs',
+        'passengerOriginCount','uncataloguedOriginCount','bankHolidayDates')}
+    sidecar['inventory'].update(discoveryStatus='incomplete',
+        activePassengerOrigins=[],uncataloguedOrigins={},unresolvedMembers=[],malformedCurrentRows=[],
+        inventoryUnavailableReason=reason[:180])
+    sidecar['inventory']['inventoryDifferenceSHA256']=inventory_difference_digest(sidecar)
+    return sidecar
+
+def origin_inventory_sidecar(publication_sha: str, captured: str, catalogue: Path,
+                             members: list[dict], inventory: dict) -> dict:
+    roster_path=Path(__file__).with_name('tb085_renewal_roster.json')
+    sidecar={'schemaVersion':1,'kind':'tubeboard-official-passenger-origin-inventory',
+        'publicationSHA256':publication_sha,'capturedAt':captured,
+        'producerSHA256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        'rosterSHA256':hashlib.sha256(roster_path.read_bytes()).hexdigest(),
+        'catalogueSHA256':hashlib.sha256(catalogue.read_bytes()).hexdigest(),
+        'xmlPublicationMembers':members,'inventory':inventory}
+    inventory['inventoryDifferenceSHA256']=inventory_difference_digest(sidecar)
+    encoded=(json.dumps(sidecar,indent=2)+'\n').encode('utf-8')
+    if len(encoded)>MAX_ORIGIN_INVENTORY_BYTES:
+        sidecar=compact_inventory_failure(sidecar,'Full grouped origin inventory exceeds the 2 MiB evidence bound.')
+    return sidecar
+
+def inventory_from_archive(archive: Path, catalogue: Path, captured: str,
+                           holiday_dates: list[str]) -> dict:
+    """Generate the independent source inventory without fetching any station API."""
+    publication_sha=hashlib.sha256(archive.read_bytes()).hexdigest()
+    civil=datetime.fromisoformat(captured).astimezone(ZoneInfo('Europe/London')).date().isoformat()
+    source,members=read_archive(archive)
+    catalogue_data=json.loads(catalogue.read_text())
+    membership={(line['lineID'],station['stationID']) for station in catalogue_data['stations']
+                for line in station['lines']}
+    inventory_error=None
+    try:
+        inventory=passenger_origin_inventory(source,members,membership,civil,set(holiday_dates),
+            set(LINE_NAMES.values())|{'dlr'})
+    except Exception as error:
+        inventory_error=f"Origin inventory could not be generated: {type(error).__name__}."
+        inventory={'schemaVersion':1,'discoveryStatus':'incomplete',
+            'source':'same official TXC archive parse as qualification',
+            'originSemantics':'Explicit pickup starts only; through/depot not inferred; route origin/closure not asserted. Tram and rail are separate adapters.',
+            'horizon':{'startDate':civil,'endDate':civil},'xmlMemberCount':len(members),
+            'xmlLineIDs':sorted({member.get('lineID','unknown') for member in members}),
+            'missingXmlLineIDs':[],'passengerOriginCount':0,'activePassengerOrigins':[],
+            'bankHolidayDates':sorted(holiday_dates),'uncataloguedOriginCount':0,'uncataloguedOrigins':{},
+            'unresolvedMembers':[],'malformedCurrentRows':[]}
+    sidecar=origin_inventory_sidecar(publication_sha,captured,catalogue,members,inventory)
+    if inventory_error:
+        sidecar=compact_inventory_failure(sidecar,inventory_error)
+    return sidecar
+
+def unavailable_origin_inventory(publication_sha: str, captured: str, catalogue: Path,
+                                 reason: str) -> dict:
+    """Retain a fail-closed inventory result when a required source cannot be read."""
+    inventory={'schemaVersion':1,'discoveryStatus':'incomplete',
+        'source':'same official TXC archive parse as qualification',
+        'originSemantics':'Explicit pickup starts only; through/depot not inferred; route origin/closure not asserted. Tram and rail are separate adapters.',
+        'horizon':{'startDate':captured[:10],'endDate':captured[:10]},'xmlMemberCount':0,
+        'xmlLineIDs':[],'missingXmlLineIDs':[],'passengerOriginCount':0,
+        'activePassengerOrigins':[],'bankHolidayDates':[],'uncataloguedOriginCount':0,
+        'uncataloguedOrigins':{},'unresolvedMembers':[],'malformedCurrentRows':[]}
+    sidecar=origin_inventory_sidecar(publication_sha,captured,catalogue,[],inventory)
+    return compact_inventory_failure(sidecar,reason)
+
+def duration_seconds(value: str | None) -> int:
+    """Bounded TXC duration; no calendar units, negatives or truncation."""
+    match = re.fullmatch(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', value or '')
+    if not match or not any(match.groups()):raise ValueError('unsupported timing duration')
+    seconds = sum(int(part or 0)*factor for part,factor in zip(match.groups(),[3600,60,1]))
+    if seconds > 172800:raise ValueError('unsupported timing duration')
+    return seconds
+
+def xml_selected_call_rows(data: bytes, member: str, station: str, direction: str, tram_platforms=None) -> tuple[list[dict],dict]:
+    """TXC2.4 §3.7.2: departure = arrival + inbound-To/outbound-From waits.
+
+    This separate opt-in path never changes the existing origin extractor.
+    Full seconds accumulate; §3.7.2.2 floors the resulting display minute once.
+    Only explicitly supported timing/calendar constructs can produce evidence.
+    """
+    if direction not in {'inbound','outbound'}:raise ValueError('unsupported selected direction')
+    root=ET.fromstring(data);services=root.findall('.//t:Service',NS)
+    if len(services)!=1:raise ValueError('unexpected service count')
+    service=services[0];names=[e.text for e in service.findall('t:Lines/t:Line/t:LineName',NS)]
+    line = published_line(names[0], tram_platforms) if len(names) == 1 else None
+    if line is None:return [],{}
+    station_for_stop = tram_platforms.__getitem__ if line == 'tram' else txc_station
+    start=service.findtext('t:OperatingPeriod/t:StartDate',namespaces=NS);end=service.findtext('t:OperatingPeriod/t:EndDate',namespaces=NS)
+    if not start or not end or date.fromisoformat(start)>date.fromisoformat(end):raise ValueError('invalid operating period')
+    sections={}
+    for section in root.findall('.//t:JourneyPatternSection',NS):
+        ident=section.attrib.get('id');links=section.findall('t:JourneyPatternTimingLink',NS)
+        if not ident or not links or ident in sections:raise ValueError('invalid section identity')
+        sections[ident]=links
+    patterns={}
+    for pattern in service.findall('t:StandardService/t:JourneyPattern',NS):
+        ident=pattern.attrib.get('id');refs=(pattern.findtext('t:JourneyPatternSectionRefs',namespaces=NS) or '').split()
+        if not ident or ident in patterns or not refs or any(ref not in sections for ref in refs):raise ValueError('invalid pattern reference')
+        links=[link for ref in refs for link in sections[ref]]
+        # Reuse explicit activity/boundary validation, without dropping pass timing.
+        uses=[]
+        for link in links:
+            if any(local_tag(c) not in {'From','To','RouteLinkRef','RunTime','Direction'} for c in link):raise ValueError('unsupported timing construct')
+            pair=[]
+            for end_name in ['From','To']:
+                usage=link.find('t:'+end_name,NS)
+                if usage is None or any(local_tag(c) not in {'StopPointRef','Activity','TimingStatus','WaitTime','DynamicDestinationDisplay','Vias'} for c in usage):raise ValueError('unsupported stop usage')
+                stop=usage.findtext('t:StopPointRef',namespaces=NS);activity=usage.findtext('t:Activity',namespaces=NS)
+                if not stop or activity not in {'pickUp','pickUpAndSetDown','setDown','pass'}:raise ValueError('unknown/missing calling activity')
+                wait=usage.findtext('t:WaitTime',namespaces=NS)
+                pair.append((stop,activity,0 if wait is None else duration_seconds(wait)))
+            if uses and uses[-1][:2]!=pair[0][:2]:raise ValueError('disconnected or contradictory timing boundary')
+            if not uses:uses.append(pair[0])
+            uses.append(pair[1])
+        raw_direction=pattern.findtext('t:Direction',namespaces=NS)
+        occurrences=[i for i,use in enumerate(uses[:-1]) if station_for_stop(use[0])==station and use[1] in {'pickUp','pickUpAndSetDown'}]
+        if occurrences and raw_direction not in {'inbound','outbound'}:raise ValueError('unknown publisher direction')
+        patterns[ident]=(pattern,links,uses,raw_direction,occurrences)
+    rows=[]
+    for journey in root.findall('.//t:VehicleJourney',NS):
+        ref=journey.findtext('t:JourneyPatternRef',namespaces=NS)
+        if ref not in patterns:raise ValueError('missing pattern reference')
+        pattern,links,uses,raw_direction,occurrences=patterns[ref]
+        if not occurrences or raw_direction!=direction:continue
+        if any(link.findtext('t:Direction',namespaces=NS) not in {None,'inherit',raw_direction} for link in links):raise ValueError('contradictory link direction')
+        service_ref=journey.findtext('t:ServiceRef',namespaces=NS)
+        service_code=service.findtext('t:ServiceCode',namespaces=NS)
+        if service_ref is not None and service_ref!=service_code:raise ValueError('wrong journey service reference')
+        line_ref=journey.findtext('t:LineRef',namespaces=NS) or pattern.findtext('t:LineRef',namespaces=NS)
+        line_ids={value.attrib.get('id') for value in service.findall('t:Lines/t:Line',NS)}
+        if line_ref is not None and line_ref not in line_ids:raise ValueError('wrong journey line reference')
+        validate_display_only_overrides(journey,links)
+        if any(journey.find('t:'+tag,NS) is not None for tag in ['VehicleJourneyRef','StartDeadRun','EndDeadRun','Frequency']):raise ValueError('unsupported journey timing override')
+        if any(pattern.find('t:'+tag,NS) is not None for tag in ['StartDeadRun','EndDeadRun','Frequency']):raise ValueError('unsupported pattern timing construct')
+        if uses[0][1] not in {'pickUp','pickUpAndSetDown'} or uses[-1][1] not in {'setDown','pickUpAndSetDown'}:raise ValueError('nonboarding origin or nonalighting destination')
+        if uses[0][2]!=0:raise ValueError('unsupported initial wait')
+        clock=journey.findtext('t:DepartureTime',namespaces=NS)
+        if not clock or not re.fullmatch(r'\d{2}:\d{2}:\d{2}',clock):raise ValueError('unsupported departure clock')
+        hh,mm,ss=map(int,clock.split(':'));shift=int(journey.findtext('t:DepartureDayShift',default='0',namespaces=NS))
+        if not(0<=hh<24 and 0<=mm<60 and 0<=ss<60 and shift in {0,1}):raise ValueError('unsupported departure clock')
+        profile=journey.find('t:OperatingProfile',NS)
+        if profile is None:profile=pattern.find('t:OperatingProfile',NS)
+        if profile is None:profile=service.find('t:OperatingProfile',NS)
+        weekdays=profile_days(profile)
+        seconds=(hh+24*shift)*3600+mm*60+ss
+        departures=[seconds]
+        for index,link in enumerate(links):
+            seconds+=duration_seconds(link.findtext('t:RunTime',namespaces=NS))
+            # Arrival-To and departure-From are independent wait contributions.
+            seconds+=uses[index+1][2]
+            if index+1<len(links):
+                wait=links[index+1].findtext('t:From/t:WaitTime',namespaces=NS)
+                seconds+=0 if wait is None else duration_seconds(wait)
+            departures.append(seconds)
+        for occurrence in occurrences:
+            onward=[station_for_stop(stop) for stop,activity,_ in uses[occurrence+1:] if activity!='pass']
+            # A real nonadjacent round trip retains its complete ordered path.
+            # Immediate/adjacent same-station calls offer no distinct onward call.
+            if not onward or not any(stop!=station for stop in onward):raise ValueError('unqualified selected onward destination')
+            rows.append({'lineID':line,'stationID':station,'direction':direction,'key':key(departures[occurrence]//60,onward),
+                'weekdays':weekdays,'start':start,'end':end,'member':member})
+    return rows,{'member':member,'lineID':line,'sha256':hashlib.sha256(data).hexdigest(),'operatingStartDate':start,'operatingEndDate':end}
+
+def read_selected_archive(path: Path, requests: list[tuple[str,str,str]], members: list[dict], tram_platforms=None) -> list[dict]:
+    """Only members already identified by the existing generator for selected lines."""
+    rows=[]
+    with zipfile.ZipFile(path) as outer:
+        nested=[n for n in outer.namelist() if n.startswith('LULDLRTRAMRIVERCABLE FULL ') and n.endswith('.zip')]
+        if len(nested)!=1:raise ValueError('expected one official LUL/DLR archive')
+        with zipfile.ZipFile(io.BytesIO(outer.read(nested[0]))) as inner:
+            for line,station,direction in requests:
+                for meta in members:
+                    if meta['lineID']!=line:continue
+                    try:
+                        parsed,_=xml_selected_call_rows(inner.read(meta['member']),meta['member'],station,direction,tram_platforms)
+                        rows.extend(parsed)
+                    except (ValueError,KeyError,TypeError) as error:
+                        rows.append({'lineID':line,'stationID':station,'direction':direction,'member':meta['member'],
+                            'start':meta['operatingStartDate'],'end':meta['operatingEndDate'],'qualificationGap':str(error)})
+    return rows
+
+def qualify_directional_entry(record: dict, selected_rows: list[dict], capture_dir: Path, civil: str, holidays: set[str]) -> dict:
+    scopes=record.get('directionalTimetableSources')
+    gap={'lineID':record['lineID'],'stationID':record['stationID'],'status':'gap','gapReason':'invalid directional source definitions','nonOperationBankHolidays':True,'profiles':[]}
+    if not isinstance(scopes,list) or not 1<=len(scopes)<=2:return gap
+    directions=[scope.get('direction') for scope in scopes]
+    if len(set(directions))!=len(directions) or any(d not in {'inbound','outbound'} for d in directions):return gap
+    definitions=[];evidence=[]
+    for scope in sorted(scopes,key=lambda s:s['direction']):
+        direction=scope['direction'];source=scope.get('timetableSource',{})
+        try:
+            body=(capture_dir/source['body']).read_bytes()
+            if not re.fullmatch(r'[0-9a-f]{64}',source.get('sha256','')) or hashlib.sha256(body).hexdigest()!=source['sha256']:raise ValueError('directional source body differs')
+            payload=json.loads(body)
+            if payload.get('direction')!=direction:raise ValueError('wrong API direction')
+            rows=[r for r in selected_rows if r['lineID']==record['lineID'] and r['stationID']==record['stationID'] and r.get('direction')==direction]
+            scoped=dict(record,timetableSource=source)
+            result=qualify_entry(scoped,rows,capture_dir,civil,holidays, allow_partial_week=False)
+            if result['status']!='qualified':raise ValueError(result['gapReason'])
+            definitions.append({'direction':direction,'profiles':result['profiles']})
+            evidence.append({'direction':direction,'apiBodySHA256':result['apiBodySHA256'],'operatingStartDate':result['operatingStartDate'],
+                'operatingEndDate':result['operatingEndDate'],'xmlMembers':result['xmlMembers'],'originatingDateGaps':result['originatingDateGaps']})
+        except (ValueError,KeyError,TypeError,OSError) as error:
+            gap['gapReason']='direction '+direction+': '+str(error);return gap
+    # Overlapping raw keys in opposite direction scopes lack a disjoint service proof.
+    keys=[]
+    for scope in scopes:
+        payload=json.loads((capture_dir/scope['timetableSource']['body']).read_bytes())
+        keys.append(set(k for values in api_profile_rows(payload,record['lineID'],record['stationID']).values() for k in values))
+    if len(keys)==2 and keys[0]&keys[1]:gap['gapReason']='overlapping directional service keys';return gap
+    return dict(gap,status='qualified',gapReason=None,directionalDefinitions=definitions,
+        operatingStartDate=min(e['operatingStartDate'] for e in evidence),operatingEndDate=max(e['operatingEndDate'] for e in evidence),
+        directionalSourceEvidence=evidence)
+
+
+def api_profile_rows(payload: dict,line: str,station: str) -> dict[str,list[str]]:
+    if payload.get('lineId')!=line or payload.get('timetable',{}).get('departureStopId')!=station:raise ValueError('wrong line or station')
+    profiles=defaultdict(list)
+    for route in payload['timetable']['routes']:
+        paths={}
+        for interval in route.get('stationIntervals',[]):
+            ident=str(interval['id'])
+            if ident in paths:raise ValueError('duplicate interval identity')
+            paths[ident]=[s['stopId'] for s in interval['intervals']]
+        for schedule in route.get('schedules',[]):
+            name=schedule['name']
+            if name not in API_DAYS:raise ValueError('unqualified API profile '+name)
+            for journey in schedule.get('knownJourneys',[]):
+                hh,mm=int(journey['hour']),int(journey['minute'])
+                if not(0<=hh<48 and 0<=mm<60):raise ValueError('invalid API minute')
+                profiles[name].append(key(hh*60+mm,paths[str(journey['intervalId'])]))
+    if not profiles:raise ValueError('no known journey schedules')
+    return dict(profiles)
+
+def agreed_definition(rows: list[dict], civil: str) -> tuple[Counter | None,str | None]:
+    weekday=date.fromisoformat(civil).isoweekday()%7+1
+    applicable=[r for r in rows if r['start']<=civil<=r['end']]
+    if any(r.get('qualificationGap') for r in applicable):return None,'unsupported publisher member'
+    definitions=defaultdict(Counter)
+    for row in applicable:
+        if weekday in row['weekdays']:definitions[row['member']][logical_key(row['key'])]+=1
+    values=list(definitions.values())
+    if not values:return None,'no published originating definition'
+    if any(value!=values[0] for value in values[1:]):return None,'publication member conflict'
+    return values[0],None
+
+def date_ranges(dates: list[str], eligible: set[str], weekdays: set[int]) -> list[dict]:
+    ranges=[];begin=last=None
+    for civil in dates:
+        weekday=date.fromisoformat(civil).isoweekday()%7+1
+        if weekday not in weekdays or civil in eligible:
+            if begin is None:begin=civil
+            last=civil
+        elif begin is not None:
+            ranges.append({'startDate':begin,'endDate':last});begin=last=None
+    if begin is not None:ranges.append({'startDate':begin,'endDate':last})
+    return [r for r in ranges if any(r['startDate']<=d<=r['endDate'] for d in eligible)]
+
+def qualify_entry(record:dict,source_rows:list[dict],capture_dir:Path,civil_date:str,holidays:set[str] | None=None, *, allow_partial_week=True) -> dict:
+    line,station=record['lineID'],record['stationID']
+    entry={'lineID':line,'stationID':station,'status':'gap','gapReason':None,
+      'nonOperationBankHolidays':True,'profiles':[]}
+    if line in RAIL:
+        entry['gapReason']='Rail uses qualified ArrivalDepartures scheduled/estimated departure fields; Unified origin timetable is not this adapter.';return entry
+    rows=[r for r in source_rows if r['lineID']==line and r['stationID']==station]
+    if not rows:entry['gapReason']='No published XML origin journeys; through/loop offsets are not inferred.';return entry
+    try:
+        start=min(r['start'] for r in rows);end=max(r['end'] for r in rows)
+        d=date.fromisoformat(start);final=date.fromisoformat(end)
+        if final<d or (final-d).days>730:raise ValueError('unsupported publication date span')
+        dates=[]
+        while d<=final:dates.append(d.isoformat());d+=timedelta(days=1)
+        definitions={civil:agreed_definition(rows,civil) for civil in dates}
+        meta=record['timetableSource']
+        if meta.get('status')!=200:raise ValueError('timetable HTTP '+str(meta.get('status')))
+        body=(capture_dir/meta['body']).read_bytes();profiles=api_profile_rows(json.loads(body),line,station)
+        covered=set().union(*(API_DAYS[n] for n in profiles))
+        if any(sum(day in API_DAYS[n] for n in profiles)>1 for day in range(1,8)):
+            raise ValueError('overlapping API weekday profiles')
+        # A missing weekday cannot supply a departure. Keep it explicit while
+        # independently comparing the complete service on every offered day.
+        gaps = [{'serviceDate': civil, 'reason': 'no matching API weekday profile'}
+                for civil, (expected, _) in definitions.items()
+                if expected and date.fromisoformat(civil).isoweekday() % 7 + 1 not in covered]
+        for name,actual in profiles.items():
+            weekdays=API_DAYS[name];maximum=Counter()
+            for civil,(expected,error) in definitions.items():
+                if expected is not None and date.fromisoformat(civil).isoweekday()%7+1 in weekdays:maximum |= expected
+            raw=Counter(map(logical_key,actual))
+            if raw-maximum:raise ValueError('XML/API full path parity differs for '+name+' unexplained API occurrence')
+            variants={}
+            for civil in dates:
+                weekday=date.fromisoformat(civil).isoweekday()%7+1
+                if weekday not in weekdays:continue
+                expected,error=definitions[civil]
+                if error or civil in (holidays or set()):
+                    gaps.append({'serviceDate':civil,'reason':error or 'bank holiday withheld'});continue
+                if expected-raw:
+                    gaps.append({'serviceDate':civil,'reason':'missing published API occurrence'});continue
+                excess=raw-expected;retained=[];excluded=Counter()
+                for raw_key in sorted(actual):
+                    logical=logical_key(raw_key)
+                    if excess[logical]>0:excluded[raw_key]+=1;excess[logical]-=1
+                    else:retained.append(raw_key)
+                if Counter(map(logical_key,retained))!=expected:raise ValueError('missing complete published subset')
+                identity=tuple(sorted(excluded.items()))
+                if identity not in variants:
+                    variant={'name':name,'weekdays':set(),**fingerprint(actual),'eligibleDates':set()}
+                    if excluded:
+                        digest=fingerprint(retained)
+                        variant.update(excludedJourneyKeys=[{'key':k,'count':c} for k,c in sorted(excluded.items())],publishedCount=digest['count'],publishedSHA256=digest['sha256'])
+                    variants[identity]=variant
+                variants[identity]['weekdays'].add(weekday);variants[identity]['eligibleDates'].add(civil)
+            for variant in variants.values():
+                days=variant.pop('weekdays');eligible=variant.pop('eligibleDates');ranges=date_ranges(dates,eligible,days)
+                if not ranges or len(ranges)>32:raise ValueError('unsupported originating date range count')
+                variant.update(weekdays=sorted(days),originatingServiceDateRanges=ranges)
+                entry['profiles'].append(variant)
+        if not entry['profiles'] or len(entry['profiles'])>64:raise ValueError('unsupported originating profile count')
+        if not allow_partial_week and set().union(*(set(p['weekdays']) for p in entry['profiles'])) != set(range(1, 8)):
+            raise ValueError('directional timetable requires all seven weekdays')
+        entry.update(status='qualified',gapReason=None,operatingStartDate=start,operatingEndDate=end,
+          originatingDateGaps=sorted(gaps,key=lambda g:g['serviceDate']),xmlMembers=sorted({r['member'] for r in rows}),apiBodySHA256=hashlib.sha256(body).hexdigest())
+    except (ValueError,KeyError,TypeError) as error:
+        entry['gapReason']=str(error);entry['profiles']=[]
+    return entry
+
+def generate_with_inventory(archive:Path,capture_dir:Path,catalogue:Path,capture_overrides:Path | None=None, *,
+                            qualification_date: date | None=None) -> tuple[dict,dict]:
+    download=json.loads((capture_dir/'publication-download.json').read_text());sha=hashlib.sha256(archive.read_bytes()).hexdigest()
+    if download['sha256']!=sha:raise ValueError('archive differs from captured publication')
+    headers={k.lower():v for k,v in download['headers'].items()}
+    if headers.get('x-amz-meta-sha256')!=sha:raise ValueError('publisher/body identity mismatch')
+    captured=download['receivedAt']
+    # A cached ZIP keeps its acquisition clock; runtime inventory can use the
+    # independently reobserved current civil day without retiming the source.
+    if qualification_date is not None and type(qualification_date) is not date:
+        raise ValueError('qualification_date must be an explicit civil date')
+    civil=(qualification_date or datetime.fromisoformat(captured).astimezone(ZoneInfo('Europe/London')).date()).isoformat()
+    holidays=json.loads((capture_dir/'bank-holidays.body').read_text())['england-and-wales']['events']
+    holiday_dates=sorted({e['date'] for e in holidays})
+    tram_capture = capture_dir / 'tram-stop-points.body'
+    tram_platforms = None
+    if tram_capture.is_file():
+        from tb085_tram_stations import platform_parents, stations
+        tram_platforms = platform_parents(json.loads(tram_capture.read_bytes()), stations())
+    source,members=read_archive(archive,tram_platforms)
+    records=json.loads((capture_dir/'line-station-matrix.json').read_text())
+    extra=capture_dir/'extra-line-station-matrix.json'
+    if extra.exists():records+=json.loads(extra.read_text())
+    if capture_overrides is not None:
+        overrides=json.loads(capture_overrides.read_text())
+        if not isinstance(overrides,list) or len(overrides)>32:raise ValueError('invalid bounded capture overrides')
+        replacements={(r['lineID'],r['stationID']):r for r in overrides}
+        if len(replacements)!=len(overrides):raise ValueError('duplicate capture override')
+        if not set(replacements).issubset({(r['lineID'],r['stationID']) for r in records}):raise ValueError('override outside captured scope')
+        records=[replacements.get((r['lineID'],r['stationID']),r) for r in records]
+    directional_requests=[]
+    for record in records:
+        if 'directionalTimetableSources' not in record:continue
+        scopes=record['directionalTimetableSources']
+        if not isinstance(scopes,list) or not 1<=len(scopes)<=2:raise ValueError('invalid directional source definitions')
+        if record['lineID'] in RAIL:raise ValueError('rail calendar source not qualified by selected Tube adapter')
+        directions=[scope.get('direction') for scope in scopes]
+        if len(set(directions))!=len(directions) or any(d not in {'inbound','outbound'} for d in directions):raise ValueError('invalid directional source definitions')
+        directional_requests.extend((record['lineID'],record['stationID'],direction) for direction in directions)
+    directional_requests=sorted(set(directional_requests))
+    if len(directional_requests)>64:raise ValueError('unbounded selected-call capture scope')
+    selected_rows=read_selected_archive(archive,directional_requests,members,tram_platforms) if directional_requests else []
+    catalogue_data=json.loads(catalogue.read_text())
+    membership={(l['lineID'],s['stationID']) for s in catalogue_data['stations'] for l in s['lines']}
+    if tram_platforms:
+        membership.update(('tram', station) for station in tram_platforms.values())
+    inventory_error=None
+    try:
+        origin_inventory=passenger_origin_inventory(source,members,membership,civil,set(holiday_dates),
+            set(LINE_NAMES.values())|{'dlr'})
+    except Exception as error:
+        # Inventory discovery is diagnostic and must not gate the independent
+        # rider proof once its qualification inputs have already been read.
+        inventory_error=f"Origin inventory could not be generated: {type(error).__name__}."
+        xml_lines=sorted({member.get('lineID','unknown') for member in members})
+        origin_inventory={'schemaVersion':1,'discoveryStatus':'incomplete',
+            'source':'same official TXC archive parse as qualification',
+            'originSemantics':'Explicit pickup starts only; through/depot not inferred; route origin/closure not asserted. Tram and rail are separate adapters.',
+            'horizon':{'startDate':civil,'endDate':civil},'xmlMemberCount':len(members),
+            'xmlLineIDs':xml_lines,'missingXmlLineIDs':[],'passengerOriginCount':0,
+            'activePassengerOrigins':[],'bankHolidayDates':sorted(holiday_dates),
+            'uncataloguedOriginCount':0,
+            'uncataloguedOrigins':{},'unresolvedMembers':[],'malformedCurrentRows':[]}
+    entries=[];seen=set()
+    for record in records:
+        pair=(record['lineID'],record['stationID'])
+        if pair not in membership:raise ValueError('capture outside current catalogue '+str(pair))
+        if pair in seen:continue
+        seen.add(pair);entries.append(qualify_directional_entry(record,selected_rows,capture_dir,civil,set(holiday_dates))
+            if 'directionalTimetableSources' in record else qualify_entry(record,source,capture_dir,civil,set(holiday_dates)))
+    proof={'schemaVersion':1,'publication':{'url':SOURCE_URL,'sha256':sha,
+      'publishedAt':headers.get('last-modified'),'capturedAt':captured},'timezone':'Europe/London',
+      'bankHolidayDates':holiday_dates,'holidaySource':'https://www.gov.uk/bank-holidays.json',
+      'holidayCoverageStart':min(holiday_dates),'holidayCoverageEnd':max(holiday_dates),
+      'canonicalKey':'extendedMinute(4 ASCII digits)|ordered API interval stop IDs joined with >; sorted LF keys; preserve duplicates',
+      'sourceParityEquivalence':'Compare each applicable publisher member complete counted calling multiset per originating date; overlapping members must agree, never sum or override. Omit only explicit pass activity; adjacent API timing intervals have logical station parity. Retain nonadjacent revisits/duplicate journeys. Per-profile agreed-date maximum accounts for raw keys; exact counted exclusions and bounded date ranges qualify complete originating subsets.',
+      'qualificationScope':('Origin departures plus explicitly captured direction-scoped selected calling-stop departures. Every bank holiday is conservatively withheld. Runtime publication/parity/freshness/calendar/closure qualification remains required.' if directional_requests else 'Origin departures only. Every bank holiday is conservatively withheld. Runtime publication/parity/freshness/calendar/closure qualification remains required.'),
+      'entries':sorted(entries,key=lambda e:(e['lineID'],e['stationID'])),'xmlPublications':members,
+      'coverage':{'catalogueLineIDs':sorted({p[0] for p in membership}),'capturedLineIDs':sorted({e['lineID'] for e in entries}),
+      'uncapturedStationLinePairs':len(membership-seen)}}
+    sidecar=origin_inventory_sidecar(sha,captured,catalogue,members,origin_inventory)
+    if inventory_error:
+        sidecar=compact_inventory_failure(sidecar,inventory_error)
+    return proof,sidecar
+
+def generate(archive:Path,capture_dir:Path,catalogue:Path,capture_overrides:Path | None=None) -> dict:
+    return generate_with_inventory(archive,capture_dir,catalogue,capture_overrides)[0]
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--archive',required=True,type=Path);parser.add_argument('--capture-dir',required=True,type=Path)
+    parser.add_argument('--catalogue',type=Path,default=Path(__file__).resolve().parents[1]/'TubeBoard Watch App/TubeStationCatalog.json')
+    parser.add_argument('--capture-overrides',type=Path)
+    parser.add_argument('--output',required=True,type=Path)
+    parser.add_argument('--inventory-output',type=Path,help='Write the standalone passenger-origin inventory sidecar')
+    args=parser.parse_args()
+    if args.inventory_output:
+        result,inventory=generate_with_inventory(args.archive,args.capture_dir,args.catalogue,args.capture_overrides)
+        args.inventory_output.write_text(json.dumps(inventory,indent=2)+'\n')
+    else:
+        result=generate(args.archive,args.capture_dir,args.catalogue,args.capture_overrides)
+    args.output.write_text(json.dumps(result,indent=2)+'\n')
+    print(json.dumps({'qualified':sum(e['status']=='qualified' for e in result['entries']),'gaps':sum(e['status']=='gap' for e in result['entries']),'coverage':result['coverage']},indent=2))
+if __name__=='__main__':main()

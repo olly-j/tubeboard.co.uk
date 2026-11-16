@@ -63,3 +63,20 @@ passed. A real local server returned the expected responses for health, home,
 privacy, support, a bundled publication, a missing publication and the disabled
 edition observer (503). The coordinator received independent source review
 after correcting expired-authority completion and a stranded alert retry.
+
+The first real retained-data resource measurement blocks activation of the
+unchanged producer on this service. macOS/Python 3.15.2 qualification of the
+133,106,037-byte `788955e8…` official archive used 828.9 MiB maximum resident
+memory (14.11 seconds); archive parsing alone used 532.7 MiB (7.35 seconds).
+These are not Linux-container acceptance measurements, but neither supports
+cohosting the parser with notifications on the existing 256 MiB machine.
+Narrower API batches cannot eliminate the full-archive parse cost. Preserve
+production configuration while reducing and measuring that cost.
+
+The source bundle under `runtime/timetable-producer` pins the app producer's
+exact commit and all 12 file hashes. `scripts/sync-timetable-producer.py` copies
+only that reviewed committed import/data closure; `--check` verifies it without
+network or access to the app checkout. Repository checks also import its CLI.
+The Docker image does not copy or run this bundle yet. Updating the producer
+requires a reviewed source commit and an explicit bundle sync, not downloading
+arbitrary code into the running service.

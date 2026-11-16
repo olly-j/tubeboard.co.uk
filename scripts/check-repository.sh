@@ -66,6 +66,8 @@ python3 -m json.tool .well-known/apple-app-site-association >/dev/null
 openssl x509 -in certificates/AppleRootCA-G2.pem -noout -subject -fingerprint -sha256 >/dev/null
 openssl x509 -in certificates/AppleRootCA-G3.pem -noout -subject -fingerprint -sha256 >/dev/null
 python3 -c 'import pathlib, tomllib; tomllib.loads(pathlib.Path("fly.toml").read_text())'
+python3 scripts/sync-timetable-producer.py --check
+PYTHONDONTWRITEBYTECODE=1 python3 runtime/timetable-producer/scripts/tb085_prepare_renewal.py --help >/dev/null
 
 if grep -Rqs -- 'flyctl deploy' .github/workflows; then
   echo "Production deployment must not run in GitHub Actions." >&2

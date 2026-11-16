@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "repository": "olly-j/My-Train-Times",
+  "revision": "f0fa533269d82cf0b9229f34d93e21935c769ba4",
+  "files": {
+    "scripts/tb085_prepare_renewal.py": {
+      "bytes": 70928,
+      "sha256": "f1d558190b2894820b42d765a2f44b948cb9c01371c81abb8b95dfcea6f376ea"
+    },
+    "scripts/tb085_package_timetable_proof.py": {
+      "bytes": 9322,
+      "sha256": "69cdd9bea393896963cfb67497851bee96fc725ed70182dfe66dbdbd1f32fa38"
+    },
+    "scripts/tb085_timetable_publication.py": {
+      "bytes": 54488,
+      "sha256": "70868b2f7a86039739b91f8cf70099c0df4acd5055be461717ff2828cd3b262c"
+    },
+    "scripts/tb085_monitor_publication.py": {
+      "bytes": 39634,
+      "sha256": "ae01c5fdeca2d732d523656a0eaba35dfdeb72f8a6414a1a78c32057d6069243"
+    },
+    "scripts/tb085_source_transfer.py": {
+      "bytes": 5223,
+      "sha256": "6567bcc4f0f030e0e3ebb68b2be50604bbe86ea038de3598c91db98221a490a8"
+    },
+    "scripts/tb085_additive_qualification.py": {
+      "bytes": 6308,
+      "sha256": "f2a69c361044ca885da2787fb09286c6e89e46645ae0ab7a693bd34aacb33f5f"
+    },
+    "scripts/tb085_reference_readback.py": {
+      "bytes": 2957,
+      "sha256": "637c0d6f9a7d8ab265bd3a5593bd78613cafc8bce4e3eaab35f0647bfd6bf35d"
+    },
+    "scripts/tb085_live_parity.py": {
+      "bytes": 15143,
+      "sha256": "a5e6ccc4e01c0d33abcfc18363cc6ae8199a91cbe91990f86c379b13d9526338"
+    },
+    "scripts/tb085_tram_stations.py": {
+      "bytes": 2064,
+      "sha256": "0388f3d58fd29ba9cf314a4757d87e4b968f1b6c802c3982cd750e0138112e03"
+    },
+    "scripts/check_tfl_api_health.py": {
+      "bytes": 55041,
+      "sha256": "570e2080eb68c952f87289cf112edfff5e82e4d83558222dc4b46a8cc782b1dd"
+    },
+    "scripts/tb085_renewal_roster.json": {
+      "bytes": 5920,
+      "sha256": "c2f06840d540b2dffed40e821ed0e68d46c60a8b772d6a3bacbe7e6fe46aae13"
+    },
+    "TubeBoard Watch App/TubeStationCatalog.json": {
+      "bytes": 129798,
+      "sha256": "f98fbbe6e4c343fe53a99a471dd8e9c21049651717af681fc1509f33838f5590"
+    }
+  }
+}

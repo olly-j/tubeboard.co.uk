@@ -1,0 +1,291 @@
+[
+  {
+    "lineID": "bakerloo",
+    "stationID": "940GZZLUHAW",
+    "stationName": "Harrow & Wealdstone",
+    "catalogueMembership": [
+      "bakerloo"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "central",
+    "stationID": "940GZZLUEPG",
+    "stationName": "Epping",
+    "catalogueMembership": [
+      "central"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "circle",
+    "stationID": "940GZZLUERC",
+    "stationName": "Edgware Road (Circle Line)",
+    "catalogueMembership": [
+      "circle",
+      "district",
+      "hammersmith-city"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "district",
+    "stationID": "940GZZLUUPM",
+    "stationName": "Upminster",
+    "catalogueMembership": [
+      "district"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "hammersmith-city",
+    "stationID": "940GZZLUHSC",
+    "stationName": "Hammersmith (H&C Line)",
+    "catalogueMembership": [
+      "circle",
+      "hammersmith-city"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "jubilee",
+    "stationID": "940GZZLUSTM",
+    "stationName": "Stanmore",
+    "catalogueMembership": [
+      "jubilee"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "metropolitan",
+    "stationID": "940GZZLUAMS",
+    "stationName": "Amersham",
+    "catalogueMembership": [
+      "metropolitan"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "northern",
+    "stationID": "940GZZLUEGW",
+    "stationName": "Edgware",
+    "catalogueMembership": [
+      "northern"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "piccadilly",
+    "stationID": "940GZZLUHR4",
+    "stationName": "Heathrow Terminal 4",
+    "catalogueMembership": [
+      "piccadilly"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "victoria",
+    "stationID": "940GZZLUBXN",
+    "stationName": "Brixton",
+    "catalogueMembership": [
+      "victoria"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "waterloo-city",
+    "stationID": "940GZZLUWLO",
+    "stationName": "Waterloo",
+    "catalogueMembership": [
+      "bakerloo",
+      "jubilee",
+      "northern",
+      "waterloo-city"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "elizabeth",
+    "stationID": "910GSHENFLD",
+    "stationName": "Shenfield",
+    "catalogueMembership": [
+      "elizabeth"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "liberty",
+    "stationID": "910GROMFORD",
+    "stationName": "Romford",
+    "catalogueMembership": [
+      "elizabeth",
+      "liberty"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "lioness",
+    "stationID": "910GWATFJDC",
+    "stationName": "Watford Junction",
+    "catalogueMembership": [
+      "lioness"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "mildmay",
+    "stationID": "910GWLSDJHL",
+    "stationName": "Willesden Junction",
+    "catalogueMembership": [
+      "lioness",
+      "mildmay"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "suffragette",
+    "stationID": "910GBARKRIV",
+    "stationName": "Barking Riverside",
+    "catalogueMembership": [
+      "suffragette"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "weaver",
+    "stationID": "910GENFLDTN",
+    "stationName": "Enfield Town",
+    "catalogueMembership": [
+      "weaver"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "windrush",
+    "stationID": "910GDALS",
+    "stationName": "Dalston Junction",
+    "catalogueMembership": [
+      "windrush"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "dlr",
+    "stationID": "940GZZDLBNK",
+    "stationName": "Bank",
+    "catalogueMembership": [
+      "dlr"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "northern",
+    "stationID": "940GZZLUMDN",
+    "stationName": "Morden",
+    "catalogueMembership": [
+      "northern"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "northern",
+    "stationID": "940GZZLUGDG",
+    "stationName": "Goodge Street",
+    "catalogueMembership": [
+      "northern"
+    ],
+    "qualifiedBaseline": true,
+    "directions": [
+      "inbound",
+      "outbound"
+    ]
+  },
+  {
+    "lineID": "northern",
+    "stationID": "940GZZLUMHL",
+    "stationName": "Mill Hill East",
+    "catalogueMembership": [
+      "northern"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "central",
+    "stationID": "940GZZLUWOF",
+    "stationName": "Woodford",
+    "catalogueMembership": [
+      "central"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "district",
+    "stationID": "940GZZLUERC",
+    "stationName": "Edgware Road (Circle Line)",
+    "catalogueMembership": [
+      "circle",
+      "district",
+      "hammersmith-city"
+    ],
+    "qualifiedBaseline": true
+  },
+  {
+    "lineID": "circle",
+    "stationID": "940GZZLUVIC",
+    "stationName": "Victoria",
+    "catalogueMembership": [
+      "circle",
+      "district",
+      "victoria"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "district",
+    "stationID": "940GZZLUVIC",
+    "stationName": "Victoria",
+    "catalogueMembership": [
+      "circle",
+      "district",
+      "victoria"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "elizabeth",
+    "stationID": "910GWCHAPXR",
+    "stationName": "Whitechapel",
+    "catalogueMembership": [
+      "elizabeth"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "lioness",
+    "stationID": "910GWLSDJHL",
+    "stationName": "Willesden Junction",
+    "catalogueMembership": [
+      "lioness",
+      "mildmay"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "mildmay",
+    "stationID": "910GRICHMND",
+    "stationName": "Richmond (London)",
+    "catalogueMembership": [
+      "mildmay"
+    ],
+    "qualifiedBaseline": false
+  },
+  {
+    "lineID": "dlr",
+    "stationID": "940GZZDLLEW",
+    "stationName": "Lewisham",
+    "catalogueMembership": [
+      "dlr"
+    ],
+    "qualifiedBaseline": true
+  }
+]
