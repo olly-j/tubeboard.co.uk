@@ -9,18 +9,21 @@ import { completePlannedApplicability,qualifyAvailability } from '../server/stat
 import { mergeContexts,selectEvents,buildStationBoardState,londonClock,londonLocal,STATION_BOARD_LINES,STATION_BOARD_STATIONS } from '../server/station-board-v2.js';
 import { admitPlannedSeed } from '../server/station-board-seed.js';
 import { now,record,sha,headers,observation,response,assetFor,wrap,qualify,authority,requiredActualParity } from './timetable-renewal-helpers.js';
+// Historical Swift fixtures retain the prior two-day guard. Their raw previous-day
+// departures have expired at these original clocks; compare exact current-day
+// qualification while keeping full event/row/source-clock equality below.
 // Compare JSON wire values exactly; null-prototype parsing remains a production safeguard.
 const jsonWire=value=>JSON.parse(JSON.stringify(value));
 function changedAsset(asset,fn){const p=structuredClone(asset.proof);fn(p);const proofBytes=Buffer.from(JSON.stringify(p));return {proof:p,proofBytes,identity:{...asset.identity,proofBodySHA256:crypto.createHash('sha256').update(proofBytes).digest('hex')}};}
-test('legacyPublisherParityAtOriginalClocks',async()=>{
+test('legacyPublisherEventsAndCurrentDayParityAtOriginalClocks',async()=>{
   const parity=await requiredActualParity();assert.equal(parity.provenance.executedSwift,true);assert.equal(parity.provenance.generatedPublisherProofExecuted,true);
   const legacy=parity.cases.filter(c=>c.publicationDirections===undefined);assert.equal(legacy.length,13);
-  for(const c of legacy){const asset={...c.asset,proofBytes:Buffer.from(c.asset.proofBytesBase64,'base64')};const context=qualifyTimetable(asset,c.responses,c.record,c.arguments);assert.deepEqual(context.events,c.expectedSwift.events);assert.deepEqual(jsonWire(context.evidence.rows),c.expectedSwift.rowEvidence);assert.deepEqual(context.evidence.qualification,c.expectedSwift.qualification);assert.equal(context.observedAt,c.expectedSwift.observedAt);assert.equal(context.expiresAt,c.expectedSwift.expiresAt);}
+  for(const c of legacy){const asset={...c.asset,proofBytes:Buffer.from(c.asset.proofBytesBase64,'base64')};const context=qualifyTimetable(asset,c.responses,c.record,c.arguments);assert.deepEqual(context.events,c.expectedSwift.events);assert.deepEqual(jsonWire(context.evidence.rows),c.expectedSwift.rowEvidence);assert.deepEqual(context.evidence.qualification,c.expectedSwift.qualification.filter(q=>q.serviceDay===londonLocal(c.arguments.at).slice(0,10)));assert.equal(context.observedAt,c.expectedSwift.observedAt);assert.equal(context.expiresAt,c.expectedSwift.expiresAt);}
 });
 test('declaredDirectionalGoodgeSameSourceParity',async()=>{
   const parity=await requiredActualParity(),c=parity.cases.find(c=>c.record.stationID==='940GZZLUGDG');assert.ok(c);assert.deepEqual(c.publicationDirections,['inbound','outbound']);
   const context=qualifyTimetable({...c.asset,proofBytes:Buffer.from(c.asset.proofBytesBase64,'base64')},c.responses,c.record,c.arguments);
-  assert.deepEqual(context.events,c.expectedSwift.events);assert.deepEqual(jsonWire(context.evidence.rows),c.expectedSwift.rowEvidence);assert.deepEqual(context.evidence.qualification,c.expectedSwift.qualification);assert.deepEqual(context.evidence.publicationDirections,c.publicationDirections);assert.equal(context.observedAt,c.expectedSwift.observedAt);assert.equal(context.expiresAt,c.expectedSwift.expiresAt);
+  assert.deepEqual(context.events,c.expectedSwift.events);assert.deepEqual(jsonWire(context.evidence.rows),c.expectedSwift.rowEvidence);assert.deepEqual(context.evidence.qualification,c.expectedSwift.qualification.filter(q=>q.serviceDay===londonLocal(c.arguments.at).slice(0,10)));assert.deepEqual(context.evidence.publicationDirections,c.publicationDirections);assert.equal(context.observedAt,c.expectedSwift.observedAt);assert.equal(context.expiresAt,c.expectedSwift.expiresAt);
 });
 test('directionalIncompleteForeignAndCrossScopeOverlap',()=>{
   const inbound=response(720,['940GZZLUBNK'],'inbound'),outbound=response(780,['940GZZLUCHX'],'outbound'),asset=assetFor([inbound,outbound]);
@@ -38,7 +41,8 @@ test('profileMultiplicityLogicalIDsAndWholePaths',()=>{
   assert.equal(qualify(subset,[raw]).events.length,1);const unknown=structuredClone(raw);unknown.timetable.routes[0].schedules[0].knownJourneys.push({hour:'13',minute:'1',intervalId:7});assert.throws(()=>qualify(subset,[unknown]));
 });
 test('calendarNeededDayRangesHolidaysMidnightAndDST',()=>{
-  const raw=response(),asset=assetFor([raw]);const hole=changedAsset(asset,p=>{p.entries[0].profiles[0].originatingServiceDateRanges=[{startDate:'2026-10-03',endDate:'2026-12-31'}];});assert.throws(()=>qualify(hole,[raw]),/unsupportedCalendar/);
+  const raw=response(),asset=assetFor([raw]);const hole=changedAsset(asset,p=>{p.entries[0].profiles[0].originatingServiceDateRanges=[{startDate:'2026-10-03',endDate:'2026-12-31'}];});assert.equal(qualify(hole,[raw]).events.length,1);
+  const todayHole=changedAsset(hole,p=>{p.entries[0].profiles[0].originatingServiceDateRanges[0].startDate='2026-10-04';});assert.throws(()=>qualify(todayHole,[raw]),/unsupportedCalendar/);
   const holiday=changedAsset(hole,p=>p.bankHolidayDates=['2026-10-03']);assert.throws(()=>qualify(holiday,[raw]));
   const invalid=changedAsset(asset,p=>p.entries[0].operatingStartDate='2026-02-30');assert.throws(()=>qualify(invalid,[raw]));
   assert.ok(Number.isNaN(londonClock('2026-10-25T01:30:00')));assert.ok(Number.isNaN(londonClock('2026-03-29T01:30:00')));

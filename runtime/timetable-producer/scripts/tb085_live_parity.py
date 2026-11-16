@@ -136,7 +136,44 @@ def check_calls(key, line, station, names, stops):
             raise ValueError(f"destination name differs from catalogue for {s}")
 
 
-def verify_scope(body, entry, metadata, profiles, today, payload, direction, live_rows=None):
+def departure_instant(service_day, key):
+    """Map an extended civil minute using unique London wall-clock semantics."""
+    if not isinstance(key,str) or not re.fullmatch(r'[0-9]{4}\|[^|]+',key):
+        raise ValueError('invalid raw timetable key')
+    minute=int(key[:4])
+    if not 0<=minute<2880:raise ValueError('invalid raw timetable minute')
+    day=service_day+timedelta(days=minute//1440)
+    local=datetime(day.year,day.month,day.day,minute%1440//60,minute%60)
+    candidates=set()
+    for fold in (0,1):
+        instant=local.replace(tzinfo=LONDON,fold=fold).astimezone(timezone.utc)
+        if instant.astimezone(LONDON).replace(tzinfo=None)==local:candidates.add(instant)
+    if len(candidates)!=1:raise ValueError('unsupported London departure clock')
+    return candidates.pop()
+
+
+def requested_instant(today, requested_at):
+    local=datetime.now(LONDON)
+    if requested_at is None:
+        # Explicit historical-day diagnostics retain their full-day interval.
+        requested_at=local if local.date()==today else departure_instant(today,'0000|clock')
+    if requested_at.tzinfo is None or requested_at.utcoffset() is None:
+        raise ValueError('requested instant must have a timezone')
+    if requested_at.astimezone(LONDON).date()!=today:raise ValueError('requested instant differs from service day')
+    return requested_at.astimezone(timezone.utc)
+
+
+def previous_origin_required(rows,today,at):
+    if not rows:raise ValueError('missing offered timetable profiles')
+    # Convert every raw row before any result: an ambiguous later clock may
+    # not be hidden by an earlier candidate, profile choice or exclusion.
+    departures=[departure_instant(today-timedelta(days=1),key) for keys in rows.values() for key in keys]
+    lower=max(at,departure_instant(today,'0000|clock'))
+    upper=departure_instant(today+timedelta(days=1),'0000|clock')
+    return any(lower<=departure<upper for departure in departures)
+
+
+def verify_scope(body, entry, metadata, profiles, today, payload, direction, live_rows=None, *, requested_at=None):
     line, station = entry["lineID"], entry["stationID"]
     rows = live_rows if live_rows is not None else raw_profiles(payload, line, station, direction)
     if set(rows) != {p["name"] for p in profiles}:
@@ -149,9 +186,10 @@ def verify_scope(body, entry, metadata, profiles, today, payload, direction, liv
     stops = catalogue()[line]
     if station not in stops or entry.get("nonOperationBankHolidays") is not True:
         raise ValueError("origin or bank-holiday policy not qualified")
-    local = datetime.now(LONDON)
-    cutoff = local.hour * 60 + local.minute if today == local.date() else 0
-    for days_ago in (1, 0):
+    at=requested_instant(today,requested_at)
+    start=departure_instant(today,'0000|clock');end=departure_instant(today+timedelta(days=1),'0000|clock')
+    days=(1,0) if previous_origin_required(rows,today,at) else (0,)
+    for days_ago in days:
         day = today - timedelta(days=days_ago)
         for scope in [body, entry, metadata]:
             if scope is body:
@@ -172,8 +210,8 @@ def verify_scope(body, entry, metadata, profiles, today, payload, direction, liv
         except ValueError as error:
             raise ValueError(f"{day} {p['name']}: {error}") from error
         for key in keys:
-            minute = int(key[:4]) - 1440 * days_ago
-            if cutoff <= minute < 1440:
+            departure=departure_instant(day,key)
+            if max(at,start)<=departure<end:
                 check_calls(key, line, station, names, stops)
     return {k for values in rows.values() for k in values}
 
@@ -237,8 +275,9 @@ def weekday_gap_observation(body, entry, metadata, profiles, today, payload, dir
 
 
 def check_live_coverage(body, roster, today, fetch, weekday_observations=None,
-                        source_profile_observations=None):
+                        source_profile_observations=None, *, requested_at=None):
     """Return per-scope failures; no arrival, disruption or actual-train inference."""
+    requested_at=requested_instant(today,requested_at)
     entries = {(e["lineID"], e["stationID"]): e for e in body["entries"]}
     errors = []
     for item in roster:
@@ -279,7 +318,7 @@ def check_live_coverage(body, roster, today, fetch, weekday_observations=None,
                 if observation is not None and weekday_observations is not None:
                     weekday_observations.append(observation)
                 keys = verify_scope(body, entry, by_direction.get(direction, entry), profiles, today,
-                                    payload, direction, live_rows)
+                                    payload, direction, live_rows, requested_at=requested_at)
                 if seen & keys:
                     raise ValueError("opposite directions share live journey keys")
                 seen.update(keys)

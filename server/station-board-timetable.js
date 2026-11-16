@@ -267,6 +267,11 @@ export function timetableHTTPObservation(headers,completedAt,{official=false}={}
   if(!Number.isFinite(date) || !Number.isFinite(age) || age<0 || age>600 || date>completedAt+(official?0:120000) || completedAt-date>600000)return null;
   const observedAt=completedAt-Math.max(age*1000,Math.max(0,completedAt-date));return completedAt<observedAt+600000 ? {observedAt,expiresAt:observedAt+600000} : null;
 }
+function departureInstant(day,serviceMinute) {
+  const serviceDay=civilNext(day,Math.floor(serviceMinute/1440)), minute=serviceMinute%1440;
+  const departure=londonClock(serviceDay+'T'+String(Math.floor(minute/60)).padStart(2,'0')+':'+String(minute%60).padStart(2,'0')+':00');
+  if(!Number.isFinite(departure))fail('unsupportedCalendar');return departure;
+}
 export function qualifyTimetable(asset,responses,record,{head,serviceObservation,stationObservation,at}) {
   const {proof,entry,sets}=selectedTimetableEntry(asset,record);
   if(!head || head.sha256!==asset.identity.publicationSHA256 || !serviceObservation || serviceObservation.expiresAt<=at || !stationObservation || stationObservation.expiresAt<=at || head.expiresAt<=at || !Array.isArray(responses) || responses.length!==sets.length)fail('unavailable');
@@ -279,12 +284,19 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
     if(response.lineId!==record.lineID || response.timetable.departureStopId!==record.stationID || scope.direction!==null && response.direction!==scope.direction)fail();
     const stationNames=new Map();for(const station of response.stations){if(stationNames.has(station.id))fail();stationNames.set(station.id,station.name);}
     const offered=new Set(response.timetable.routes.flatMap(r=>r.schedules.map(s=>s.name))), declared=new Set(scope.profiles.map(p=>p.name));if(offered.size!==declared.size || [...offered].some(n=>!declared.has(n)))fail();
-    const keys=new Set([...declared].flatMap(name=>profileJourneys(response,name).map(r=>r.key)));
+    if(!offered.size)fail('unsupportedCalendar');
+    const offeredRows=[...offered].flatMap(name=>profileJourneys(response,name));
+    const keys=new Set(offeredRows.map(r=>r.key));
     for(const old of scopedKeys.values())if([...keys].some(k=>old.has(k)))fail();scopedKeys.set(scope.direction,keys);
     rawHashes.push({direction:scope.direction,sha256:resource.bodySHA256});
     const dateGaps=scope.direction===null ? entry.originatingDateGaps??[]
       : entry.directionalSourceEvidence?.find(value=>value.direction===scope.direction)?.originatingDateGaps??[];
-    for(const day of [civilNext(today,-1),today]){
+    const yesterday=civilNext(today,-1),start=londonClock(today+'T00:00:00');
+    // Convert every offered row before choosing: no excluded/wrong-profile row
+    // or later ambiguous clock may become evidence that yesterday is absent.
+    const previousDepartures=offeredRows.map(row=>departureInstant(yesterday,row.minute));
+    const days=previousDepartures.some(departure=>departure>=Math.max(at,start) && departure<tomorrow)?[yesterday,today]:[today];
+    for(const day of days){
       if(day<entry.operatingStartDate || day>entry.operatingEndDate || day<proof.holidayCoverageStart || day>proof.holidayCoverageEnd)fail('unsupportedCalendar');
       if(dateGaps.some(gap=>gap.serviceDate===day))fail('unsupportedCalendar');
       if(proof.bankHolidayDates.includes(day)){if(scope.profiles.some(p=>p.originatingServiceDateRanges!==undefined))fail('unsupportedCalendar');continue;}
@@ -292,8 +304,7 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
       if(eligible.length!==1)fail('unsupportedCalendar');const profile=eligible[0], rows=completeRows(response,profile);
       qualification.push({publicationDirection:scope.direction,serviceDay:day,profileName:profile.name,retainedCount:rows.length,retainedSHA256:profileFingerprint(rows)});
       for(const r of rows){
-        const serviceDay=civilNext(day,Math.floor(r.minute/1440)), minute=r.minute%1440;
-        const departure=londonClock(serviceDay+'T'+String(Math.floor(minute/60)).padStart(2,'0')+':'+String(minute%60).padStart(2,'0')+':00');if(!Number.isFinite(departure))fail('unsupportedCalendar');
+        const departure=departureInstant(day,r.minute);
         if(departure<at || departure<londonClock(today+'T00:00:00') || departure>=tomorrow)continue;
         const destinationID=r.path.at(-1), destination=STATION_BOARD_STATIONS.get(destinationID);
         if(destinationID===record.stationID && !r.path.slice(0,-1).some(id=>id!==record.stationID && validBoard(id,record.lineID)) || !validBoard(destinationID,record.lineID) || r.path.some(id=>!validBoard(id,record.lineID)) || stationNames.has(destinationID) && names(stationNames.get(destinationID))!==names(destination.stationName))fail();

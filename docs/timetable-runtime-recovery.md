@@ -108,7 +108,7 @@ and 21 member records in the real-archive comparison and passed 112 affected
 Python tests. Full qualification measured 691.7 MiB after this change. This is
 still not suitable for the 256 MiB service; selected-call parsing is unchanged.
 
-The current bundle pins app commit `27ec00a1be4f7d3dce8ff24b5f68576c2bcfb363`.
+The earlier bundle pinned app commit `27ec00a1be4f7d3dce8ff24b5f68576c2bcfb363`.
 It includes bounded disk-backed record streaming, property-level calendar
 inheritance, explicit dated exclusions and separate origin/selected lifetimes.
 All 207 affected Python tests passed, and the retained current-edition replay
@@ -143,3 +143,25 @@ All original 12 files remain unchanged in this closure correction. Monitor-only
 workflow fingerprinting and the standalone API-health fixture CLI have separate
 data dependencies outside this preparation/live-parity runtime path; no claim
 of completeness is made for those dormant entry points.
+
+The current bundle pins app commit `124e8bd573000f68df5acd1b938910c14f51d2eb`.
+This producer update stores origin sections on disk and reuses
+normalized journey keys within each qualification call. The current-edition
+macOS peak is now 131.77 MiB, with unchanged complete proof output. Current
+departure relevance in the producer's live comparison and service consumer
+requires yesterday whenever any validated raw offered row can still depart
+before the next London midnight; today always receives full validation.
+All raw clocks are checked before choosing relevant dates or applying exclusions.
+Historical conflicts and overnight safeguards remain intact. All 221 affected
+Python tests and 521 service tests pass; the retained live-response replay
+passes 14/14 at its original acquisition clocks, not as a new live admission.
+
+A local emulated x86_64 probe ran the exact producer beside Node with one CPU,
+256 MiB, no swap and no network. All 14 scopes qualified in 98.331 seconds;
+384 health checks passed, with no OOM. The full cgroup memory limit was reached
+and 627 pressure events occurred. This is bounded HTTP coexistence evidence,
+not spare capacity or notification/APNs acceptance. The image and exact input,
+output and source bindings are retained in the integration owner's external
+`tb085-linux-capacity-20261116/capacity-final-receipt.json`. Actual server wiring,
+alert credentials, notification workload acceptance and production readback
+remain required. No production activation or hosting increase occurred.

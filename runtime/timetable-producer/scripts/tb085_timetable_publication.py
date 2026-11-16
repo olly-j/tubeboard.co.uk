@@ -211,7 +211,7 @@ def pattern_paths(root: ET.Element) -> dict[str,list[tuple[str,str]]]:
     # Activity is part of the boundary evidence, not an inferred stop class.
     known={'pickUp','pickUpAndSetDown','setDown','pass'}
     sections={}
-    for section in root.findall('.//t:JourneyPatternSection',NS):
+    for section in (root._sections() if hasattr(root,'_sections') else root.findall('.//t:JourneyPatternSection',NS)):
         path=[]
         for link in section.findall('t:JourneyPatternTimingLink',NS):
             start=(link.findtext('t:From/t:StopPointRef',namespaces=NS),link.findtext('t:From/t:Activity',namespaces=NS))
@@ -237,17 +237,20 @@ def pattern_paths(root: ET.Element) -> dict[str,list[tuple[str,str]]]:
         patterns[ident]=path
     return patterns
 
-def pattern_timing_links(root: ET.Element) -> dict[str,list[ET.Element]]:
-    """Resolve the same section scope as pattern_paths, not global link IDs.
+def pattern_timing_links(root: ET.Element, pattern_id: str) -> list[ET.Element]:
+    """Load only an annotated journey's validated pattern, never every tree.
 
-    Called after pattern_paths has checked section/pattern identity and order.
-    Link IDs are required only when a journey actually supplies annotations;
-    existing no-override origin evidence does not gain a new ID requirement.
+    pattern_paths still validates all sections/patterns first. No-override
+    journeys retain their existing lack of a timing-link ID requirement.
     """
-    sections={s.attrib['id']:s.findall('t:JourneyPatternTimingLink',NS)
-        for s in root.findall('.//t:JourneyPatternSection',NS)}
-    return {p.attrib['id']:[link for ref in (p.findtext('t:JourneyPatternSectionRefs',namespaces=NS) or '').split()
-        for link in sections[ref]] for p in root.findall('.//t:StandardService/t:JourneyPattern',NS)}
+    pattern=next(p for p in root.findall('.//t:StandardService/t:JourneyPattern',NS)
+                 if p.attrib['id']==pattern_id)
+    links=[]
+    for ref in (pattern.findtext('t:JourneyPatternSectionRefs',namespaces=NS) or '').split():
+        section=(root._section_by_id(ref) if hasattr(root,'_section_by_id') else
+                 root.find(".//t:JourneyPatternSection[@id='"+ref+"']",NS))
+        links.extend(section.findall('t:JourneyPatternTimingLink',NS))
+    return links
 
 def validate_display_only_overrides(journey: ET.Element, links: list[ET.Element]) -> None:
     """Accept only retained-shaped, reference-scoped display annotations.
@@ -375,7 +378,7 @@ class _OriginProjection:
             nested_metadata = any(node.tag in self.records - {'{' + NS['t'] + '}VehicleJourney'}
                                   for node in record.iter() if node is not record)
             if self.journey_store is not None and not nested_metadata and (local_tag(record) == 'VehicleJourney'
-                    or self.selected and local_tag(record) == 'JourneyPatternSection'):
+                    or local_tag(record) == 'JourneyPatternSection'):
                 payload = _record_bytes(record)
                 self.journey_store.seek(0, 2)
                 offset = self.journey_store.tell()
@@ -432,6 +435,14 @@ def _streamed_projection(source, selected=False):
                     yield from load(section_markers[element]).iter('{' + NS['t'] + '}JourneyPatternSection')
                 else:
                     yield element
+        # Keep only marker/element references, not reconstructed section trees.
+        # First-match lookup also preserves the existing invalid-member fallback.
+        section_index={}
+        for element in root.iter('{' + NS['t'] + '}JourneyPatternSection'):
+            section_index.setdefault(element.attrib.get('id'),element)
+        def section_by_id(ident):
+            element=section_index.get(ident)
+            return load(section_markers[element]) if element in section_markers else element
         def journeys():
             # A malformed-but-well-formed nested journey is still visited and
             # validated, including journeys inside a spooled section/record.
@@ -441,6 +452,7 @@ def _streamed_projection(source, selected=False):
                 elif element.tag == '{' + NS['t'] + '}VehicleJourney':
                     yield element
         root._sections = sections
+        root._section_by_id = section_by_id
         root._record_store = store
         iterator = journeys()
         try:
@@ -450,6 +462,7 @@ def _streamed_projection(source, selected=False):
             # The section closure captures root. Break that cycle explicitly,
             # including unsupported-line/validation exits before consumption.
             del root._sections
+            del root._section_by_id
             del root._record_store
 
 
@@ -486,7 +499,7 @@ def _origin_rows_from_projection(root, raw_sha, member, tram_platforms=None, jou
     station_for_stop = tram_platforms.__getitem__ if line == 'tram' else txc_station
     start=service.findtext('t:OperatingPeriod/t:StartDate',namespaces=NS);end=service.findtext('t:OperatingPeriod/t:EndDate',namespaces=NS)
     if not start or not end or date.fromisoformat(start)>date.fromisoformat(end):raise ValueError('invalid operating period')
-    paths=pattern_paths(root);scoped_links=pattern_timing_links(root);rows=[]
+    paths=pattern_paths(root);rows=[]
     calendar_patterns={p.attrib.get('id'):p for p in service.findall('t:StandardService/t:JourneyPattern',NS)}
     for journey in (root.findall('.//t:VehicleJourney',NS) if journeys is None else journeys):
         path=paths[journey.findtext('t:JourneyPatternRef',namespaces=NS)]
@@ -494,7 +507,8 @@ def _origin_rows_from_projection(root, raw_sha, member, tram_platforms=None, jou
             raise ValueError('non-passenger VehicleJourney origin activity')
         if path[-1][1] not in {'setDown','pickUpAndSetDown'}:
             raise ValueError('VehicleJourney destination lacks set-down activity')
-        validate_display_only_overrides(journey,scoped_links[journey.findtext('t:JourneyPatternRef',namespaces=NS)])
+        if any(local_tag(child)=='VehicleJourneyTimingLink' for child in journey):
+            validate_display_only_overrides(journey,pattern_timing_links(root,journey.findtext('t:JourneyPatternRef',namespaces=NS)))
         clock=journey.findtext('t:DepartureTime',namespaces=NS)
         hh,mm,ss=map(int,clock.split(':'));shift=int(journey.findtext('t:DepartureDayShift',default='0',namespaces=NS))
         if not(0<=hh<24 and 0<=mm<60 and ss==0 and shift in {0,1}):raise ValueError('unsupported departure clock')
@@ -526,7 +540,8 @@ def read_archive(path: Path, tram_platforms=None) -> tuple[list[dict],list[dict]
                     for pattern in service.findall('t:StandardService/t:JourneyPattern',NS):
                         refs=(pattern.findtext('t:JourneyPatternSectionRefs',namespaces=NS) or '').split()
                         if not refs:raise ValueError('cannot scope invalid pattern '+name) from error
-                        section=root.find(".//t:JourneyPatternSection[@id='"+refs[0]+"']",NS)
+                        section=(root._section_by_id(refs[0]) if hasattr(root,'_section_by_id') else
+                                 root.find(".//t:JourneyPatternSection[@id='"+refs[0]+"']",NS))
                         stop=section.findtext('t:JourneyPatternTimingLink/t:From/t:StopPointRef',namespaces=NS) if section is not None else None
                         origins.add(tram_platforms[stop] if line == 'tram' else txc_station(stop or ''))
                     parsed=[{'lineID':line,'stationID':origin,'start':start,'end':end,'member':name,'qualificationGap':str(error)} for origin in origins]
@@ -919,7 +934,7 @@ def api_profile_rows(payload: dict,line: str,station: str) -> dict[str,list[str]
     if not profiles:raise ValueError('no known journey schedules')
     return dict(profiles)
 
-def agreed_definition(rows: list[dict], civil: str) -> tuple[Counter | None,str | None]:
+def agreed_definition(rows: list[dict], civil: str, *, normalized_keys: dict[str,str] | None=None) -> tuple[Counter | None,str | None]:
     weekday=date.fromisoformat(civil).isoweekday()%7+1
     applicable=[r for r in rows if r['start']<=civil<=r['end']]
     if any(r.get('qualificationGap') for r in applicable):return None,'unsupported publisher member'
@@ -927,7 +942,14 @@ def agreed_definition(rows: list[dict], civil: str) -> tuple[Counter | None,str 
     definitions=defaultdict(Counter)
     for row in applicable:
         definitions[row['member']]  # Retain explicit empty definitions for conflict checks.
-        if row_operates_on(row,civil):definitions[row['member']][logical_key(row['key'])]+=1
+        if row_operates_on(row,civil):
+            raw=row['key']
+            if normalized_keys is None:normalized=logical_key(raw)
+            else:
+                normalized=normalized_keys.get(raw)
+                if normalized is None:
+                    normalized=logical_key(raw);normalized_keys[raw]=normalized
+            definitions[row['member']][normalized]+=1
     values=list(definitions.values())
     if not values:return None,'no published originating definition'
     if any(value!=values[0] for value in values[1:]):return None,'publication member conflict'
@@ -959,7 +981,10 @@ def qualify_entry(record:dict,source_rows:list[dict],capture_dir:Path,civil_date
         if final<d or (final-d).days>730:raise ValueError('unsupported publication date span')
         dates=[]
         while d<=final:dates.append(d.isoformat());d+=timedelta(days=1)
-        definitions={civil:agreed_definition(rows,civil) for civil in dates}
+        # Reuse long normalized paths only within this scoped qualification.
+        # Date counters retain multiplicity but share their immutable key values.
+        normalized_keys={}
+        definitions={civil:agreed_definition(rows,civil,normalized_keys=normalized_keys) for civil in dates}
         meta=record['timetableSource']
         if meta.get('status')!=200:raise ValueError('timetable HTTP '+str(meta.get('status')))
         body=(capture_dir/meta['body']).read_bytes();profiles=api_profile_rows(json.loads(body),line,station)
