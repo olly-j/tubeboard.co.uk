@@ -165,3 +165,36 @@ output and source bindings are retained in the integration owner's external
 `tb085-linux-capacity-20261116/capacity-final-receipt.json`. Actual server wiring,
 alert credentials, notification workload acceptance and production readback
 remain required. No production activation or hosting increase occurred.
+
+## Prepared producer adapter
+
+`TimetableRecoveryProducer` now connects the existing admission contract to
+the exact bundled producer. It validates the 13-file manifest, fixed commands,
+actual prior resource identity and predecessor comparison before admission.
+It reuses verified archive bytes with their original acquisition clocks.
+Empty rollover requests may seed a scope only from the validated prior
+publication; missing history is a bounded failure, not invented coverage.
+
+Canonical cache/work roots must be disjoint. Retained editions, individual
+files, output, entry counts and elapsed child work are bounded; the workspace
+watchdog is sampled and does not establish a hard instantaneous allocation
+limit. Final acquisition contents are checked again before retention. Unknown
+cache entries are rejected without deletion. Cleanup occurs only under
+exclusive custody and cannot remove a nested caller directory.
+
+OS-owned advisory locks replace crash-stale directory locks. A fixed Python
+holder keeps custody across acquisition, preparation and admission; workers
+inherit the lock descriptors and have an independent bounded lifetime.
+Cancellation, parent/holder death and natural/error worker completion terminate
+remaining owned descendants before cleanup. A later attempt recovers without
+manual lock removal or unsafe PID/age takeover. Already-running watchdog scans
+cannot cancel a later job after their original job has settled.
+
+Independent review cleared the final adapter and regressions. All 545 Node22
+tests pass, including 24 focused adapter cases, real bundled archive receipt
+reuse, fixed launcher contracts, actual process crashes and lock reacquisition.
+This remains preparation: the extra interpreter and watchdog need measured
+full-workload capacity, Docker must include the exact bundle and Python tools,
+and server construction, actual demand/rollover wiring, alert credentials and
+production readback are still absent. Cooperative admission callbacks must
+honour cancellation; a timeout must not leave an unobserved mutation running.
