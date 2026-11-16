@@ -24,6 +24,7 @@ function resource(pub,entries,revision=1){
 }
 async function setup(t,options={}){
  const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'tb-recovery-producer-'));t.after(()=>fs.rm(tmp,{recursive:true,force:true}));
+ const fixtureArchive=options.archive??archive;
  const priorBytes=resource(priorPub,[{lineID:'northern',stationID:'940GZZLUEGW',status:'qualified'}]);
  const priorWrapper=JSON.parse(priorBytes),calls=[],admissions=[];
  const store={latestAdmittedIdentity:{publicationSHA256:priorPub,resourceSHA256:hash(priorBytes),proofBodySHA256:priorWrapper.proofBodySHA256,proofRevision:1},
@@ -48,10 +49,10 @@ async function setup(t,options={}){
    const job=JSON.parse(pending);pending='';calls.push(job);emit({status:'started',pid:1});
    setImmediate(async()=>{try{
    if(job.mode==='acquire'){
-    const metadata={body:'official.body',sha256:job.publication,bytes:archive.length,startedAt:'2026-11-16T12:00:00Z',receivedAt:'2026-11-16T12:00:01Z'};
-    await fs.writeFile(path.join(job.work,'source.zip'),archive);
+    const metadata={body:'official.body',sha256:job.publication,bytes:fixtureArchive.length,startedAt:'2026-11-16T12:00:00Z',receivedAt:'2026-11-16T12:00:01Z'};
+    await fs.writeFile(path.join(job.work,'source.zip'),fixtureArchive);
     await fs.writeFile(path.join(job.work,'metadata.json'),JSON.stringify(metadata));
-    await fs.writeFile(path.join(job.work,'receipt.json'),JSON.stringify({status:'verified-source-only',publication:job.publication,sha256:job.publication,bytes:archive.length}));
+    await fs.writeFile(path.join(job.work,'receipt.json'),JSON.stringify({status:'verified-source-only',publication:job.publication,sha256:job.publication,bytes:fixtureArchive.length}));
     await options.alterAcquire?.(job.work);
    }else{
     await options.beforePrepare?.(job);
@@ -300,4 +301,25 @@ test('producer leader error cannot release custody with a surviving descendant',
  running=x.producer.recover({publicationSHA256:publication,scopes:[scope]}).then(()=>null,error=>error);await started;assert.ok(descendant);
  await until(()=>canLock([x.config.cacheDirectory,x.config.workDirectory]),3000);
  assert.throws(()=>process.kill(descendant,0),{code:'ESRCH'});assert.match((await running).message,/failed/);
+});
+
+test('archive hashing reuses one bounded buffer across chunks without reacquisition',async t=>{
+ const bytes=Buffer.alloc(160000,7),pub=hash(bytes),x=await setup(t,{archive:bytes});
+ await x.producer.recover({publicationSHA256:pub,scopes:[scope]});
+ const original=fs.open,buffers=new Set();let reads=0;
+ fs.open=async function(name,...args){const handle=await original.call(this,name,...args);
+  if(name!==path.join(x.tmp,'cache',pub,'source.zip'))return handle;
+  return {stat:()=>handle.stat(),close:()=>handle.close(),read:async(buffer,...rest)=>{reads++;buffers.add(buffer);assert.ok(buffer.length<=65536);return handle.read(buffer,...rest);}};};
+ try{await x.producer.recover({publicationSHA256:pub,scopes:[scope]});}finally{fs.open=original;}
+ assert.equal(buffers.size,1);assert.ok(reads>=4);assert.equal(x.calls.filter(c=>c.mode==='acquire').length,1);
+});
+test('archive metadata mutation during otherwise byte-identical hashing invalidates and reacquires cache',async t=>{
+ const x=await setup(t);await x.producer.recover({publicationSHA256:publication,scopes:[scope]});
+ const original=fs.open;let changed=false;
+ fs.open=async function(name,...args){const handle=await original.call(this,name,...args);
+  if(name!==path.join(x.tmp,'cache',publication,'source.zip') || changed)return handle;
+  return {stat:()=>handle.stat(),close:()=>handle.close(),read:async(...parts)=>{const result=await handle.read(...parts);
+    if(!changed){changed=true;const now=new Date(Date.now()+5000);await fs.utimes(name,now,now);}return result;}};};
+ try{await x.producer.recover({publicationSHA256:publication,scopes:[scope]});}finally{fs.open=original;}
+ assert.equal(changed,true);assert.equal(x.calls.filter(c=>c.mode==='acquire').length,2);
 });

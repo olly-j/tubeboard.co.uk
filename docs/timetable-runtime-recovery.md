@@ -198,3 +198,26 @@ full-workload capacity, Docker must include the exact bundle and Python tools,
 and server construction, actual demand/rollover wiring, alert credentials and
 production readback are still absent. Cooperative admission callbacks must
 honour cancellation; a timeout must not leave an unobserved mutation running.
+
+## Full image integration boundary (16 November)
+
+The prepared image now includes Python, curl, CA roots, timezone data and the
+explicit thirteen-file producer closure. It does not activate recovery. The
+reviewed adapter hashes cached ZIPs with one reusable 64 KiB buffer and verifies
+the opened file's identity, size and timestamps before and after reading.
+All 547 Node 22 tests pass, including 26 focused adapter tests.
+
+Full preparation in the actual Linux/amd64 image (locally emulated) failed at
+256 MiB twice with exit 137 / OOMKilled, during a second archive copy and before
+qualification. The fixed buffer reduced isolated hashing RSS by about 11 MiB;
+it did not establish hosting capacity. One separate 512 MiB diagnostic avoided
+OOM but failed before admission. A retained-input replay independently
+reproduces future dated-coverage losses caused by conflicting publication
+members; it is not a captured traceback from that diagnostic. The previous
+qualifier-only 256 MiB result remains valid only for that narrower experiment.
+
+Neither full recovery, publication admission nor notification cohosting has
+passed. No production capacity, deployment, scheduled workflow or server
+activation changed. Evidence is retained in the external release evidence
+`20261116-tb085-current-edition/runtime-image/receipt.json`; both OOM results and
+the separate coverage failure remain unresolved acceptance gates.

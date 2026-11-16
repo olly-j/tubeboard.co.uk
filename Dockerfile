@@ -8,11 +8,30 @@ ENV SITE_DIR=.
 ENV LIVE_ACTIVITY_DATA_FILE=/data/live-activities.json
 ENV TUBEBOARD_GIT_SHA=${TUBEBOARD_GIT_SHA}
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 curl ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY server ./server
+# Exact reviewed producer closure; do not copy local pycache or unrelated tools.
+COPY runtime/timetable-producer/manifest.json ./runtime/timetable-producer/
+COPY runtime/timetable-producer/scripts/tb085_prepare_renewal.py \
+     runtime/timetable-producer/scripts/tb085_package_timetable_proof.py \
+     runtime/timetable-producer/scripts/tb085_timetable_publication.py \
+     runtime/timetable-producer/scripts/tb085_monitor_publication.py \
+     runtime/timetable-producer/scripts/tb085_source_transfer.py \
+     runtime/timetable-producer/scripts/tb085_additive_qualification.py \
+     runtime/timetable-producer/scripts/tb085_reference_readback.py \
+     runtime/timetable-producer/scripts/tb085_live_parity.py \
+     runtime/timetable-producer/scripts/tb085_tram_stations.py \
+     runtime/timetable-producer/scripts/check_tfl_api_health.py \
+     runtime/timetable-producer/scripts/tb085_renewal_roster.json ./runtime/timetable-producer/scripts/
+COPY ["runtime/timetable-producer/TubeBoard Watch App/TubeStationCatalog.json", "./runtime/timetable-producer/TubeBoard Watch App/"]
+COPY ["runtime/timetable-producer/My Train Times/PublishedLineMaps.json", "./runtime/timetable-producer/My Train Times/"]
 COPY contracts ./contracts
 COPY public/timetable-publications ./public/timetable-publications
 COPY certificates ./certificates

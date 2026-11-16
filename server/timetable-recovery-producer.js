@@ -212,9 +212,19 @@ export class TimetableRecoveryProducer {
         || metadata.receivedAt===undefined || metadata.startedAt===undefined)throw failure('cache-invalid');
     const handle=await fs.open(path.join(root,'source.zip'),constants.O_RDONLY|constants.O_NOFOLLOW);
     const digest=createHash('sha256');let count=0;
-    try {for await(const chunk of handle.createReadStream({autoClose:false})){signal?.throwIfAborted();count+=chunk.length;
-      if(count>info.size || count>MAX_SOURCE_ZIP_BYTES)throw failure('cache-invalid');digest.update(chunk);}}
-    finally{await handle.close();}
+    const unchanged=(a,b)=>['dev','ino','size','mtimeMs','ctimeMs'].every(key=>a[key]===b[key]);
+    try {
+      const before=await handle.stat();if(!before.isFile() || !unchanged(info,before))throw failure('cache-invalid');
+      // Reuse one bounded buffer: streaming allocation must not accumulate ZIP-
+      // sized transient buffers while the producer runs beside this Node process.
+      const buffer=Buffer.allocUnsafe(64*1024);
+      for(;;){signal?.throwIfAborted();const {bytesRead}=await handle.read(buffer,0,buffer.length,null);
+        if(!bytesRead)break;count+=bytesRead;
+        if(count>info.size || count>MAX_SOURCE_ZIP_BYTES)throw failure('cache-invalid');
+        digest.update(buffer.subarray(0,bytesRead));
+      }
+      if(!unchanged(before,await handle.stat()))throw failure('cache-invalid');
+    }finally{await handle.close();}
     if(count!==info.size || digest.digest('hex')!==publication)throw failure('cache-invalid');
     // Full original clock/source/receipt validation and fresh official HEADs are
     // performed again by bundled acquire_cached_archive before qualification.
