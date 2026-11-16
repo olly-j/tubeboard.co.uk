@@ -160,8 +160,9 @@ export class TimetableRecovery {
     const state = this.store.state;
     if (state.incident && !state.incident.delivered && this.alert) {
       try {
-        // Transport must honor this idempotency key: restart after delivery
-        // but before the local acknowledgement must not duplicate the alert.
+        // The stable incident key lets the transport deduplicate ordinary
+        // restart retries. Ambiguous GitHub delivery remains best-effort;
+        // bounded retry is preferable to permanently losing the alert.
         await this.alert({ key: state.incident.key, publicationSHA256: edition,
           reason: 'qualification-recovery-failed', pendingScopes: state.pending.length, signal });
         await this.store.transaction(next => { next.incident.delivered = true; });

@@ -33,9 +33,25 @@ then at most every six hours, rotating unresolved requests so other stations
 can progress. A new official edition resets the old edition's retry budget.
 Graceful cancellation retains pending work without counting a failed attempt.
 Three unsuccessful attempts retain one incident per edition. The injected
-alert transport must honor its stable idempotency key. Failed or absent alert
+alert transport uses its stable incident key for best-effort deduplication. Failed or absent alert
 delivery remains pending; it is never recorded as acknowledged. Neither raw
 provider errors nor customer identifiers are persisted in this state.
+
+The prepared `GitHubTimetableRecoveryAlert` posts only a fixed failure reason
+and public publication hash to the existing central Issue. It is not wired
+into the server. A durable reservation, trusted author identity and exact
+comment lookup prevent ordinary duplicate delivery after restart. GitHub
+comment creation provides no exactly-once guarantee: after an ambiguous
+response, a later complete lookup and at least 30 minutes of quiescence permit
+a retry. A delayed original comment can therefore produce a duplicate. This
+bounded retry is intentional so an uncertain response does not permanently
+silence an operational alert. Incomplete or rate-limited lookups remain pending.
+Edition changes require explicit serialized supersession from the recovery
+controller before activation; unit tests alone do not establish that wiring.
+The reviewed transport and coordinator passed 39 focused tests, including
+ambiguous delivery, rate limits, bounded pagination, durable restart and
+supersession. Each authorized edition starts its own lookup horizon so old
+issue history cannot permanently exhaust the page bound for later incidents.
 
 Required before activation:
 
