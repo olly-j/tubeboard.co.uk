@@ -20,6 +20,7 @@ import {
   getStationArrivalsRefreshDelayMs,
   loadConfig,
   runLiveActivityWorkerCycle,
+  registerLiveActivityToken,
   validateEndPayload,
   validateTokenPayload
 } from './live-activity.js';
@@ -321,6 +322,7 @@ server.listen(port, () => {
 });
 
 const notificationWorkers = [];
+let liveActivityWorker = null;
 if (process.env.TUBEBOARD_TIMETABLE_EDITION_MONITOR_ENABLED === 'true') {
   const worker = new SerialWorker({ initialDelayMs: 0, intervalMs: 300_000,
     run: signal => timetableEdition.refresh(signal),
@@ -340,6 +342,7 @@ if (config.workerEnabled) {
       signal,
       cacheOnly,
       sourceOnly,
+      nextFullRefreshAt: worker.nextIntervalAt,
       scheduleSourceRefresh: (record, cache, now, workerIntervalMs) => {
         worker.scheduleRerun(`${record.environment}:${record.activityID}:station-arrivals`, getStationArrivalsRefreshDelayMs(cache, now, workerIntervalMs), { sourceOnly: true });
       },
@@ -352,6 +355,7 @@ if (config.workerEnabled) {
       }
     }), 'activities')
   });
+  liveActivityWorker = worker;
   notificationWorkers.push(worker);
   worker.start();
 }
@@ -420,7 +424,10 @@ async function handleTokenRegistration(request, response) {
     return;
   }
 
-  const accepted = await store.upsertToken(validation.value);
+  const accepted = await registerLiveActivityToken(store, validation.value, {
+    wakeWorker: () => { void liveActivityWorker?.trigger(); },
+    nextRegularAt: () => liveActivityWorker?.nextIntervalAt
+  });
   operatorObservation?.loaded('activities');
   sendJson(response, 200, { ok: accepted.registrationAccepted !== false, ...(accepted.contentStateContract === 'station-board-v2' ? { contentStateContract: 'station-board-v2', ...(accepted.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(accepted.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}) } : {}) });
 }
