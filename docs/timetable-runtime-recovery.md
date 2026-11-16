@@ -102,8 +102,30 @@ The Docker image does not copy or run this bundle yet. Updating the producer
 requires a reviewed source commit and an explicit bundle sync, not downloading
 arbitrary code into the running service.
 
-The reviewed origin-parser projection is now pinned from app commit
+The earlier reviewed origin-parser projection was pinned from app commit
 `940c43a505e3a0cc6bcccefeeeeac8e070a755b8`. It preserves all 51,592 origin rows
 and 21 member records in the real-archive comparison and passed 112 affected
 Python tests. Full qualification measured 691.7 MiB after this change. This is
 still not suitable for the 256 MiB service; selected-call parsing is unchanged.
+
+The current bundle pins app commit `27ec00a1be4f7d3dce8ff24b5f68576c2bcfb363`.
+It includes bounded disk-backed record streaming, property-level calendar
+inheritance, explicit dated exclusions and separate origin/selected lifetimes.
+All 207 affected Python tests passed, and the retained current-edition replay
+qualified all 14 previous scopes without network requests or admission. It
+preserves acquisition clocks and released proof fields. This is not all-network
+coverage or a fresh live parity result.
+
+Capacity remains blocked. The streamed parser's earlier archive measurement
+fell from 689.19 to 254.27 MiB, but the newly supported calendars in current
+edition `21d82a62…` require more work: the final current-edition replay measured
+357,859,328 bytes RSS (341.28 MiB) and 54.03 seconds on macOS. Separating origin
+and selected phases changed that peak by only 0.21%. Neither result supports
+cohosting this producer with notifications on the existing 256 MiB machine.
+No Linux co-resident acceptance, resource increase, server activation or
+production deployment follows from the pinned bundle.
+
+The integrated prepared service passed `npm run check` on Node 22.21.1:
+516 tests passed, followed by syntax, repository and 12-file bundle-provenance
+checks. Fly configuration validation passed. These checks do not activate the
+new modules or replace the unresolved production resource and delivery gates.

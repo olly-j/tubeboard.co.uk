@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repository": "olly-j/My-Train-Times",
-  "revision": "940c43a505e3a0cc6bcccefeeeeac8e070a755b8",
+  "revision": "27ec00a1be4f7d3dce8ff24b5f68576c2bcfb363",
   "files": {
     "scripts/tb085_prepare_renewal.py": {
       "bytes": 70928,
@@ -12,8 +12,8 @@
       "sha256": "69cdd9bea393896963cfb67497851bee96fc725ed70182dfe66dbdbd1f32fa38"
     },
     "scripts/tb085_timetable_publication.py": {
-      "bytes": 57470,
-      "sha256": "706e51535baa5ea772d6e30c252f02c6e8b25378c408dd706d907ed2d5c4e5e1"
+      "bytes": 71408,
+      "sha256": "412e0960680de779408930e3dd765143240520d3055c38d96ee8d6d585f873f5"
     },
     "scripts/tb085_monitor_publication.py": {
       "bytes": 39634,
