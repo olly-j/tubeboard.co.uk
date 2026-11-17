@@ -82,14 +82,30 @@ async function verifyBundle() {
 }
 async function workspaceWithinLimit(root,limit) {
   let bytes=0,entries=0;const pending=[root];
-  while(pending.length){for(const item of await fs.readdir(pending.pop(),{withFileTypes:true})){
-    if(++entries>16384)throw failure('workspace-limit');
-    const name=path.join(item.parentPath??item.path,item.name),info=await fs.lstat(name);
-    if(info.isSymbolicLink())throw failure('workspace-path');
-    if(info.isDirectory())pending.push(name);else if(info.isFile())bytes+=info.size;else throw failure('workspace-path');
-    if(bytes>limit)throw failure('workspace-limit');
-  }}
+  while(pending.length){
+    const current=pending.pop();let items;
+    try {
+      const directoryInfo=await fs.lstat(current);
+      if(directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory())throw failure('workspace-path');
+      items=await fs.readdir(current,{withFileTypes:true});
+    } catch(error) {
+      // Python removes owned TemporaryDirectory trees while the watchdog samples.
+      // Only disappearing descendants are benign; the workspace root must exist.
+      if(current!==root && error.code==='ENOENT')continue;
+      throw error;
+    }
+    for(const item of items){
+      if(++entries>16384)throw failure('workspace-limit');
+      const name=path.join(current,item.name);let info;
+      try { info=await fs.lstat(name); }
+      catch(error){if(error.code==='ENOENT')continue;throw error;}
+      if(info.isSymbolicLink())throw failure('workspace-path');
+      if(info.isDirectory())pending.push(name);else if(info.isFile())bytes+=info.size;else throw failure('workspace-path');
+      if(bytes>limit)throw failure('workspace-limit');
+    }
+  }
 }
+
 async function removeStages(root,prefix){
   for(const name of await fs.readdir(root)){if(!name.startsWith(prefix))continue;
     const target=path.join(root,name),info=await fs.lstat(target);

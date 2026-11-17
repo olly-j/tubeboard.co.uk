@@ -466,3 +466,40 @@ test('retained inventories use an owned fixed file and bounded boolean launcher 
  await assert.rejects(x.producer.discoverOrigins({ publicationSHA256: publication, retainedInventory: '/arbitrary/path' }));
  assert.deepEqual((await fs.readdir(path.join(x.tmp, 'work'))).filter(name => name !== '.producer-lock'), []);
 });
+
+for (const operation of ['lstat', 'readdir']) test(`workspace sample tolerates disappearing owned temporary ${operation === 'lstat' ? 'entry' : 'directory'}`, async t => {
+ let target, removed = false;
+ const original = fs[operation].bind(fs);
+ t.mock.method(fs, operation, async (name, ...args) => {
+  if (target && name === target && !removed) {
+   removed = true; await fs.rm(target, { recursive: true, force: true });
+  }
+  return original(name, ...args);
+ });
+ const x = await setup(t, { alterAcquire: async work => {
+  target = path.join(work, 'python-temporary');
+  await fs.mkdir(target); await fs.writeFile(path.join(target, 'scratch'), 'temporary');
+ }});
+ await x.producer.discoverOrigins({ publicationSHA256: publication });
+ assert.equal(removed, true);
+ assert.equal(x.admissions.length, 0);
+});
+
+for (const kind of ['missing-root', 'symlink-root', 'symlink-child', 'permission', 'not-directory'])
+ test(`workspace disappearance handling still rejects ${kind}`, async t => {
+ let target;
+ const original = fs.lstat.bind(fs);
+ t.mock.method(fs, 'lstat', async (name, ...args) => {
+  if (name === target) {
+   if (kind.startsWith('symlink')) return { isSymbolicLink: () => true, isDirectory: () => false };
+   throw Object.assign(new Error('synthetic filesystem boundary'), { code: kind === 'missing-root' ? 'ENOENT' : kind === 'permission' ? 'EACCES' : 'ENOTDIR' });
+  }
+  return original(name, ...args);
+ });
+ const x = await setup(t, { alterAcquire: async work => {
+  target = kind === 'symlink-child' ? path.join(work, 'unsafe-child') : work;
+  if (kind === 'symlink-child') await fs.writeFile(target, 'sentinel');
+ }});
+ await assert.rejects(x.producer.discoverOrigins({ publicationSHA256: publication }));
+ assert.equal(x.admissions.length, 0);
+});
