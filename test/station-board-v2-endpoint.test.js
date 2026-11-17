@@ -8,6 +8,22 @@ import test from 'node:test';
 import { LiveActivityStore } from '../server/live-activity.js';
 import { STATION_BOARD_LINES, londonLocal, londonClock, selectEvents, mergeContexts } from '../server/station-board-v2.js';
 
+function replayDepartureMinute(anchor) {
+  const local = londonLocal(anchor);
+  const minute = Number(local.slice(11, 13)) * 60 + Number(local.slice(14, 16));
+  // The positive carry-forward assertion evaluates at anchor + 1 second.
+  // Keep its departure strictly later, even during a minute's final second.
+  return minute + Math.floor((anchor % 60000 + 1000) / 60000) + 1;
+}
+
+test('endpoint fixture departure remains future at the final-second replay', () => {
+  for (const stamp of ['2026-11-17T12:49:00.000Z', '2026-11-17T12:49:59.000Z', '2026-11-17T12:49:59.999Z']) {
+    const anchor = Date.parse(stamp);
+    const departure = londonClock(`2026-11-17T${String(Math.floor(replayDepartureMinute(anchor) / 60)).padStart(2, '0')}:${String(replayDepartureMinute(anchor) % 60).padStart(2, '0')}:00`);
+    assert.ok(departure > anchor + 1000, stamp);
+  }
+});
+
 test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards with no public cache access', { timeout: 15000 }, async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-v2-http-'));
   const child = spawn(process.execPath, ['server/index.js'], { cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH, PORT: '0', LIVE_ACTIVITY_WORKER_ENABLED: 'false', DISRUPTION_ALERT_WORKER_ENABLED: 'false', TUBEBOARD_STATUS_MONITOR_ENABLED: 'false', LIVE_ACTIVITY_DATA_FILE: path.join(directory, 'activities.json'), DISRUPTION_ALERT_DATA_FILE: path.join(directory, 'alerts.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -33,7 +49,7 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   assert.equal((await post({ ...fixture, installID: 'synthetic-invalid', contentStateContract: 'station-board-v2', lineID: 'mildmay' })).status, 400);
   assert.equal((await fetch(`${origin}/contracts/station-board-catalogue-v2.json`)).status, 404);
   assert.equal((await fetch(`${origin}/server/station-board-v2.js`)).status, 404);
-  const anchor = Date.now(), local = londonLocal(anchor), day = local.slice(0, 10), minute = Number(local.slice(11, 13)) * 60 + Number(local.slice(14, 16)) + 1;
+  const anchor = Date.now(), local = londonLocal(anchor), day = local.slice(0, 10), minute = replayDepartureMinute(anchor);
   assert.ok(minute < 1440, 'Endpoint carry-forward replay needs a current-day minute remaining');
   const departure = londonClock(`${day}T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00`), midnight = londonClock(`${new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)}T00:00:00`);
   const board = { ...fixture, installID: 'synthetic-seed-install', activityID: 'synthetic-seed-activity', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', platformID: null, platformHeading: null, platformLabel: null, platformDirection: null, tokenUpdatedAt: new Date(anchor).toISOString(), contentStateContract: 'station-board-v2' };
