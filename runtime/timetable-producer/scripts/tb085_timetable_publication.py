@@ -24,7 +24,7 @@ import copy
 from contextlib import contextmanager
 import tempfile
 from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import io
 import json
@@ -536,15 +536,19 @@ def read_archive(path: Path, tram_platforms=None) -> tuple[list[dict],list[dict]
                         continue
                     start=service.findtext('t:OperatingPeriod/t:StartDate',namespaces=NS);end=service.findtext('t:OperatingPeriod/t:EndDate',namespaces=NS)
                     if not start or not end:raise ValueError('cannot scope invalid member '+name) from error
-                    origins=set()
+                    origins=set();nonboarding=True
                     for pattern in service.findall('t:StandardService/t:JourneyPattern',NS):
                         refs=(pattern.findtext('t:JourneyPatternSectionRefs',namespaces=NS) or '').split()
                         if not refs:raise ValueError('cannot scope invalid pattern '+name) from error
                         section=(root._section_by_id(refs[0]) if hasattr(root,'_section_by_id') else
                                  root.find(".//t:JourneyPatternSection[@id='"+refs[0]+"']",NS))
                         stop=section.findtext('t:JourneyPatternTimingLink/t:From/t:StopPointRef',namespaces=NS) if section is not None else None
+                        activity=section.findtext('t:JourneyPatternTimingLink/t:From/t:Activity',namespaces=NS) if section is not None else None
+                        nonboarding=nonboarding and activity in {'pass','setDown'}
                         origins.add(tram_platforms[stop] if line == 'tram' else txc_station(stop or ''))
                     parsed=[{'lineID':line,'stationID':origin,'start':start,'end':end,'member':name,'qualificationGap':str(error)} for origin in origins]
+                    if nonboarding and str(error)=='non-passenger VehicleJourney origin activity':
+                        for row in parsed:row['_discoveryNonPassengerOnly']=True
                     meta={'member':name,'lineID':line,'sha256':raw_sha,'operatingStartDate':start,'operatingEndDate':end,'qualificationGap':str(error)}
                 rows.extend(parsed)
                 if meta:members.append(meta)
@@ -655,6 +659,91 @@ def passenger_origin_inventory(source_rows: list[dict], members: list[dict], mem
         'bankHolidayDates':sorted(holidays),
         'uncataloguedOriginCount':sum(len(stations) for stations in uncatalogued.values()),
         'uncataloguedOrigins':uncatalogued,'unresolvedMembers':unresolved,'malformedCurrentRows':malformed}
+
+def runtime_origin_scopes(source_rows, members, membership, assessed_at, holidays, *, expected_xml_lines=None):
+    """Current discovery only; never departure authority or a substitute qualifier."""
+    if not isinstance(assessed_at, datetime) or assessed_at.utcoffset() is None:
+        raise ValueError('Discovery assessment must have an aware current instant')
+    local=assessed_at.astimezone(ZoneInfo('Europe/London'));today=local.date();previous=today-timedelta(days=1)
+    midnight=datetime.combine(today+timedelta(days=1),datetime.min.time(),ZoneInfo('Europe/London'))
+    gaps=set();eligible=set();current=set();carry={};uncatalogued=set()
+    def gap(code,line=None,station=None,impact=True):
+        line=line if isinstance(line,str) and 0<len(line)<=64 else None
+        station=station if isinstance(station,str) and 0<len(station)<=128 else None
+        gaps.add((code,line,station,impact))
+    def impact(row):
+        try:return date.fromisoformat(row['start'])<=today and date.fromisoformat(row['end'])>=previous
+        except (KeyError,TypeError,ValueError):return True
+    def instant(day,raw):
+        clock,path=raw.split('|',1)
+        if not re.fullmatch(r'[0-9]{4}',clock) or not path or not 0<=int(clock)<2880:raise ValueError('Invalid raw departure')
+        naive=datetime.combine(day,datetime.min.time())+timedelta(minutes=int(clock));values=set()
+        for fold in (0,1):
+            value=naive.replace(tzinfo=ZoneInfo('Europe/London'),fold=fold).astimezone(timezone.utc)
+            if value.astimezone(ZoneInfo('Europe/London')).replace(tzinfo=None)==naive:values.add(value)
+        if len(values)!=1:raise ValueError('Ambiguous or nonexistent raw London departure')
+        return values.pop()
+    member_gaps={item['member']:item for item in members if item.get('qualificationGap')}
+    for item in member_gaps.values():
+        scoped=[r for r in source_rows if r.get('member')==item['member']]
+        if scoped and all(r.get('_discoveryNonPassengerOnly') is True for r in scoped):continue
+        gap('unqualified-xml-member',item.get('lineID'),None,
+            impact({'start':item.get('operatingStartDate'),'end':item.get('operatingEndDate')}))
+    for row in source_rows:
+        line,station=row.get('lineID'),row.get('stationID');pair=(line,station)
+        if row.get('member') in member_gaps:continue
+        try:
+            if line in RAIL or line=='tram':continue
+            if row.get('originActivity') not in {'pickUp','pickUpAndSetDown'}:
+                # Explicit non-passenger starts never become passenger demand.
+                if row.get('originActivity') in {'pass','setDown'}:continue
+                raise ValueError('Missing passenger pickup evidence')
+            if not isinstance(line,str) or not isinstance(station,str):raise ValueError('Missing XML origin identity')
+            if (not isinstance(row.get('weekdays'),(list,set,tuple)) or not row['weekdays']
+                    or any(type(day) is not int or not 1<=day<=7 for day in row['weekdays'])
+                    or not 0<=(date.fromisoformat(row['end'])-date.fromisoformat(row['start'])).days<=730):
+                raise ValueError('Invalid bounded operating calendar')
+            active=active_service_date(row,today,holidays)
+            if row.get('unsupportedNamedCalendarDates'):
+                gap('unqualified-xml-row',line,station,False)
+            operating=today.isoformat() not in holidays and row_operates_on(row,today.isoformat())
+            if row_calendar_gap(row,today.isoformat()):raise ValueError('Unqualified current calendar')
+            previous_operating=previous.isoformat() not in holidays and row_operates_on(row,previous.isoformat())
+            previous_gap=row_calendar_gap(row,previous.isoformat())
+            clock,path=row['key'].split('|',1)
+            if not re.fullmatch(r'[0-9]{4}',clock) or not path or not 0<=int(clock)<2880:raise ValueError('Invalid raw departure')
+            relevant=False
+            # Only 24+ hour journeys from a potentially operating previous day
+            # can contribute today. Unrelated DST clocks do not erase origins.
+            if int(clock)>=1440 and (previous_operating or previous_gap):
+                departure=instant(previous,row['key'])
+                contributing=assessed_at<=departure<midnight
+                if contributing and previous_gap:raise ValueError('Unqualified previous calendar')
+                relevant=previous_operating and contributing
+            if active is None and not relevant:continue
+            if pair not in membership:
+                uncatalogued.add(pair);gap('uncatalogued-passenger-origin',line,station,operating or relevant);continue
+            scope=line+'/'+station;eligible.add(scope)
+            if operating:current.add(scope)
+            if relevant:carry[scope]=max(carry.get(scope,departure),departure)
+        except (ValueError,KeyError,TypeError):gap('unqualified-xml-row',line,station,impact(row))
+    for line in sorted((expected_xml_lines if expected_xml_lines is not None else set(LINE_NAMES.values())|{'dlr'})-{m['lineID'] for m in members}):
+        gap('missing-xml-line',line)
+    required=current|set(carry)
+    transitions=[last+timedelta(milliseconds=1) for scope,last in carry.items() if scope not in current]
+    until=min([midnight,*transitions])
+    required_complete=len(required)<=256
+    if not required_complete:gap('required-scope-overflow')
+    effects={}
+    for code,line,station,effect in gaps:effects[(code,line,station)]=effects.get((code,line,station),False) or effect
+    public=[{'code':code,'lineID':line,'stationID':station,'affectsCurrentCoverage':effect}
+            for (code,line,station),effect in sorted(effects.items(),key=lambda item:(item[0][0],item[0][1] or '',item[0][2] or ''))]
+    return {'eligibleScopesComplete':True,'requiredScopesComplete':required_complete,
+        'eligibleScopes':sorted(eligible),'requiredScopes':sorted(required) if required_complete else [],
+        'unresolvedPublicSourceGaps':public,'validUntil':until.astimezone(timezone.utc).isoformat(),
+        'discoveryStatus':'incomplete' if any(g['affectsCurrentCoverage'] for g in public) else 'complete',
+        'counts':{'eligible':len(eligible),'required':len(required),'uncatalogued':len(uncatalogued)}}
+
 
 def inventory_difference_digest(sidecar: dict) -> str:
     """Stable gap identity excludes capture time/horizon, preventing repeat alerts."""
@@ -1046,7 +1135,7 @@ def qualify_entry(record:dict,source_rows:list[dict],capture_dir:Path,civil_date
     return entry
 
 def generate_with_inventory(archive:Path,capture_dir:Path,catalogue:Path,capture_overrides:Path | None=None, *,
-                            qualification_date: date | None=None) -> tuple[dict,dict]:
+                            qualification_date: date | None=None, _parsed_archive=None) -> tuple[dict,dict]:
     download=json.loads((capture_dir/'publication-download.json').read_text());sha=_file_sha256(archive)
     if download['sha256']!=sha:raise ValueError('archive differs from captured publication')
     headers={k.lower():v for k,v in download['headers'].items()}
@@ -1064,7 +1153,7 @@ def generate_with_inventory(archive:Path,capture_dir:Path,catalogue:Path,capture
     if tram_capture.is_file():
         from tb085_tram_stations import platform_parents, stations
         tram_platforms = platform_parents(json.loads(tram_capture.read_bytes()), stations())
-    source,members=read_archive(archive,tram_platforms)
+    source,members=read_archive(archive,tram_platforms) if _parsed_archive is None else _parsed_archive
     records=json.loads((capture_dir/'line-station-matrix.json').read_text())
     extra=capture_dir/'extra-line-station-matrix.json'
     if extra.exists():records+=json.loads(extra.read_text())

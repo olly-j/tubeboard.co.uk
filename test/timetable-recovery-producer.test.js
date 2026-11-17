@@ -52,7 +52,7 @@ async function setup(t,options={}){
   const holderConfig=JSON.parse(args.at(-1));
   if(options.workerScript){
    const actualLauncher=holderConfig.launcher;
-   holderConfig.launcher="import os,sys,json,time,signal\nsys.path.insert(0,sys.argv[1]+'/scripts')\nimport tb085_prepare_renewal as fixture_module\njob=json.loads(sys.argv[2])\ndef offline(*args,**kwargs):exec("+JSON.stringify(options.workerScript)+",globals())\nfixture_module.acquire_and_record=offline\nfixture_module.prepare=offline\nexec("+JSON.stringify(actualLauncher)+",globals())";
+   holderConfig.launcher="import os,sys,json,time,signal\nsys.path.insert(0,sys.argv[1]+'/scripts')\nimport tb085_prepare_renewal as fixture_module\njob=json.loads(sys.argv[2])\ndef offline(*args,**kwargs):exec("+JSON.stringify(options.workerScript)+",globals())\nfixture_module.acquire_and_record=offline\nfixture_module.prepare=offline\nfixture_module.discover_cached_origins=offline\nexec("+JSON.stringify(actualLauncher)+",globals())";
    const child=spawn(command,[...args.slice(0,-1),JSON.stringify(holderConfig)],opts);options.onHolder?.(child);return child;
   }
   const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();
@@ -69,6 +69,21 @@ async function setup(t,options={}){
     await fs.writeFile(path.join(job.work,'metadata.json'),JSON.stringify(metadata));
     await fs.writeFile(path.join(job.work,'receipt.json'),JSON.stringify({status:'verified-source-only',publication:job.publication,sha256:job.publication,bytes:fixtureArchive.length}));
     await options.alterAcquire?.(job.work);
+   }else if(job.mode==='discover'){
+    const value=JSON.parse(await fs.readFile(path.join(root,'test/fixtures/tb085-runtime-origin-discovery/synthetic-incomplete.json')));
+    Object.assign(value,{publicationSHA256:job.publication,assessedAt:new Date(calendarNow).toISOString(),
+      serviceDay:'2026-11-16',validUntil:new Date(calendarNow+60000).toISOString()});
+    Object.assign(value.inputs,{archiveSHA256:job.publication,
+      sourceMetadataSHA256:hash(await fs.readFile(path.join(job.cache,'metadata.json'))),
+      sourceReceiptSHA256:hash(await fs.readFile(path.join(job.cache,'receipt.json'))),
+      producerSHA256:hash(await fs.readFile(path.join(root,'runtime/timetable-producer/scripts/tb085_prepare_renewal.py'))),
+      parserSHA256:hash(await fs.readFile(path.join(root,'runtime/timetable-producer/scripts/tb085_timetable_publication.py'))),
+      catalogueSHA256:hash(await fs.readFile(path.join(root,'runtime/timetable-producer/TubeBoard Watch App/TubeStationCatalog.json'))),
+      originalAcquisition:{startedAt:'2026-11-16T12:00:00Z',receivedAt:'2026-11-16T12:00:01Z'},
+      holidayReceivedAt:new Date(calendarNow-1000).toISOString(),holidayExpiresAt:new Date(calendarNow+3600000).toISOString(),
+      officialObservation:{publicationSHA256:job.publication,observedAt:new Date(calendarNow-1).toISOString(),expiresAt:new Date(calendarNow+600000).toISOString()}});
+    await options.alterDiscovery?.(value,job);
+    await fs.writeFile(path.join(job.work,'discovery.json'),JSON.stringify(value));
    }else{
     await options.beforePrepare?.(job);
     const candidate=path.join(job.work,'candidate');await fs.mkdir(path.join(candidate,'source-archive/bodies'),{recursive:true});
@@ -97,6 +112,33 @@ test('verified predecessor, bounded bundle and cache are passed to preparation; 
  await x.producer.recover({publicationSHA256:publication,scopes:[scope]});
  assert.equal(x.calls.filter(c=>c.mode==='acquire').length,1);assert.deepEqual(await fs.readFile(path.join(x.tmp,'cache',publication,'metadata.json')),metadata);
  assert.deepEqual((await fs.readdir(path.join(x.tmp,'work'))).filter(n=>n!=='.producer-lock'),[]);
+});
+
+test('origin discovery shares verified acquisition/cache and fixed custody without admitting a package',async t=>{
+ const x=await setup(t);const first=await x.producer.discoverOrigins({publicationSHA256:publication});
+ assert.equal(first.discoveryStatus,'incomplete');assert.deepEqual(x.calls.map(call=>call.mode),['acquire','discover']);
+ assert.equal(x.admissions.length,0);assert.deepEqual(first.requiredScopes,['central/940GZZLULYN']);
+ await x.producer.discoverOrigins({publicationSHA256:publication});
+ assert.equal(x.calls.filter(call=>call.mode==='acquire').length,1);
+ assert.deepEqual(await x.producer.discoveryBindings({publicationSHA256:publication}),
+  Object.fromEntries(['archiveSHA256','sourceMetadataSHA256','sourceReceiptSHA256','producerSHA256','parserSHA256','catalogueSHA256'].map(name=>[name,first.inputs[name]])));
+ assert.deepEqual((await fs.readdir(path.join(x.tmp,'work'))).filter(name=>name!=='.producer-lock'),[]);
+});
+test('mismatched discovery clocks and provenance fail before any publication admission',async t=>{
+ for(const alterDiscovery of [value=>value.inputs.parserSHA256='0'.repeat(64),
+  value=>value.inputs.archiveSHA256='0'.repeat(64),value=>value.validUntil=new Date(calendarNow).toISOString(),
+  value=>value.discoveryStatus='complete']){
+  const x=await setup(t,{alterDiscovery});
+  await assert.rejects(x.producer.discoverOrigins({publicationSHA256:publication}),/Timetable producer discovery-failed/);
+  assert.equal(x.admissions.length,0);assert.equal(x.producer.active,false);
+ }
+});
+test('discovery and preparation cannot overlap or clean another producer custody',async t=>{
+ let entered,release;const ready=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
+ const x=await setup(t,{alterDiscovery:async()=>{entered();await gate;}});
+ const work=x.producer.discoverOrigins({publicationSHA256:publication});await ready;
+ await assert.rejects(x.producer.recover({publicationSHA256:publication,scopes:[scope]}),/busy/);
+ release();await work;assert.equal(x.admissions.length,0);
 });
 
 test('current assessment reads real comparison bytes and rejects missing archives despite qualified status',async t=>{

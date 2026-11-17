@@ -53,6 +53,14 @@ test('ambiguous/nonexistent London raw clocks reject even when expired; day iden
 test('invalid identity and excessive/unknown requested scopes are not healthy empty assessments',()=>{
  const x=fixture();assert.equal(x.assess(now,['northern/UNKNOWN']).valid,false);assert.equal(x.assess(NaN).valid,false);x.asset.proofBytes=Buffer.from('{}');assert.equal(x.assess().valid,false);
 });
+test('XML mandatory scopes remain unresolved independently of the smaller admitted proof',()=>{
+ const x=fixture(),added='central/940GZZLULYN';
+ const result=assessCurrentPublicationCoverage({...x,at:now,mandatoryScopes:[added]});
+ assert.equal(result.valid,true);assert.deepEqual(result.publicationRequiredScopes,[scope]);
+ assert.ok(result.requiredScopes.includes(added));assert.deepEqual(result.coveredScopes,[scope]);
+ assert.deepEqual(result.unresolvedScopes,[added]);
+ assert.equal(assessCurrentPublicationCoverage({...x,at:now,mandatoryScopes:Array(257).fill(added)}).valid,false);
+});
 test('runtime freshness gate remains mandatory even when pure archived comparison covers today',()=>{
  const x=fixture();assert.deepEqual(x.assess().coveredScopes,[scope]);assert.throws(()=>qualifyTimetable(x.asset,[],record,{at:now}),/unavailable/);
 });

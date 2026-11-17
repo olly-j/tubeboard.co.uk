@@ -113,11 +113,12 @@ test('producer success without matching committed identity remains a failure', a
   assert.equal((await worker.status()).pendingScopes, 1);
 });
 
-test('partial qualification retains failed scopes with backoff; recovery clears incident', async t => {
+test('partial progress advances once; remaining failed scope backs off and recovery clears incident', async t => {
   const { worker, state } = await fixture(t);
   await worker.request('central/station0'); await worker.request('central/station1');
   worker.recover = async request => { state.admitted = EDITION; state.coveredScopes.add('central/station0'); return { unresolvedScopes: ['central/station1'] }; };
-  for (const delay of [0, 60000, 300000]) { state.now += delay; await worker.tick(); }
+  // New coverage makes one immediate pass available before no-progress backoff.
+  for (const delay of [0, 0, 60000, 300000]) { state.now += delay; await worker.tick(); }
   assert.equal((await worker.status()).pendingScopes, 1);
   assert.equal(state.alerts.length, 1);
   worker.recover = async () => { state.coveredScopes.add('central/station1'); return { unresolvedScopes: [] }; };

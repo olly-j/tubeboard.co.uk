@@ -1,0 +1,211 @@
+[
+  {
+    "name": "eligible-false-nonempty",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "eligibleScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "discoveryStatus"
+        ],
+        "value": "incomplete"
+      }
+    ]
+  },
+  {
+    "name": "required-false-nonempty",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "requiredScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "discoveryStatus"
+        ],
+        "value": "incomplete"
+      }
+    ]
+  },
+  {
+    "name": "eligible-empty-without-whole-inventory-reason",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "eligibleScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "requiredScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "eligibleScopes"
+        ],
+        "value": []
+      },
+      {
+        "path": [
+          "requiredScopes"
+        ],
+        "value": []
+      },
+      {
+        "path": [
+          "discoveryStatus"
+        ],
+        "value": "incomplete"
+      }
+    ]
+  },
+  {
+    "name": "required-empty-without-whole-inventory-reason",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "requiredScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "requiredScopes"
+        ],
+        "value": []
+      },
+      {
+        "path": [
+          "discoveryStatus"
+        ],
+        "value": "incomplete"
+      }
+    ]
+  },
+  {
+    "name": "required-complete-with-eligible-incomplete",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "eligibleScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "eligibleScopes"
+        ],
+        "value": []
+      },
+      {
+        "path": [
+          "requiredScopes"
+        ],
+        "value": []
+      },
+      {
+        "path": [
+          "counts",
+          "required"
+        ],
+        "value": 0
+      },
+      {
+        "path": [
+          "discoveryStatus"
+        ],
+        "value": "incomplete"
+      },
+      {
+        "path": [
+          "unresolvedPublicSourceGaps"
+        ],
+        "value": [
+          {
+            "code": "inventory-overflow",
+            "lineID": null,
+            "stationID": null,
+            "affectsCurrentCoverage": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "required-complete-over-bound",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "counts",
+          "required"
+        ],
+        "value": 257
+      }
+    ]
+  },
+  {
+    "name": "over-bound-unavailable-without-overflow",
+    "base": "synthetic-incomplete.json",
+    "changes": [
+      {
+        "path": [
+          "eligibleScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "requiredScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "eligibleScopes"
+        ],
+        "value": []
+      },
+      {
+        "path": [
+          "requiredScopes"
+        ],
+        "value": []
+      },
+      {
+        "path": [
+          "counts",
+          "required"
+        ],
+        "value": 257
+      },
+      {
+        "path": [
+          "unresolvedPublicSourceGaps"
+        ],
+        "value": [
+          {
+            "code": "unqualified-xml-member",
+            "lineID": null,
+            "stationID": null,
+            "affectsCurrentCoverage": true
+          }
+        ]
+      }
+    ]
+  }
+]

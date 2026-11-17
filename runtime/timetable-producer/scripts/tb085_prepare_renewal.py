@@ -301,7 +301,7 @@ def parse_requested_scopes(scopes):
     return pairs
 
 
-def runtime_rosters(roster, origins, catalogue, previous, requested_scopes, *, retain_references=False):
+def runtime_rosters(roster, origins, catalogue, previous, requested_scopes, *, retain_references=False, xml_pickup_scopes=()):
     """Select demand and prior authority in memory; never probe unrelated stations."""
     requested = set(parse_requested_scopes(requested_scopes))
     known = {(r["lineID"], r["stationID"]): r for r in roster}
@@ -319,7 +319,7 @@ def runtime_rosters(roster, origins, catalogue, previous, requested_scopes, *, r
         if pair not in catalogued:
             raise ValueError("Requested scope is outside the current station catalogue: " + "/".join(pair))
         if (pair[1] not in origins.get(pair[0], ()) and pair not in qualified
-                and not known.get(pair, {}).get("directions")):
+                and not known.get(pair, {}).get("directions") and pair not in xml_pickup_scopes):
             raise ValueError("Requested scope is not a discovered origin or reviewed directional scope: " + "/".join(pair))
     rows = []
     for pair in sorted(requested | prior.keys()):
@@ -1004,6 +1004,129 @@ def prepare_origin_inventory_only(publication, output):
         write_json(output,sidecar)
 
 
+def validate_runtime_discovery(value):
+    """Validate this bounded interoperability result, not departure authority."""
+    keys={'schemaVersion','kind','publicationSHA256','assessedAt','serviceDay','validUntil','discoveryStatus',
+        'eligibleScopesComplete','requiredScopesComplete','eligibleScopes','requiredScopes','unresolvedPublicSourceGaps','inputs','reuseRequirements','counts'}
+    if not isinstance(value,dict) or set(value)!=keys or type(value['schemaVersion']) is not int or value['schemaVersion']!=1 or value['kind']!='tubeboard-runtime-origin-discovery-v1':raise ValueError('Invalid discovery schema')
+    def instant(text):
+        if not isinstance(text,str):raise ValueError('Invalid discovery timestamp')
+        result=datetime.fromisoformat(text)
+        if result.utcoffset() is None:raise ValueError('Discovery timestamps must be aware')
+        return result
+    at=instant(value['assessedAt']);until=instant(value['validUntil']);local=at.astimezone(ZoneInfo('Europe/London'))
+    if value['serviceDay']!=local.date().isoformat() or not at<until<=datetime.combine(local.date()+timedelta(days=1),datetime.min.time(),ZoneInfo('Europe/London')):raise ValueError('Invalid discovery day/validity')
+    for name in ('eligibleScopes','requiredScopes'):
+        scopes=value[name]
+        if not isinstance(scopes,list) or any(not isinstance(v,str) or not re.fullmatch(r'[a-z0-9-]{1,64}/[A-Z0-9]{1,32}',v) for v in scopes) or scopes!=sorted(set(scopes)):raise ValueError('Invalid discovery scopes')
+    if len(value['requiredScopes'])>256 or not set(value['requiredScopes'])<=set(value['eligibleScopes']):raise ValueError('Invalid required discovery union')
+    for flag in ('eligibleScopesComplete','requiredScopesComplete'):
+        if type(value[flag]) is not bool:raise ValueError('Invalid discovery completeness')
+    counts=value['counts']
+    if not isinstance(counts,dict) or set(counts)!={'eligible','required','uncatalogued'} or any(type(v) is not int or not 0<=v<=2147483647 for v in counts.values()):raise ValueError('Invalid discovery counts')
+    for label in ('eligible','required'):
+        if (value[label+'ScopesComplete'] and counts[label]!=len(value[label+'Scopes'])
+                or not value[label+'ScopesComplete'] and value[label+'Scopes']):raise ValueError('Discovery cannot silently truncate authority')
+    codes={'uncatalogued-passenger-origin','unqualified-xml-member','unqualified-xml-row','missing-xml-line','required-scope-overflow','inventory-overflow','holiday-authority-unavailable'}
+    if not isinstance(value['unresolvedPublicSourceGaps'],list):raise ValueError('Invalid discovery gaps')
+    for gap in value['unresolvedPublicSourceGaps']:
+        if (not isinstance(gap,dict) or set(gap)!={'code','lineID','stationID','affectsCurrentCoverage'} or not isinstance(gap['code'],str) or gap['code'] not in codes or type(gap['affectsCurrentCoverage']) is not bool
+                or any(gap[name] is not None and (not isinstance(gap[name],str) or not 0<len(gap[name])<=128) for name in ('lineID','stationID'))):raise ValueError('Invalid discovery gap')
+    current_gaps=[g for g in value['unresolvedPublicSourceGaps'] if g['affectsCurrentCoverage']]
+    unavailable=any(g['code']=='unqualified-xml-member' and g['lineID'] is None and g['stationID'] is None for g in current_gaps)
+    inventory_overflow=any(g['code']=='inventory-overflow' for g in current_gaps)
+    required_overflow=any(g['code']=='required-scope-overflow' for g in current_gaps)
+    if (not value['eligibleScopesComplete'] and (value['requiredScopesComplete'] or not (inventory_overflow or unavailable))
+            or not value['requiredScopesComplete'] and not (inventory_overflow or required_overflow or unavailable)):
+        raise ValueError('Incomplete discovery requires an explicit whole-inventory reason')
+    if counts['required']>256 and (value['requiredScopesComplete'] or not (inventory_overflow or required_overflow)):
+        raise ValueError('Required discovery overflow must be explicit')
+    incomplete=not value['eligibleScopesComplete'] or not value['requiredScopesComplete'] or any(g['affectsCurrentCoverage'] for g in value['unresolvedPublicSourceGaps'])
+    if value['discoveryStatus']!=('incomplete' if incomplete else 'complete'):raise ValueError('Invalid current discovery status')
+    inputs=value['inputs'];hashes={'archiveSHA256','sourceMetadataSHA256','sourceReceiptSHA256','producerSHA256','parserSHA256','catalogueSHA256','holidayBodySHA256'}
+    if not isinstance(inputs,dict) or set(inputs)!=hashes|{'holidayReceivedAt','holidayExpiresAt','originalAcquisition','officialObservation'} or any(not isinstance(inputs[k],str) or not packager.SHA.fullmatch(inputs[k]) for k in hashes):raise ValueError('Invalid discovery input binding')
+    if inputs['archiveSHA256']!=value['publicationSHA256']:raise ValueError('Discovery edition mismatch')
+    original=inputs['originalAcquisition'];official=inputs['officialObservation']
+    if (not isinstance(original,dict) or set(original)!={'startedAt','receivedAt'} or not instant(original['startedAt'])<=instant(original['receivedAt'])<=at
+            or not isinstance(official,dict) or set(official)!={'publicationSHA256','observedAt','expiresAt'} or official['publicationSHA256']!=value['publicationSHA256']
+            or not instant(official['observedAt'])<=at<instant(official['expiresAt'])
+            or not instant(inputs['holidayReceivedAt'])<=at<instant(inputs['holidayExpiresAt']) or until>instant(inputs['holidayExpiresAt'])):raise ValueError('Invalid discovery clocks')
+    reuse=value['reuseRequirements']
+    if not isinstance(reuse,dict) or set(reuse)!={'freshSameEditionObservation','unchangedParserCatalogueHoliday','monotonicAssessment'} or any(flag is not True for flag in reuse.values()):raise ValueError('Invalid discovery reuse requirements')
+    if len((json.dumps(value,indent=2)+'\n').encode())>qualifier.MAX_ORIGIN_INVENTORY_BYTES:raise ValueError('Discovery exceeds 2 MiB')
+    return value
+
+
+def discover_cached_origins(publication, output, *, source_archive, source_archive_receipt, source_archive_metadata):
+    """Bounded scope discovery; sidecar never replaces actual candidate qualification."""
+    if not packager.SHA.fullmatch(publication):raise ValueError('Invalid discovery publication')
+    if any(value is None for value in (source_archive,source_archive_receipt,source_archive_metadata)):
+        raise ValueError('Cached discovery requires all original source inputs')
+    if output.exists() or output.is_symlink():raise ValueError('Discovery output must be new')
+    output.parent.mkdir(parents=True,exist_ok=True)
+    deadline=time.monotonic()+300
+    with tempfile.TemporaryDirectory(dir=output.parent,prefix='.tb085-discovery-') as directory:
+        work=Path(directory)
+        download=acquire_cached_archive(work,publication,deadline,source_archive,source_archive_receipt,source_archive_metadata)
+        first_day=cached_qualification_date(download['cachedArchiveEvidence']['after'],publication)
+        holiday=fetch(work,'bank-holidays',HOLIDAYS,MIB,deadline)
+        raw=(work/holiday['body']).read_bytes()
+        if digest(work/holiday['body'])!=holiday['sha256']:raise ValueError('Holiday body differs from receipt')
+        try:
+            body=packager.parse(raw);events=body['england-and-wales']['events']
+            if not isinstance(events,list) or not 1<=len(events)<=4096:raise ValueError('Invalid bounded holiday calendar')
+            dates={row['date'] for row in events}
+            if any(not isinstance(value,str) or date.fromisoformat(value).isoformat()!=value for value in dates):raise ValueError('Invalid holiday date')
+        except (KeyError,TypeError,ValueError) as error:raise ValueError('Invalid bounded official holiday calendar') from error
+        headers=holiday['headers'];received=datetime.fromisoformat(holiday['receivedAt'])
+        provider_date=parsedate_to_datetime(headers['date']);age=int(headers.get('age','0'))
+        match=re.search(r'(?:^|,)\s*max-age=(\d+)',headers.get('cache-control',''),re.I)
+        ttl=min(86400,int(match.group(1))) if match else 60
+        if received.utcoffset() is None or provider_date.utcoffset() is None:raise ValueError('Holiday timestamps must be aware')
+        elapsed=(received-provider_date).total_seconds()
+        if received.utcoffset() is None or provider_date.utcoffset() is None or age<0 or elapsed<0 or max(elapsed,age)>=ttl:
+            raise ValueError('Holiday authority is expired or malformed')
+        holiday_expires=received+timedelta(seconds=ttl-max(elapsed,age))
+        catalogue=json.loads(CATALOGUE.read_bytes())
+        membership={(line['lineID'],station['stationID']) for station in catalogue['stations'] for line in station['lines']}
+        parse_failed=False
+        try:source,members=qualifier.read_archive(work/download['body'])
+        except (ValueError,KeyError,TypeError,qualifier.ET.ParseError):source,members=[],[];parse_failed=True
+        latest=fresh_cached_edition(work,'cached-official-final',publication,deadline)
+        final_day=cached_qualification_date(latest,publication)
+        assessed=datetime.now(timezone.utc)
+        if final_day!=first_day or assessed.astimezone(ZoneInfo('Europe/London')).date()!=final_day:
+            raise ValueError('London service day changed during discovery')
+        if not min(dates)<=final_day.isoformat()<=max(dates) or holiday_expires<=assessed:
+            raise ValueError('Holiday authority does not cover current discovery')
+        detail=qualifier.runtime_origin_scopes(source,members,membership,assessed,dates)
+        if parse_failed:
+            detail.update(discoveryStatus='incomplete',eligibleScopesComplete=False,requiredScopesComplete=False)
+            detail['unresolvedPublicSourceGaps']=[{'code':'unqualified-xml-member','lineID':None,'stationID':None,'affectsCurrentCoverage':True}]
+        until=min(datetime.fromisoformat(detail['validUntil']),holiday_expires)
+        if until<=assessed:raise ValueError('Discovery validity elapsed during assessment')
+        observed=parsedate_to_datetime(latest['headers']['date']);official_age=int(latest['headers']['age'])
+        observed=assessed-timedelta(seconds=max((assessed-observed).total_seconds(),official_age))
+        result={'schemaVersion':1,'kind':'tubeboard-runtime-origin-discovery-v1','publicationSHA256':publication,
+            'assessedAt':assessed.isoformat(),'serviceDay':final_day.isoformat(),**detail,'validUntil':until.isoformat(),
+            'inputs':{'archiveSHA256':publication,'sourceMetadataSHA256':download['cachedArchiveEvidence']['metadataSHA256'],
+                'sourceReceiptSHA256':download['cachedArchiveEvidence']['receiptSHA256'],
+                'producerSHA256':digest(Path(__file__)),'parserSHA256':digest(Path(qualifier.__file__)),
+                'catalogueSHA256':digest(CATALOGUE),'holidayBodySHA256':holiday['sha256'],
+                'holidayReceivedAt':holiday['receivedAt'],'holidayExpiresAt':holiday_expires.isoformat(),
+                'originalAcquisition':{'startedAt':download['startedAt'],'receivedAt':download['receivedAt']},
+                'officialObservation':{'publicationSHA256':publication,'observedAt':observed.isoformat(),
+                    'expiresAt':(observed+timedelta(seconds=600)).isoformat()}},
+            'reuseRequirements':{'freshSameEditionObservation':True,'unchangedParserCatalogueHoliday':True,'monotonicAssessment':True}}
+        if len((json.dumps(result,indent=2)+'\n').encode())>qualifier.MAX_ORIGIN_INVENTORY_BYTES:
+            result.update(discoveryStatus='incomplete',eligibleScopesComplete=False,requiredScopesComplete=False,
+                eligibleScopes=[],requiredScopes=[],unresolvedPublicSourceGaps=[{'code':'inventory-overflow','lineID':None,'stationID':None,'affectsCurrentCoverage':True}])
+        if len((json.dumps(result,indent=2)+'\n').encode())>qualifier.MAX_ORIGIN_INVENTORY_BYTES:raise ValueError('Discovery evidence exceeds bound')
+        validate_runtime_discovery(result)
+        write_json(output,result)
+        return result
+
+
 def prepare(publication, output, *, same_edition=False, additive_only=False, expected_resource_sha=None,
             expected_proof_sha=None, expected_revision=None, prior_served=None, tram_report=None, archive_receipt=None, requested_scopes=None,
             source_archive=None, source_archive_receipt=None, source_archive_metadata=None):
@@ -1076,9 +1199,6 @@ def prepare(publication, output, *, same_edition=False, additive_only=False, exp
         if requested_scopes is None:
             roster = preserve_previous_qualified_scopes(roster, prior_wrapper)
             capture_roster = roster
-        else:
-            roster, capture_roster = runtime_rosters(roster, origins, json.loads(CATALOGUE.read_text()),
-                prior_wrapper, requested_scopes, retain_references=additive_only)
         previous_resource_path = captures / "previous-resource.json"
         previous_resource_path.write_bytes(previous)
         previous_readback_evidence = {key: value for key, value in previous_readback.items() if key != "body"}
@@ -1102,11 +1222,24 @@ def prepare(publication, output, *, same_edition=False, additive_only=False, exp
         write_json(captures / "publication-download.json", download_evidence)
         holiday = fetch(captures, "bank-holidays", HOLIDAYS, MIB, deadline)
         write_json(captures / "bank-holidays-capture.json", holiday)
+        parsed_archive = None
+        if requested_scopes is not None:
+            # Derive new origin eligibility from this verified archive, never
+            # from a caller-supplied discovery sidecar. Parse once per batch.
+            parsed_archive = qualifier.read_archive(archive)
+            catalogue_data = json.loads(CATALOGUE.read_text())
+            membership = {(line['lineID'],station['stationID']) for station in catalogue_data['stations'] for line in station['lines']}
+            dates = {event['date'] for event in json.loads((captures/holiday['body']).read_bytes())['england-and-wales']['events']}
+            discovered = qualifier.runtime_origin_scopes(*parsed_archive,membership,datetime.now(timezone.utc),dates)
+            xml_scopes = {tuple(scope.split('/')) for scope in discovered['eligibleScopes']}
+            roster, capture_roster = runtime_rosters(roster, origins, catalogue_data,
+                prior_wrapper, requested_scopes, retain_references=additive_only, xml_pickup_scopes=xml_scopes)
         capture_matrix(captures, capture_roster, deadline)
         write_json(captures / "effective-roster.json", roster)
         qualification_date = (cached_qualification_date(download["cachedArchiveEvidence"]["after"], publication)
                               if source_archive is not None else None)
         qualification_options = {"qualification_date": qualification_date} if qualification_date is not None else {}
+        if parsed_archive is not None:qualification_options["_parsed_archive"] = parsed_archive
         proof, origin_inventory = qualifier.generate_with_inventory(archive, captures, CATALOGUE, **qualification_options)
         if requested_scopes is not None:
             proof = retain_uncaptured_entries(proof, previous_body, capture_roster,
@@ -1199,6 +1332,7 @@ def main():
     parser.add_argument("--origin-inventory-output", type=Path,
                         help="Write the standalone inventory from the already acquired official archive")
     parser.add_argument("--rehearse-source", action="store_true", help="Verify the current archive and save only its receipt")
+    parser.add_argument("--discover-cached-origins", action="store_true", help="Discover bounded current XML pickup scopes from verified cached source")
     parser.add_argument("--inventory-only", action="store_true",
                         help="Read one official archive and retain only its independent passenger-origin inventory")
     parser.add_argument("--additive-only", action="store_true", help="Keep served station definitions and verify additional origins")
@@ -1215,7 +1349,13 @@ def main():
         parser.error("Cached source archives apply only to candidate preparation")
     if args.requested_scope is not None and (args.rehearse_source or args.inventory_only):
         parser.error("Requested scopes apply only to candidate preparation")
+    if args.discover_cached_origins and (args.rehearse_source or args.inventory_only or args.requested_scope or args.same_edition or args.additive_only):
+        parser.error("Cached discovery is independent of preparation/manual inventory modes")
     try:
+        if args.discover_cached_origins:
+            discover_cached_origins(args.publication,args.output,source_archive=args.source_archive,
+                source_archive_receipt=args.source_archive_receipt,source_archive_metadata=args.source_archive_metadata)
+            return
         if args.rehearse_source:
             rehearse_source(args.publication, args.output, tram_report=args.tram_report,
                             origin_inventory_output=args.origin_inventory_output)

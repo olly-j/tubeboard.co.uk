@@ -83,6 +83,8 @@ export class TimetableRecoveryService {
     const recovery = new Recovery({ filePath: config.stateFile, observation,
       latestIdentity: () => store.latestAdmittedIdentity, validScope: validRecoveryScope,
       recover: request => producer.recover(request), assessCoverage: request => producer.assessCurrentCoverage(request),
+      discoverOrigins: request => producer.discoverOrigins(request),
+      discoveryBindings: request => producer.discoveryBindings(request),
       ...(alert ? { alert: request => alert.deliver(request), authorizeAlertEdition: request => alert.authorizeEdition(request) } : {}),
       onError: () => this.onError() });
     this.admissionStore = store; this.producer = producer; this.recovery = recovery;
@@ -105,7 +107,8 @@ export class TimetableRecoveryService {
   }
 
   #supports(scope) {
-    return validRecoveryScope(scope) && !STATION_BOARD_LINES.get(scope.split('/')[0])?.qualifiedRailDepartureSource && this.supportedScopes.has(scope);
+    return validRecoveryScope(scope) && !STATION_BOARD_LINES.get(scope.split('/')[0])?.qualifiedRailDepartureSource
+      && (this.supportedScopes.has(scope) || this.recovery?.supportsDiscoveredScope?.(scope) === true);
   }
   async #refreshSupported() {
     const identity = this.admissionStore.latestAdmittedIdentity;

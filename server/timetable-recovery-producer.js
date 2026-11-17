@@ -11,6 +11,7 @@ import { validatePublicationResource, MAX_RESOURCE_BYTES } from './timetable-pub
 import { readBoundedFile, validateSourceManifest, MAX_SOURCE_MANIFEST_BYTES, MAX_SOURCE_BODY_BYTES, MAX_SOURCE_ARCHIVE_BYTES } from './timetable-source-body-resource.js';
 import { MAX_SOURCE_ZIP_BYTES } from './timetable-source-archive-transfer.js';
 import { assessCurrentPublicationCoverage } from './timetable-current-coverage.js';
+import { validateOriginDiscovery, MAX_DISCOVERY_BYTES } from './timetable-origin-discovery.js';
 
 const BUNDLE = fileURLToPath(new URL('../runtime/timetable-producer/', import.meta.url));
 const SHA = /^[a-f0-9]{64}$/;
@@ -43,6 +44,10 @@ elif job['mode']=='prepare':
         expected_revision=job['previous']['revision'],prior_served=None if same else job['previous'],
         requested_scopes=job['scopes'],source_archive=Path(job['cache'])/'source.zip',
         source_archive_receipt=Path(job['cache'])/'receipt.json',source_archive_metadata=Path(job['cache'])/'metadata.json')
+elif job['mode']=='discover':
+    p.discover_cached_origins(publication,work/'discovery.json',
+        source_archive=Path(job['cache'])/'source.zip',source_archive_receipt=Path(job['cache'])/'receipt.json',
+        source_archive_metadata=Path(job['cache'])/'metadata.json')
 else:raise ValueError('Unknown fixed producer operation')
 `;
 
@@ -126,7 +131,7 @@ try:
   if not line:break
   if len(line)>16384 or not line.endswith(b'\n'):raise ValueError('job bound')
   job=json.loads(line)
-  if job.get('mode') not in ('acquire','prepare'):raise ValueError('job mode')
+  if job.get('mode') not in ('acquire','prepare','discover'):raise ValueError('job mode')
   worker=subprocess.Popen(['/usr/bin/python3','-I','-B','-c',config['launcher'],config['bundle'],json.dumps(job)],
     stdin=subprocess.DEVNULL,stdout=sys.stderr,stderr=sys.stderr,start_new_session=True,pass_fds=tuple(fds))
   emit({'status':'started','pid':worker.pid})
@@ -150,9 +155,62 @@ export class TimetableRecoveryProducer {
     Object.assign(this,{cacheDirectory,workDirectory,admissionStore,readCurrentResource,timeoutMs,outputLimit,spawnChild,now});
     this.active=false;
   }
+  async discoveryBindings({publicationSHA256:publication,signal=new AbortController().signal}={}) {
+    signal.throwIfAborted(); await verifyBundle();
+    const cache=path.join(this.cacheDirectory,publication);
+    if(!SHA.test(publication))throw failure('scope-invalid');
+    await this.#verifyCache(cache,publication,signal);
+    const bytes=async(relative,limit)=>hash(await bounded(BUNDLE,relative,limit));
+    const result={archiveSHA256:publication,
+      producerSHA256:await bytes('scripts/tb085_prepare_renewal.py',2*1024*1024),
+      parserSHA256:await bytes('scripts/tb085_timetable_publication.py',2*1024*1024),
+      catalogueSHA256:await bytes('TubeBoard Watch App/TubeStationCatalog.json',2*1024*1024),
+      sourceMetadataSHA256:hash(await bounded(cache,'metadata.json',65536)),
+      sourceReceiptSHA256:hash(await bounded(cache,'receipt.json',65536))};
+    signal.throwIfAborted(); return result;
+  }
+  async discoverOrigins({publicationSHA256:publication,signal}={}) {
+    if(this.active)throw failure('busy');
+    if(!SHA.test(publication))throw failure('scope-invalid');
+    this.active=true;let work,safeCleanup=false;
+    const timeout=new AbortController(),deadlineTimer=setTimeout(()=>timeout.abort(failure('timeout')),this.timeoutMs);
+    signal=signal?AbortSignal.any([signal,timeout.signal]):timeout.signal;
+    try {
+      const deadline=performance.now()+this.timeoutMs;signal.throwIfAborted();await verifyBundle();
+      const root=await directory(this.cacheDirectory),workRoot=await directory(this.workDirectory);
+      if(root===workRoot || root.startsWith(workRoot+path.sep) || workRoot.startsWith(root+path.sep)
+          || root===path.parse(root).root || workRoot===path.parse(workRoot).root)throw failure('directory-invalid');
+      await this.#openHolder([root,workRoot],signal,deadline,()=>timeout.abort(failure('holder-ended')));safeCleanup=true;
+      await removeStages(root,'.acquire-');await removeStages(workRoot,'producer-');
+      await this.#retainCache(root,publication);
+      const cache=await this.#cache(publication,root,signal,deadline);
+      work=await fs.mkdtemp(path.join(workRoot,'producer-'));
+      await this.#child({mode:'discover',publication,work,cache},signal,deadline);
+      await workspaceWithinLimit(work,384*1024*1024);
+      const result=JSON.parse(await bounded(work,'discovery.json',MAX_DISCOVERY_BYTES));
+      return validateOriginDiscovery(result,{publicationSHA256:publication,at:this.now(),
+        bindings:await this.discoveryBindings({publicationSHA256:publication,signal})});
+    }catch(error){if(signal.aborted)throw signal.reason??failure('cancelled');
+      if(error.producerReason)throw error;throw failure('discovery-failed');
+    }finally{clearTimeout(deadlineTimer);
+      const holder=this.holder;this.holder=null;
+      const owned=safeCleanup && holder && (holder.safeCleanup || (!holder.closed && !holder.workerActive));
+      try{if(owned && work)await fs.rm(work,{recursive:true,force:true});}
+      finally{if(holder && !holder.closed){holder.expectedClose=true;holder.child.stdin.end();await holder.close;}this.active=false;}
+    }
+  }
+  async #retainCache(root,publication) {
+    const editions=[];
+    for(const name of await fs.readdir(root)){if(name==='.producer-lock')continue;
+      if(!SHA.test(name))throw failure('cache-path');const info=await fs.lstat(path.join(root,name));
+      if(info.isSymbolicLink() || !info.isDirectory())throw failure('cache-path');
+      await workspaceWithinLimit(path.join(root,name),164*1024*1024);editions.push({name,mtime:info.mtimeMs});}
+    const obsolete=editions.filter(e=>e.name!==publication).sort((a,b)=>b.mtime-a.mtime).slice(1);
+    for(const entry of obsolete)await fs.rm(path.join(root,entry.name),{recursive:true,force:true});
+  }
   // Assess the actually admitted immutable bytes, never a candidate's status
   // label or an invented fresh response. Callers still own observation freshness.
-  async assessCurrentCoverage({identity,requestedScopes=[],at=this.now(),signal=new AbortController().signal}={}) {
+  async assessCurrentCoverage({identity,requestedScopes=[],mandatoryScopes=[],at=this.now(),signal=new AbortController().signal}={}) {
     signal?.throwIfAborted();
     const current=this.admissionStore.latestAdmittedIdentity;
     const same=(a,b)=>a && b && ['publicationSHA256','proofRevision','proofBodySHA256','resourceSHA256']
@@ -169,7 +227,7 @@ export class TimetableRecoveryProducer {
       throw failure('assessment-resource-mismatch');
     const wrapper=JSON.parse(bytes),proofBytes=Buffer.from(wrapper.proofBodyBase64,'base64');
     const result=assessCurrentPublicationCoverage({asset:{identity:snapshot,proofBytes,proof:JSON.parse(proofBytes)},
-      comparisonIndex:this.admissionStore.sourceBodyIndex,requestedScopes,at});
+      comparisonIndex:this.admissionStore.sourceBodyIndex,requestedScopes,mandatoryScopes,at});
     signal?.throwIfAborted();
     if(!same(snapshot,this.admissionStore.latestAdmittedIdentity))throw failure('assessment-identity-changed');
     return result;
@@ -291,13 +349,7 @@ export class TimetableRecoveryProducer {
       const wrapper=JSON.parse(previousBytes),prior=JSON.parse(Buffer.from(wrapper.proofBodyBase64,'base64'));
       const requested=scopes.length?scopes:[...prior.entries].filter(e=>e.status==='qualified' && validBoard(e.stationID,e.lineID)).map(e=>`${e.lineID}/${e.stationID}`).sort().slice(0,1);
       if(!requested.length)throw failure('predecessor-no-qualified-scope');
-      const editions=[];
-      for(const name of await fs.readdir(root)){if(name==='.producer-lock')continue;
-        if(!SHA.test(name))throw failure('cache-path');const info=await fs.lstat(path.join(root,name));
-        if(info.isSymbolicLink() || !info.isDirectory())throw failure('cache-path');
-        await workspaceWithinLimit(path.join(root,name),164*1024*1024);editions.push({name,mtime:info.mtimeMs});}
-      const obsolete=editions.filter(e=>e.name!==publication).sort((a,b)=>b.mtime-a.mtime).slice(1);
-      for(const entry of obsolete)await fs.rm(path.join(root,entry.name),{recursive:true,force:true});
+      await this.#retainCache(root,publication);
       const cache=await this.#cache(publication,root,signal,deadline);
       work=await fs.mkdtemp(path.join(workRoot,'producer-'));
       await this.#child({mode:'prepare',publication,work,cache,scopes:requested,previous:{publication:previous.publicationSHA256,

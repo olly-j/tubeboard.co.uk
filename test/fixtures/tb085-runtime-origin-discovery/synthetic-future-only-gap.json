@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "kind": "tubeboard-runtime-origin-discovery-v1",
+  "publicationSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "assessedAt": "2026-11-17T00:10:00+00:00",
+  "serviceDay": "2026-11-17",
+  "validUntil": "2026-11-17T00:30:00.001+00:00",
+  "discoveryStatus": "complete",
+  "eligibleScopes": [
+    "central/940GZZLULYN",
+    "northern/940GZZLUEGW"
+  ],
+  "requiredScopes": [
+    "central/940GZZLULYN"
+  ],
+  "unresolvedPublicSourceGaps": [
+    {
+      "code": "unqualified-xml-member",
+      "lineID": "northern",
+      "stationID": null,
+      "affectsCurrentCoverage": false
+    }
+  ],
+  "inputs": {
+    "archiveSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sourceMetadataSHA256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "sourceReceiptSHA256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "parserSHA256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "catalogueSHA256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "holidayBodySHA256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "holidayReceivedAt": "2026-11-17T00:09:30+00:00",
+    "holidayExpiresAt": "2026-11-18T00:09:30+00:00",
+    "originalAcquisition": {
+      "startedAt": "2026-11-16T14:00:00+00:00",
+      "receivedAt": "2026-11-16T14:01:00+00:00"
+    },
+    "officialObservation": {
+      "publicationSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "observedAt": "2026-11-17T00:09:59+00:00",
+      "expiresAt": "2026-11-17T00:10:59+00:00"
+    },
+    "producerSHA256": "9999999999999999999999999999999999999999999999999999999999999999"
+  },
+  "reuseRequirements": {
+    "freshSameEditionObservation": true,
+    "unchangedParserCatalogueHoliday": true,
+    "monotonicAssessment": true
+  },
+  "counts": {
+    "eligible": 2,
+    "required": 1,
+    "uncatalogued": 0
+  },
+  "eligibleScopesComplete": true,
+  "requiredScopesComplete": true
+}

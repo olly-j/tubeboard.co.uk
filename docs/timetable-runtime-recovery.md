@@ -330,3 +330,65 @@ scope; extra/duplicate sources, direction and body/hash checks remain strict.
 All 55 preparation tests passed. The offline harness now retains a bounded
 pre-archive proof and scope summary for diagnostics without changing archive
 inputs. Full trusted admission still requires a new integration result.
+
+## Automatic XML-origin discovery (prepared, default off)
+
+The recovery owner requests a bounded origin inventory before treating a
+matching admitted edition as healthy, including startup without registrations.
+The reviewed Python producer discovers explicit passenger pickup origins from
+the verified cached XML; Node validates its result and does not parse calendars
+or infer origins from branch targets or ordinary route ends. Future-eligible
+origins are distinct from full current-day and relevant carryover requirements.
+The observed 130 candidates / 124 catalogued pairs are not a daily required
+count. Uncatalogued memberships remain original public gaps, not remapped stops.
+
+The inventory binds edition, original archive receipt/metadata, producer/parser,
+catalogue, holiday response and London assessment day. Reuse requires unchanged
+inputs, monotonic time and a fresh independent same-edition observation. Its
+validUntil is the first required-set transition, London midnight or holiday
+authority expiry. Python derives final membership after parsing from its final
+fresh observation; expiry is not an instruction to repeat a long cold parse.
+Neither inventory reuse nor a fresh HEAD extends original acquisition clocks.
+
+Current XML requirements and retained publication requirements share the existing
+256 mandatory reserve independently of 256 accepted demands. The coordinator
+keeps pending order, appends new origins and processes at most 32 per batch.
+Strictly new partial progress rotates remaining failed batch scopes to the
+tail, allowing untouched origins to proceed; no progress retains existing
+backoff. Old unadmitted discovered requirements are not new-edition authority.
+Complete publication assessment still owns all source, clock and admission
+checks. Discovery itself neither admits a package nor publishes departures.
+
+Current-impact discovery gaps or unavailable/incomplete inventories prevent
+healthy/resolved status and use existing incident custody, without stopping
+independently repairable prior requirements or accepted demand. Known future-only
+diagnostics do not create a current failure. Explicit inventory/required overflow
+retains its denominator and prior queue, never a silently truncated healthy set.
+Incomplete same-edition discovery also retains prior unadmitted requirements;
+only complete authority may prune an absent origin. A new healthy handoff records
+its inventory epoch and post-write confirmation. Unconfirmed writes cannot resolve
+an incident after restart; confirmed historical handoffs retain their original
+assessment while separate current resolution still requires current authority.
+Archive-cache custody, child cancellation, 300-second preparation bound and
+existing storage/output bounds are shared with preparation. No new route,
+customer-data store, polling loop or scheduled Actions are introduced.
+
+The coordinated source includes the separately reviewed canonical producer
+bundle; consumer-only checks are not actual discovery execution. Rollback must
+understand inventory and handoff confirmation semantics, not merely accept the
+old outer state version. The 128 KiB
+global proof and 32 MiB source-archive limits remain unchanged: discovering a
+larger network is not evidence that its publication fits those limits. Cold-parse
+capacity, source-only notification cycles, full registration load, production
+alerts/activation and compatible client/physical acceptance remain open. No
+network qualification, hosting increase or deployment follows from unit tests.
+
+The owner's separate 17 November discovery CLI run emitted 124 eligible and
+109 current-required scopes, six uncatalogued origins, three current-impact
+membership gaps and 136 future diagnostics. Node 22 decoded the retained bytes
+against the exact synced bundle and original cache hashes at their original
+assessment instant, not as later current authority. The original 16 November
+archive acquisition was unchanged. Holiday authority limited this inventory
+from 13:52:59 to 13:59:54 UTC; repeated cold parsing at roughly ten-minute
+intervals is an unresolved activation/scaling concern, not an accepted workload
+or permission to extend that expiry.
