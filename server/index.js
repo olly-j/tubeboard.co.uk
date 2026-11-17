@@ -130,6 +130,9 @@ if (process.env.TUBEBOARD_OPERATOR_OBSERVATION_CONFIG) {
 }
 
 const server = http.createServer(async (request, response) => {
+  // close() handles sockets idle at shutdown start. An accepted response can
+  // finish later and become idle; retire it without cutting off active bodies.
+  response.once('finish', () => { if (shuttingDown) server.closeIdleConnections(); });
   const observation = operatorObservation;
   if (observation) {
     observation.http('accepted');
