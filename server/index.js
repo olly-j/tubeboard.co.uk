@@ -13,6 +13,7 @@ import { handlePublicationResource, PUBLICATION_ASSET_DIRECTORY } from './timeta
 import { handleWindowResource, loadBundledWindows, WINDOW_DIRECTORY, WINDOW_PREFIX } from './timetable-window-resource.js';
 import { handleSourceBodyResource, loadSourceBodyArchiveIndex, SOURCE_ARCHIVE_DIRECTORY } from './timetable-source-body-resource.js';
 import { TimetablePublicationAdmissionStore } from './timetable-publication-admission-store.js';
+import { loadTimetableRecoveryConfig, TimetableRecoveryService } from './timetable-recovery-service.js';
 import {
   LiveActivityStore,
   TokenRateLimiter,
@@ -115,6 +116,12 @@ const timetablePublicationAdmissionStore = process.env.TUBEBOARD_TIMETABLE_PUBLI
     return null;
   })
   : Promise.resolve(null);
+const timetableRecovery = new TimetableRecoveryService({
+  config: loadTimetableRecoveryConfig(process.env, { servedDirectory: projectRoot }),
+  admissionStore: timetablePublicationAdmissionStore, observation: timetableEdition,
+  activityStore: store, activityConfig: config,
+  onError: () => console.warn(JSON.stringify({ event: 'timetable-recovery-unavailable' }))
+});
 const port = Number.parseInt(process.env.PORT || '4173', 10);
 let operatorObservation = null;
 function observeStoreCompletion(work, kind) {
@@ -325,7 +332,10 @@ const notificationWorkers = [];
 let liveActivityWorker = null;
 if (process.env.TUBEBOARD_TIMETABLE_EDITION_MONITOR_ENABLED === 'true') {
   const worker = new SerialWorker({ initialDelayMs: 0, intervalMs: 300_000,
-    run: signal => timetableEdition.refresh(signal),
+    run: async signal => {
+      try { await timetableEdition.refresh(signal); }
+      finally { if (!signal.aborted) timetableRecovery.tick(); }
+    },
     onError: () => console.error('Timetable edition observation unavailable') });
   notificationWorkers.push(worker);
   worker.start();
@@ -399,7 +409,8 @@ async function shutdown() {
   statusMonitor.stop();
   await Promise.all([
     new Promise((resolve) => server.close(() => { operatorObservation?.http('drained'); resolve(); })),
-    ...notificationWorkers.map((worker) => worker.stop())
+    ...notificationWorkers.map((worker) => worker.stop()),
+    timetableRecovery.stop()
   ]);
   clearTimeout(deadline);
   operatorObservation?.close(); // Never join observation cleanup into business drain.
@@ -429,6 +440,7 @@ async function handleTokenRegistration(request, response) {
     nextRegularAt: () => liveActivityWorker?.nextIntervalAt
   });
   operatorObservation?.loaded('activities');
+  timetableRecovery.accepted(accepted);
   sendJson(response, 200, { ok: accepted.registrationAccepted !== false, ...(accepted.contentStateContract === 'station-board-v2' ? { contentStateContract: 'station-board-v2', ...(accepted.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(accepted.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}) } : {}) });
 }
 

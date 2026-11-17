@@ -1,4 +1,4 @@
-// Prepared TB-085 adapter only: no server construction or default activation.
+// Bounded TB-085 adapter; server lifecycle construction remains explicit default-off.
 import fs from 'node:fs/promises';
 import { constants } from 'node:fs';
 import path from 'node:path';

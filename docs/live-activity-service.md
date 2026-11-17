@@ -710,3 +710,64 @@ edition 409, a rate limit 429, and upstream/validation failures 503. This
 route does not qualify a timetable or authorize production publication; a
 source merge is not deployment, and deploying it requires the separate
 explicit production authorization in the deployment section.
+
+### Default-off recovery lifecycle construction (TB-085 / #298)
+
+The service now owns the existing admission-backed recovery coordinator and
+bounded producer only when `TUBEBOARD_TIMETABLE_RECOVERY_ENABLED=true` is
+explicitly configured. The default is off; Fly configuration is unchanged.
+Enabled construction requires the existing edition monitor enabled, an absolute
+persistent admission directory and its valid baseline SHA256. Missing/failed
+admission initialization leaves recovery unavailable (construction can retry
+on later existing ticks); it never selects another writer or clears prior history. Invalid enabled configuration fails startup.
+
+`TUBEBOARD_TIMETABLE_RECOVERY_DIRECTORY` defaults to
+`/data/timetable-recovery`. Its `recovery.json`, `archive-cache/`,
+`producer-work/` and `operator-alert.json` stay outside served project files and
+disjoint from the admission root. No new volume or hosting capacity is selected.
+The producer retains its existing 300-second deadline, 64 KiB output, kernel
+custody, archive/hash/proof/source-clock/admission/CAS gates and cleanup. Node's
+`TFL_APP_KEY` is not implicitly forwarded into the isolated Python process.
+
+The existing five-minute edition observer queues recovery after every refresh,
+including unchanged editions; it does not await producer completion. Successful
+validated typed Live Activity registrations queue only a supported line/station
+scope after registration custody, without delaying or changing the HTTP reply.
+Startup and later existing ticks restore active typed registrations through the
+same eligibility and bounded deduplication. This does not copy tokens, install
+IDs or customer records into recovery state. New demand is limited to
+exact admitted qualified proof scopes on non-direct-rail lines; catalogue
+branch targets alone are not producer-origin authority.
+Unqualified through-stations and direct rail notifications cannot create
+unrelated XML recovery incidents. Coordinator-required coverage and immutable prior demand
+remain owned by the existing coordinator, not rewritten by this filter.
+
+Operator alert credentials are independently optional:
+`TUBEBOARD_TIMETABLE_RECOVERY_GITHUB_TOKEN` must be externally supplied with
+Issues read/write restricted to `olly-j/My-Train-Times`, and
+`TUBEBOARD_TIMETABLE_RECOVERY_GITHUB_AUTHOR_ID` is the exact positive integer
+actor ID. The transport remains fixed to Issue #298. Missing credentials leave
+incidents pending; they do not acknowledge delivery or block otherwise healthy
+qualification. There is no implicit personal GitHub/APNs credential fallback.
+Only fixed redacted failure events are logged.
+
+Transient/raced eligibility reads and active-record restoration failures do not
+suppress coordinator ticks for durable required/prior scopes. They cannot
+expand eligibility, erase pending history or create a tight retry loop; the
+next existing external tick retries ancillary work.
+
+Shutdown stops recovery in parallel with notification workers: active producer
+work is aborted immediately, its owner drains descendants, and late admission
+initialization cannot construct a new coordinator after stop. The existing
+five-second process deadline is unchanged. No periodic job or public endpoint
+is added.
+
+This is construction/lifecycle preparation, not production activation or whole
+#298 acceptance. Initial app/widget publication misses carry no validated scope
+on the existing global hash route. Additional XML-discovered origins and their
+coverage are a separately reviewed server-side continuation; this slice does
+not infer station demand from that route or invent a client demand API. Actual
+live-source qualification, deployment/rollback, credentials configuration,
+physical/background delivery and current capacity gates remain separate. The
+bounded cohosting image passed with a raw peak of 268,435,456 bytes at the 256 MiB cap;
+that is no spare-capacity or full-registration-load guarantee.

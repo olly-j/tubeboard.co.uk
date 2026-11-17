@@ -28,7 +28,7 @@ function bodyFor(edition, key) {
 
 // One instance/process owns this file, as for TransactionalJsonStore. The token
 // must be externally supplied and restricted to Issues read/write on the fixed
-// repository. This module has no scheduler and is deliberately not wired in.
+// repository. This module has no scheduler; server construction is default-off.
 export class GitHubTimetableRecoveryAlert {
   #token; #actorID; #fetch; #now; #tail = Promise.resolve(); #store; #timeout; #quiescence;
   constructor({ filePath, token, actorID, fetchImpl = fetch, now = Date.now, timeoutMs = 10000, quiescenceMs = ALERT_QUIESCENCE_MS }) {
