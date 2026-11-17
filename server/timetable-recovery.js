@@ -31,7 +31,7 @@ function normalize(value) {
   const requiredScopes = value.requiredScopes ?? [], demandScopes = value.demandScopes ?? [...value.pending, ...value.completed].filter(s => !requiredScopes.includes(s));
   const publicationRequiredScopes = value.publicationRequiredScopes ?? requiredScopes;
   const discovery = value.discovery ?? null, discoveryError = value.discoveryError ?? null;
-  if (discovery !== null) validateOriginDiscovery(discovery);
+  if (discovery !== null) validateOriginDiscovery(discovery, { allowLegacy: true });
   if (![null, 'unavailable', 'required-scope-overflow'].includes(discoveryError)
       || !Array.isArray(publicationRequiredScopes) || publicationRequiredScopes.length > MAX_REQUIRED
       || new Set(publicationRequiredScopes).size !== publicationRequiredScopes.length
@@ -106,6 +106,7 @@ export class TimetableRecovery {
     if (!this.discoverOrigins) return true;
     const state = this.store.state, inventory = state.discovery;
     return this.discoveryValidated && !state.discoveryError && inventory
+      && inventory.schemaVersion === 2 && inventory.kind === 'tubeboard-runtime-origin-discovery-v2'
       && inventory.publicationSHA256 === state.edition && this.#current(state.edition)
       && this.now() >= Date.parse(inventory.assessedAt) && this.now() < Date.parse(inventory.validUntil)
       && inventory.serviceDay === serviceDay(this.now());
@@ -126,7 +127,7 @@ export class TimetableRecovery {
       catch {
         signal.throwIfAborted();
         if (this.store.state.nextAttemptAt > this.now()) throw invalid();
-        inventory = await this.discoverOrigins({ publicationSHA256: edition, signal });
+        inventory = await this.discoverOrigins({ publicationSHA256: edition, signal, retainedInventory: inventory });
         bindings = await this.discoveryBindings({ publicationSHA256: edition, signal });
         validateOriginDiscovery(inventory, { publicationSHA256: edition, at: this.now(), bindings });
       }

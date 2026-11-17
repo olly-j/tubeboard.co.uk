@@ -74,3 +74,17 @@ test('truthful whole-archive parse unavailability needs no fabricated overflow',
     unresolvedPublicSourceGaps: [{ code: 'unqualified-xml-member', lineID: null, stationID: null, affectsCurrentCoverage: true }] });
   assert.equal(validateOriginDiscovery(value).discoveryStatus, 'incomplete');
 });
+
+test('legacy inventory is migration-only; v2 structural parse bounds cannot be extended', () => {
+  const legacy = sample('legacy-v1/synthetic-incomplete');
+  assert.throws(() => validateOriginDiscovery(legacy));
+  assert.equal(validateOriginDiscovery(legacy, { allowLegacy: true }).schemaVersion, 1);
+  for (const mutate of [v => v.parsedAt = new Date(Date.parse(v.assessedAt) + 1).toISOString(),
+    v => v.structuralValidUntil = v.assessedAt,
+    v => v.parsedAt = '2026-11-16T23:59:59Z']) {
+    const value = incomplete(); mutate(value); assert.throws(() => validateOriginDiscovery(value));
+  }
+  const value = incomplete();
+  assert.equal(validateOriginDiscovery(value).schemaVersion, 2);
+  assert.throws(() => validateOriginDiscovery(value, { at: Date.parse(value.validUntil) }));
+});

@@ -666,7 +666,7 @@ def runtime_origin_scopes(source_rows, members, membership, assessed_at, holiday
         raise ValueError('Discovery assessment must have an aware current instant')
     local=assessed_at.astimezone(ZoneInfo('Europe/London'));today=local.date();previous=today-timedelta(days=1)
     midnight=datetime.combine(today+timedelta(days=1),datetime.min.time(),ZoneInfo('Europe/London'))
-    gaps=set();eligible=set();current=set();carry={};uncatalogued=set()
+    gaps=set();eligible=set();current=set();carry={};uncatalogued=set();projection_carry={};projection_current=set();gap_transitions=[]
     def gap(code,line=None,station=None,impact=True):
         line=line if isinstance(line,str) and 0<len(line)<=64 else None
         station=station if isinstance(station,str) and 0<len(station)<=128 else None
@@ -718,9 +718,13 @@ def runtime_origin_scopes(source_rows, members, membership, assessed_at, holiday
             if int(clock)>=1440 and (previous_operating or previous_gap):
                 departure=instant(previous,row['key'])
                 contributing=assessed_at<=departure<midnight
-                if contributing and previous_gap:raise ValueError('Unqualified previous calendar')
+                if contributing:projection_carry[pair]=max(projection_carry.get(pair,departure),departure)
+                if contributing and previous_gap:
+                    gap_transitions.append(departure+timedelta(milliseconds=1))
+                    raise ValueError('Unqualified previous calendar')
                 relevant=previous_operating and contributing
             if active is None and not relevant:continue
+            if operating:projection_current.add(pair)
             if pair not in membership:
                 uncatalogued.add(pair);gap('uncatalogued-passenger-origin',line,station,operating or relevant);continue
             scope=line+'/'+station;eligible.add(scope)
@@ -730,8 +734,8 @@ def runtime_origin_scopes(source_rows, members, membership, assessed_at, holiday
     for line in sorted((expected_xml_lines if expected_xml_lines is not None else set(LINE_NAMES.values())|{'dlr'})-{m['lineID'] for m in members}):
         gap('missing-xml-line',line)
     required=current|set(carry)
-    transitions=[last+timedelta(milliseconds=1) for scope,last in carry.items() if scope not in current]
-    until=min([midnight,*transitions])
+    transitions=[last+timedelta(milliseconds=1) for pair,last in projection_carry.items() if pair not in projection_current]
+    until=min([midnight,*transitions,*gap_transitions])
     required_complete=len(required)<=256
     if not required_complete:gap('required-scope-overflow')
     effects={}

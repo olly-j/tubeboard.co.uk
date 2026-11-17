@@ -22,6 +22,7 @@ async function setup(t, required = scopes.slice(0, 35)) {
   const inventory = () => {
     const value = structuredClone(sample);
     Object.assign(value, { publicationSHA256: state.edition, assessedAt: new Date(state.now).toISOString(),
+      parsedAt: new Date(state.now).toISOString(), structuralValidUntil: new Date(state.now + 60000).toISOString(),
       serviceDay: londonLocal(state.now).slice(0, 10), validUntil: new Date(state.now + 60000).toISOString(),
       eligibleScopes: [...state.required].sort(), requiredScopes: [...state.required].sort(),
       unresolvedPublicSourceGaps: structuredClone(state.gaps),
@@ -235,4 +236,27 @@ test('discovery cancellation stops without consuming failure budget or persistin
   await Promise.race([started, new Promise((_, reject) => { const timer = setTimeout(() => reject(Error('discovery did not enter')), 1000); timer.unref(); })]);
   await worker.stop(); await cycle;
   assert.equal(worker.store.state.failures, 0); assert.equal(worker.store.state.discovery, null);
+});
+
+test('legacy persisted inventory retains pending custody and forces v2 before health', async t => {
+  const { worker, state, options, inventory } = await setup(t, scopes.slice(0, 2));
+  worker.recover = async () => ({ unresolvedScopes: state.required });
+  await worker.request(scopes[2]); await worker.tick();
+  const legacy = inventory(); legacy.schemaVersion = 1; legacy.kind = 'tubeboard-runtime-origin-discovery-v1';
+  delete legacy.parsedAt; delete legacy.structuralValidUntil;
+  await worker.store.transaction(value => { value.discovery = legacy; value.nextAttemptAt = 0; });
+  const pending = [...worker.store.state.pending]; await worker.stop();
+  let received;
+  const resumed = new TimetableRecovery({ ...options, discoverOrigins: async request => {
+    received = request.retainedInventory; throw Error('offline refresh unavailable');
+  }}); t.after(() => resumed.stop());
+  assert.equal((await resumed.status()).coverageCurrent, false);
+  await resumed.tick();
+  assert.deepEqual(received, legacy);
+  assert.deepEqual(new Set([...resumed.store.state.pending, ...resumed.store.state.completed]), new Set(pending));
+  assert.deepEqual(resumed.store.state.demandScopes, [scopes[2]]);
+  assert.equal((await resumed.status()).coverageCurrent, false);
+  resumed.discoverOrigins = async () => inventory();
+  await resumed.store.transaction(value => { value.nextAttemptAt = 0; }); await resumed.tick();
+  assert.equal(resumed.store.state.discovery.schemaVersion, 2);
 });

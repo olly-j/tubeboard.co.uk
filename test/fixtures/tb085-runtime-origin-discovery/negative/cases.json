@@ -207,5 +207,104 @@
         ]
       }
     ]
+  },
+  {
+    "name": "parsed-in-future",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "parsedAt"
+        ],
+        "value": "2026-11-17T00:11:00+00:00"
+      }
+    ]
+  },
+  {
+    "name": "structural-before-http-validity",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "structuralValidUntil"
+        ],
+        "value": "2026-11-17T00:20:00+00:00"
+      }
+    ]
+  },
+  {
+    "name": "parsed-other-service-day",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "parsedAt"
+        ],
+        "value": "2026-11-16T23:59:00+00:00"
+      }
+    ]
+  },
+  {
+    "name": "required-count-exceeds-eligible-count",
+    "base": "synthetic-future-only-gap.json",
+    "changes": [
+      {
+        "path": [
+          "eligibleScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "requiredScopesComplete"
+        ],
+        "value": false
+      },
+      {
+        "path": [
+          "eligibleScopes"
+        ],
+        "value": []
+      },
+      {
+        "path": [
+          "requiredScopes"
+        ],
+        "value": []
+      },
+      {
+        "path": [
+          "counts",
+          "eligible"
+        ],
+        "value": 1
+      },
+      {
+        "path": [
+          "counts",
+          "required"
+        ],
+        "value": 2
+      },
+      {
+        "path": [
+          "discoveryStatus"
+        ],
+        "value": "incomplete"
+      },
+      {
+        "path": [
+          "unresolvedPublicSourceGaps"
+        ],
+        "value": [
+          {
+            "code": "inventory-overflow",
+            "lineID": null,
+            "stationID": null,
+            "affectsCurrentCoverage": true
+          }
+        ]
+      }
+    ]
   }
 ]

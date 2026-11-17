@@ -47,7 +47,8 @@ elif job['mode']=='prepare':
 elif job['mode']=='discover':
     p.discover_cached_origins(publication,work/'discovery.json',
         source_archive=Path(job['cache'])/'source.zip',source_archive_receipt=Path(job['cache'])/'receipt.json',
-        source_archive_metadata=Path(job['cache'])/'metadata.json')
+        source_archive_metadata=Path(job['cache'])/'metadata.json',
+        retained_inventory=work/'retained-origin-inventory.json' if job.get('retainedInventory') is True else None)
 else:raise ValueError('Unknown fixed producer operation')
 `;
 
@@ -169,7 +170,7 @@ export class TimetableRecoveryProducer {
       sourceReceiptSHA256:hash(await bounded(cache,'receipt.json',65536))};
     signal.throwIfAborted(); return result;
   }
-  async discoverOrigins({publicationSHA256:publication,signal}={}) {
+  async discoverOrigins({publicationSHA256:publication,signal,retainedInventory}={}) {
     if(this.active)throw failure('busy');
     if(!SHA.test(publication))throw failure('scope-invalid');
     this.active=true;let work,safeCleanup=false;
@@ -185,7 +186,13 @@ export class TimetableRecoveryProducer {
       await this.#retainCache(root,publication);
       const cache=await this.#cache(publication,root,signal,deadline);
       work=await fs.mkdtemp(path.join(workRoot,'producer-'));
-      await this.#child({mode:'discover',publication,work,cache},signal,deadline);
+      if(retainedInventory != null){
+        validateOriginDiscovery(retainedInventory,{allowLegacy:true});
+        // The fixed launcher receives a boolean, never caller-selected paths
+        // or a large JSON object in its bounded holder protocol.
+        await fs.writeFile(path.join(work,'retained-origin-inventory.json'),JSON.stringify(retainedInventory),{flag:'wx',mode:0o600});
+      }
+      await this.#child({mode:'discover',publication,work,cache,retainedInventory:retainedInventory != null},signal,deadline);
       await workspaceWithinLimit(work,384*1024*1024);
       const result=JSON.parse(await bounded(work,'discovery.json',MAX_DISCOVERY_BYTES));
       return validateOriginDiscovery(result,{publicationSHA256:publication,at:this.now(),

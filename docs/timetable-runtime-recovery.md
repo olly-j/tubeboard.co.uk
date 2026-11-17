@@ -392,3 +392,16 @@ archive acquisition was unchanged. Holiday authority limited this inventory
 from 13:52:59 to 13:59:54 UTC; repeated cold parsing at roughly ten-minute
 intervals is an unresolved activation/scaling concern, not an accepted workload
 or permission to extend that expiry.
+
+### Bounded inventory HTTP revalidation (v2, prepared)
+
+The fixed producer launcher can stage an existing strictly validated inventory in
+its owned work directory and pass it to the same discovery function. V2 records
+immutable `parsedAt` and `structuralValidUntil`; fresh official HEAD and holiday
+authority may renew HTTP validity only within that original structural bound.
+Changed inputs, London day, backward clocks or expired structural membership
+require ordinary parsing. Original archive acquisition clocks remain unchanged.
+Persisted v1 inventories retain pending recovery and historical alert custody,
+but cannot authorize current health: the next discovery must produce v2. Node
+does not interpret calendars or manufacture refreshed authority. No extra polling
+loop, customer request, or caller-selected retained-file path is introduced.

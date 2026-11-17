@@ -72,6 +72,7 @@ async function setup(t,options={}){
    }else if(job.mode==='discover'){
     const value=JSON.parse(await fs.readFile(path.join(root,'test/fixtures/tb085-runtime-origin-discovery/synthetic-incomplete.json')));
     Object.assign(value,{publicationSHA256:job.publication,assessedAt:new Date(calendarNow).toISOString(),
+      parsedAt:new Date(calendarNow).toISOString(),structuralValidUntil:new Date(calendarNow+60000).toISOString(),
       serviceDay:'2026-11-16',validUntil:new Date(calendarNow+60000).toISOString()});
     Object.assign(value.inputs,{archiveSHA256:job.publication,
       sourceMetadataSHA256:hash(await fs.readFile(path.join(job.cache,'metadata.json'))),
@@ -441,4 +442,27 @@ test('archive metadata mutation during otherwise byte-identical hashing invalida
     if(!changed){changed=true;const now=new Date(Date.now()+5000);await fs.utimes(name,now,now);}return result;}};};
  try{await x.producer.recover({publicationSHA256:publication,scopes:[scope]});}finally{fs.open=original;}
  assert.equal(changed,true);assert.equal(x.calls.filter(c=>c.mode==='acquire').length,2);
+});
+
+test('retained inventories use an owned fixed file and bounded boolean launcher protocol', async t => {
+ let expected, observed = 0;
+ const x = await setup(t, { alterDiscovery: async (value, job) => {
+   if (!expected) return;
+   assert.equal(job.retainedInventory, true);
+   assert.deepEqual(JSON.parse(await fs.readFile(path.join(job.work, 'retained-origin-inventory.json'))), expected);
+   assert.ok(!JSON.stringify(job).includes('eligibleScopes'));
+   observed++;
+ }});
+ const first = await x.producer.discoverOrigins({ publicationSHA256: publication });
+ for (const legacy of [false, true]) {
+   expected = structuredClone(first);
+   if (legacy) { expected.schemaVersion = 1; expected.kind = 'tubeboard-runtime-origin-discovery-v1';
+     delete expected.parsedAt; delete expected.structuralValidUntil; }
+   const before = JSON.stringify(expected);
+   assert.equal((await x.producer.discoverOrigins({ publicationSHA256: publication, retainedInventory: expected })).schemaVersion, 2);
+   assert.equal(JSON.stringify(expected), before);
+ }
+ assert.equal(observed, 2);
+ await assert.rejects(x.producer.discoverOrigins({ publicationSHA256: publication, retainedInventory: '/arbitrary/path' }));
+ assert.deepEqual((await fs.readdir(path.join(x.tmp, 'work'))).filter(name => name !== '.producer-lock'), []);
 });

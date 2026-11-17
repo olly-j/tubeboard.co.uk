@@ -19,12 +19,18 @@ const sorted = values => Array.isArray(values) && values.length <= 8192
 export const DISCOVERY_BINDINGS = ['archiveSHA256', 'sourceMetadataSHA256', 'sourceReceiptSHA256',
   'producerSHA256', 'parserSHA256', 'catalogueSHA256'];
 
-export function validateOriginDiscovery(value, { publicationSHA256, at, bindings } = {}) {
+export function validateOriginDiscovery(value, { publicationSHA256, at, bindings, allowLegacy = false } = {}) {
+  // Legacy is readable only for durable custody/staging. It can never satisfy
+  // the normal current-authority decoder or skip a fresh v2 discovery.
+  const legacy = allowLegacy && value?.schemaVersion === 1
+    && value?.kind === 'tubeboard-runtime-origin-discovery-v1';
   if (Buffer.byteLength(JSON.stringify(value) ?? '') > MAX_DISCOVERY_BYTES
       || !exact(value, ['schemaVersion', 'kind', 'publicationSHA256', 'assessedAt', 'serviceDay', 'validUntil',
         'discoveryStatus', 'eligibleScopesComplete', 'requiredScopesComplete', 'eligibleScopes', 'requiredScopes',
-        'unresolvedPublicSourceGaps', 'inputs', 'reuseRequirements', 'counts'])
-      || value.schemaVersion !== 1 || value.kind !== 'tubeboard-runtime-origin-discovery-v1'
+        'unresolvedPublicSourceGaps', 'inputs', 'reuseRequirements', 'counts',
+        ...(legacy ? [] : ['parsedAt', 'structuralValidUntil'])])
+      || value.schemaVersion !== (legacy ? 1 : 2)
+      || value.kind !== `tubeboard-runtime-origin-discovery-v${legacy ? 1 : 2}`
       || !SHA.test(value.publicationSHA256) || publicationSHA256 && value.publicationSHA256 !== publicationSHA256
       || !clock(value.assessedAt) || !clock(value.validUntil)
       || Date.parse(value.validUntil) <= Date.parse(value.assessedAt)
@@ -34,6 +40,11 @@ export function validateOriginDiscovery(value, { publicationSHA256, at, bindings
       || typeof value.eligibleScopesComplete !== 'boolean' || typeof value.requiredScopesComplete !== 'boolean'
       || !sorted(value.eligibleScopes) || !sorted(value.requiredScopes) || value.requiredScopes.length > 256
       || value.requiredScopes.some(item => !value.eligibleScopes.includes(item))) throw invalid();
+  if (!legacy && (!clock(value.parsedAt) || !clock(value.structuralValidUntil)
+      || Date.parse(value.parsedAt) > Date.parse(value.assessedAt)
+      || Date.parse(value.validUntil) > Date.parse(value.structuralValidUntil)
+      || londonLocal(Date.parse(value.parsedAt)).slice(0, 10) !== value.serviceDay
+      || londonLocal(Date.parse(value.structuralValidUntil) - 1).slice(0, 10) !== value.serviceDay)) throw invalid();
   const gaps = value.unresolvedPublicSourceGaps;
   if (!Array.isArray(gaps) || gaps.length > 8192 || gaps.some(gap =>
     !exact(gap, ['code', 'lineID', 'stationID', 'affectsCurrentCoverage']) || !codes.has(gap.code)
@@ -51,7 +62,7 @@ export function validateOriginDiscovery(value, { publicationSHA256, at, bindings
       || !value.requiredScopesComplete && (value.requiredScopes.length || !(unavailable || inventoryOverflow || requiredOverflow))
       || !value.eligibleScopesComplete && value.requiredScopesComplete
       || !exact(value.counts, ['eligible', 'required', 'uncatalogued'])
-      || Object.values(value.counts).some(count => !Number.isSafeInteger(count) || count < 0)
+      || Object.values(value.counts).some(count => !Number.isSafeInteger(count) || count < 0 || count > 2147483647)
       || value.counts.required > value.counts.eligible
       || value.counts.required > 256 && (value.requiredScopesComplete || value.requiredScopes.length
         || !(requiredOverflow || inventoryOverflow))

@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "kind": "tubeboard-runtime-origin-discovery-v1",
+  "schemaVersion": 2,
+  "kind": "tubeboard-runtime-origin-discovery-v2",
   "publicationSHA256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "assessedAt": "2026-11-17T00:10:00+00:00",
   "serviceDay": "2026-11-17",
@@ -52,5 +52,7 @@
     "uncatalogued": 0
   },
   "eligibleScopesComplete": true,
-  "requiredScopesComplete": true
+  "requiredScopesComplete": true,
+  "parsedAt": "2026-11-17T00:10:00+00:00",
+  "structuralValidUntil": "2026-11-17T00:30:00.001+00:00"
 }
