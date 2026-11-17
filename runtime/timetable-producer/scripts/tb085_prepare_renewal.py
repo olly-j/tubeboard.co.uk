@@ -444,13 +444,16 @@ def qualified_source_records(capture_dir, proof, retained=None):
     if len(captured) != len(matrix):
         raise ValueError("Duplicate source capture scope")
     proof_entries = {(entry["lineID"], entry["stationID"]): entry for entry in proof["entries"]}
-    if len(proof_entries) != len(proof["entries"]) or set(proof_entries) != set(captured):
+    retained = retained or {}
+    qualified = {pair for pair, entry in proof_entries.items() if entry["status"] == "qualified"}
+    if (len(proof_entries) != len(proof["entries"]) or not set(captured) <= set(proof_entries)
+            or not set(retained) <= qualified or not qualified <= set(captured) | set(retained)):
         raise ValueError("Source archive scope differs from qualified proof")
     result = []
     for (line, station), entry in sorted(proof_entries.items()):
         if entry["status"] != "qualified":
             continue
-        row = (retained or {}).get((line, station), captured[(line, station)])
+        row = retained[(line, station)] if (line, station) in retained else captured[(line, station)]
         if entry.get("directionalDefinitions"):
             definitions = {item["direction"]: item for item in entry["directionalDefinitions"]}
             evidence = {item["direction"]: item for item in entry["directionalSourceEvidence"]}

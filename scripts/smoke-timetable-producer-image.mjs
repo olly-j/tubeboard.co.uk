@@ -92,6 +92,19 @@ def request(url,method,limit):
  CapturedDatetime.at=datetime.fromisoformat(record['receivedAt']);used.append({'method':method,'sha256':record['sha256'],'receivedAt':record['receivedAt']})
  return {k.title():v for k,v in record['headers'].items()},body
 p.monitor.request=request
+original_build_source_archive=p.build_source_archive
+def capture_pre_archive(capture_dir,proof,*args,**kwargs):
+ # Bounded test evidence survives the producer's normal failure cleanup.
+ # Qualification and the actual archive builder run without changed inputs.
+ body=(json.dumps(proof,separators=(',',':'))+'\n').encode()
+ assert 0<len(body)<=p.packager.MAX_PROOF_BYTES
+ Path('/evidence/pre-archive-proof.json').write_bytes(body)
+ matrix=json.loads((capture_dir/'line-station-matrix.json').read_text())
+ summary={'capturedScopes':sorted(r['lineID']+'/'+r['stationID'] for r in matrix),
+          'proofScopes':sorted([{'scope':e['lineID']+'/'+e['stationID'],'status':e['status']} for e in proof['entries']],key=lambda e:e['scope'])}
+ Path('/evidence/pre-archive-scopes.json').write_text(json.dumps(summary,indent=2)+'\n')
+ return original_build_source_archive(capture_dir,proof,*args,**kwargs)
+p.build_source_archive=capture_pre_archive
 import atexit
 atexit.register(lambda:Path('/evidence/transport-replay.json').write_text(json.dumps({'networkRequests':0,'actualCaptureClocks':used},indent=2)+'\n'))
 `;

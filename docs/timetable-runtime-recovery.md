@@ -319,3 +319,14 @@ acceptance and existing activation/cohosting gates remain open. The new marker
 does not itself establish coverage of every terminus or unlimited global proof
 capacity. No server activation, credentials, hosting, scheduled workflow or
 production state changed.
+
+The coordinated compact bundle passed all 596 service tests and the app's
+corrected documentation check. Its full image replay then passed packaging
+without OOM in 92.975 seconds, but exposed an archive-builder mismatch: the
+30-entry proof includes 16 explicit gaps with no captures. All 14 qualified
+scopes had captures. The subsequent producer correction permits uncaptured
+gaps while requiring exact captured/retained sources for every qualified
+scope; extra/duplicate sources, direction and body/hash checks remain strict.
+All 55 preparation tests passed. The offline harness now retains a bounded
+pre-archive proof and scope summary for diagnostics without changing archive
+inputs. Full trusted admission still requires a new integration result.
