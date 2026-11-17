@@ -85,6 +85,14 @@ def raw_profiles(payload, line, station, direction):
 
 
 def qualified_keys(keys, profile):
+    if "allExcluded" in profile:
+        if (profile["allExcluded"] is not True or "excludedJourneyKeys" in profile
+                or type(profile.get("count")) is not int or not 1 <= profile["count"] <= 20000
+                or type(profile.get("publishedCount")) is not int or profile["publishedCount"] != 0
+                or profile.get("publishedSHA256") != fingerprint([])["sha256"]
+                or fingerprint(keys) != {"count": profile["count"], "sha256": profile.get("sha256")}):
+            raise ValueError("invalid complete published exclusions")
+        return []
     exclusions = profile.get("excludedJourneyKeys")
     if exclusions is None:
         if (profile.get("publishedCount") is not None or profile.get("publishedSHA256") is not None

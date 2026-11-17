@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "repository": "olly-j/My-Train-Times",
-  "revision": "f8e224b292e1cc0949b3719a8a03c614fc697963",
+  "revision": "a688c1a642c268de51e2e332abf6a2c091e53333",
   "files": {
     "scripts/tb085_prepare_renewal.py": {
       "bytes": 75832,
@@ -12,8 +12,8 @@
       "sha256": "69cdd9bea393896963cfb67497851bee96fc725ed70182dfe66dbdbd1f32fa38"
     },
     "scripts/tb085_timetable_publication.py": {
-      "bytes": 72793,
-      "sha256": "8d5a341c9985a0ff04dcff57d4057f0f73cc5b43d43ef42c6914938a05216782"
+      "bytes": 73254,
+      "sha256": "96375683df7bf9a5baeb680eece5007ac38d8ee4909c640a285848daf0889896"
     },
     "scripts/tb085_monitor_publication.py": {
       "bytes": 39634,
@@ -32,8 +32,8 @@
       "sha256": "637c0d6f9a7d8ab265bd3a5593bd78613cafc8bce4e3eaab35f0647bfd6bf35d"
     },
     "scripts/tb085_live_parity.py": {
-      "bytes": 17323,
-      "sha256": "c60aaafa8d4d324666834a98d66d4496f09ffad25f9d6ad134a2b0c55fc7dbc1"
+      "bytes": 17904,
+      "sha256": "8671ed1ad010ebaf229192952e81528bc192b35a2950b44715daafd3beb30b18"
     },
     "scripts/tb085_tram_stations.py": {
       "bytes": 2064,

@@ -18,7 +18,9 @@ const weekday = day => new Date(day+'T12:00:00Z').getUTCDay()+1;
 const list = (v, predicate) => Array.isArray(v) && v.every(predicate);
 const strings = v => list(v,str);
 function profileShape(p) {
-  if (!exact(p,['name','count','sha256','weekdays'],['excludedJourneyKeys','publishedCount','publishedSHA256','originatingServiceDateRanges']) || !str(p.name) || !p.name.trim() || !integer(p.count) || p.count < 0 || !sha(p.sha256) || !list(p.weekdays,integer)) return false;
+  if (!exact(p,['name','count','sha256','weekdays'],['excludedJourneyKeys','publishedCount','publishedSHA256','originatingServiceDateRanges','allExcluded']) || !str(p.name) || !p.name.trim() || !integer(p.count) || p.count < 0 || !sha(p.sha256) || !list(p.weekdays,integer)) return false;
+  if (Object.hasOwn(p,'allExcluded') && (p.allExcluded!==true || p.count<=0 || p.count>20000
+      || Object.hasOwn(p,'excludedJourneyKeys') || p.publishedCount!==0 || p.publishedSHA256!==digest(''))) return false;
   if (Object.hasOwn(p,'publishedCount') && (!integer(p.publishedCount) || p.publishedCount < 0)) return false;
   if (Object.hasOwn(p,'publishedSHA256') && !sha(p.publishedSHA256)) return false;
   if (Object.hasOwn(p,'excludedJourneyKeys') && (!Array.isArray(p.excludedJourneyKeys) || p.excludedJourneyKeys.length>4096 || !p.excludedJourneyKeys.every(e => exact(e,['key','count']) && str(e.key) && integer(e.count) && e.count>0 && e.count<=4096))) return false;
@@ -257,6 +259,10 @@ export function profileJourneys(response,name) {
 export const profileFingerprint = rows => digest(Buffer.from(rows.map(r=>r.key).sort().join('\n'),'utf8'));
 function completeRows(response,profile) {
   const rows=profileJourneys(response,profile.name), exclusions=profile.excludedJourneyKeys;
+  if(profile.allExcluded===true){
+    if(rows.length!==profile.count || profileFingerprint(rows)!==profile.sha256)fail();
+    return [];
+  }
   if(exclusions===undefined){if(profile.publishedCount!==undefined || profile.publishedSHA256!==undefined || rows.length!==profile.count || profileFingerprint(rows)!==profile.sha256)fail();return rows;}
   if(profile.publishedCount===undefined || profile.publishedSHA256===undefined || new Set(exclusions.map(e=>e.key)).size!==exclusions.length || profile.count!==profile.publishedCount+exclusions.reduce((n,e)=>n+e.count,0))fail();
   const counts=new Map(exclusions.map(e=>[e.key,e.count]));const retained=rows.filter(r=>{const count=counts.get(r.key)||0;if(count){counts.set(r.key,count-1);return false;}return true;});

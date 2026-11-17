@@ -285,3 +285,37 @@ readback. Full preparation/local admission, current live comparisons,
 notification cohosting at the existing memory limit, server activation and
 restricted alert credentials remain delivery gates. No hosting increase or
 production activation is included in this prepared change.
+
+## Compact complete exclusions (ADR025, prepared 17 November)
+
+The next full historical run at service `083067f` completed retained live
+coverage without OOM in 98.917 seconds, then failed packaging at the existing
+128 KiB proof bound. This is a different gate from the previous calendar loss;
+no source archive or trusted admission completed. Peak remained 256 MiB and
+notification cohosting remains unverified.
+
+The coordinated Python, Node and shared Swift correction represents only a
+complete nonempty exclusion as `allExcluded: true`. It retains the raw count
+(1–20,000), raw fingerprint, zero published count and canonical empty published
+fingerprint, with excludedJourneyKeys absent. The complete actual raw set must
+match before qualification returns no rows. False/null/mixed markers, changed
+raw sets and nonzero subsets cannot acquire that authority. Nonzero exclusions
+retain their original counted keys. Compact form is deliberately stricter than
+explicit keys when formerly excluded raw occurrences disappear upstream.
+
+The retained fourteen-scope proof is 50,640 bytes instead of 417,687. Independent
+actual-capture checks preserved all 62 profile results across 15 definitions,
+with matching body hashes, dates, directions and scopes. Python 18 parity and
+107 publication tests and Node 22 37 focused tests passed. Shared Swift isolated
+source checks and legacy strict-parser checks are narrower than native app
+execution. Exact legacy Node/Python controls accepted explicit-zero profiles
+and rejected the compact form; adapted Node imports do not establish deployed
+runtime behavior. Older clients may withhold the new resource, so compatible
+app distribution remains an explicit gate. No bounds were raised and no dates
+were silently dropped.
+
+Full preparation/archive/admission, current live readback, native/physical
+acceptance and existing activation/cohosting gates remain open. The new marker
+does not itself establish coverage of every terminus or unlimited global proof
+capacity. No server activation, credentials, hosting, scheduled workflow or
+production state changed.

@@ -1022,7 +1022,13 @@ def qualify_entry(record:dict,source_rows:list[dict],capture_dir:Path,civil_date
                     variant={'name':name,'weekdays':set(),**fingerprint(actual),'eligibleDates':set()}
                     if excluded:
                         digest=fingerprint(retained)
-                        variant.update(excludedJourneyKeys=[{'key':k,'count':c} for k,c in sorted(excluded.items())],publishedCount=digest['count'],publishedSHA256=digest['sha256'])
+                        if actual and not retained:
+                            if len(actual)>20000:raise ValueError('unsupported complete exclusion raw count')
+                            # Complete exclusions retain exact raw authority,
+                            # without repeating every excluded journey key.
+                            variant.update(allExcluded=True,publishedCount=0,publishedSHA256=digest['sha256'])
+                        else:
+                            variant.update(excludedJourneyKeys=[{'key':k,'count':c} for k,c in sorted(excluded.items())],publishedCount=digest['count'],publishedSHA256=digest['sha256'])
                     variants[identity]=variant
                 variants[identity]['weekdays'].add(weekday);variants[identity]['eligibleDates'].add(civil)
             for variant in variants.values():
