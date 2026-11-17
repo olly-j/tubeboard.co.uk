@@ -28,12 +28,12 @@ const trainScriptPath = new URL('../train-20260830-v2.js', import.meta.url);
 const aasaPath = new URL('../.well-known/apple-app-site-association', import.meta.url);
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
-const v12ProductAssets = [
+const homepageProductAssets = [
   'follow-train-v1-2-20260905103957',
-  'live-board-v1-2-20260905103957',
+  'live-board-woodford-1-2-6-20261117225101',
   'by-destination-v1-2-20260905103957',
   'system-board-v1-2-20260905103957',
-  'overground-v1-2-20260905103957',
+  'add-station-1-2-6-20261117225101',
   'disruption-widget-v1-2-20260905103957',
   'next-departures-v1-2-20260905103957'
 ];
@@ -143,7 +143,7 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
   assert.ok(mobileApplication.featureList.some((feature) => /By destination/i.test(feature)));
   assert.match(html, /Next departures within each direction/);
 
-  for (const asset of v12ProductAssets) {
+  for (const asset of homepageProductAssets) {
     assert.match(html, new RegExp(`/assets/product/${asset}\\.png`));
     assert.match(html, new RegExp(`/assets/product/${asset}\\.webp`));
     await fs.access(new URL(`../assets/product/${asset}.png`, import.meta.url));

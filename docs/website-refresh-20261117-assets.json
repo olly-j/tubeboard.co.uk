@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "status": "draft_source_not_published",
+  "runtime": {
+    "version": "1.2.6",
+    "build": "20261117225101",
+    "executableSHA256": "e4edfef74210af1ba565b3088a7852c40a549e93c37a4e7f8b7c7f37282317a2",
+    "equivalentSourceCommit": "94929d6233e808b23e5726646d91136e44f6c1a2",
+    "attribution": "Native capture owner confirms source-equivalent Release build with explicit build override; not a literal archive-source commit or future corrected binary."
+  },
+  "assets": [
+    {
+      "asset": "live-board-woodford-1-2-6-20261117225101",
+      "sourceWithinTubeBoardReleaseEvidence": "20261117-store-readiness/exploratory-journeys/woodford-crisp-burst-4.png",
+      "rawSHA256": "ffb4c703ae7c41719432b698beeb07930591063dd727c4b8804f60ba0756521e",
+      "pngSHA256": "ffb4c703ae7c41719432b698beeb07930591063dd727c4b8804f60ba0756521e",
+      "webpSHA256": "bab7e66fe21e8783c36b55cfefc82f1923038544bd54689edc3cae27696c1df6",
+      "dimensions": [
+        1320,
+        2868
+      ],
+      "notes": "Selected from five unedited frames by native and website visual inspection. Captured23:50:07.750294 through23:50:08.242045UTC; status23:50 and board23:50:07. Predicted West Ruislip/Epping/Grange Hill and separate Scheduled Epping rows. Ordinary viewport partially clips third Scheduled row. No countdown transition blur."
+    },
+    {
+      "asset": "add-station-1-2-6-20261117225101",
+      "sourceWithinTubeBoardReleaseEvidence": "20261117-release-marketing-native/phone-progress.png",
+      "rawSHA256": "f394e18947c24c70866ad32075c28062930a3f1a8e31e6f9ea472be175e40e7d",
+      "pngSHA256": "f394e18947c24c70866ad32075c28062930a3f1a8e31e6f9ea472be175e40e7d",
+      "webpSHA256": "4902bc5b8185a58c60a31cbfa236b307d004eb9b35787850aedc1e33b4240416",
+      "dimensions": [
+        1320,
+        2868
+      ],
+      "notes": "Owner-prepared screenshot received at handoff; independently byte-matched to raw phone-progress.png. Native Add Station picker with09:41 simulator status override. No painted controls."
+    }
+  ],
+  "heroConversion": {
+    "command": "cwebp -quiet -lossless -exact -metadata all INPUT.png -o OUTPUT.webp",
+    "pngEdits": "none; byte-for-byte copy",
+    "webpEdits": "lossless format conversion only",
+    "decodedPixels": "Exact BGR bytes independently compared after dwebp PNG roundtrip and macOS ImageIO BMP decode, normalizing opaque32-bit BGRA to24-bit BGR.",
+    "normalizedDecodedPixelSHA256": "e0f9fb6a2431dbc4e4be2f79a44ac951d7012987fd8f575aec254a0eb07bd25d"
+  },
+  "limits": [
+    "Capture is simulator evidence, not physical/paired/background delivery or network-wide acceptance.",
+    "Existing other product images and social preview remain separately dated older assets; no current-release fidelity claim is made for them.",
+    "App integration owner must check parity against the eventual corrected archive before publication; these captures are not relabelled to that future build.",
+    "No website deployment, App Store upload, submission or publication occurred."
+  ]
+}
