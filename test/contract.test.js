@@ -29,10 +29,10 @@ const aasaPath = new URL('../.well-known/apple-app-site-association', import.met
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
 const homepageProductAssets = [
-  'follow-train-v1-2-20260905103957',
-  'live-board-woodford-1-2-6-20261117225101',
+  'follow-train-1-2-6-20261118001152',
+  'live-board-woodford-1-2-6-20261118001152',
   'by-destination-v1-2-20260905103957',
-  'system-board-v1-2-20260905103957',
+  'lock-screen-woodford-1-2-6-20261118001152',
   'add-station-1-2-6-20261117225101',
   'disruption-widget-v1-2-20260905103957',
   'next-departures-v1-2-20260905103957'
@@ -133,7 +133,7 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
   assert.doesNotMatch(html, /refresh (?:their|its) Tube data throughout the day/i);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
   assert.doesNotMatch(html, /assets\/product\/(?:live-board|station-picker|detailed-board|time-to-leave)-20260723/i);
-  assert.match(html, /assets\/tubeboard-og-v1-2-20260905103957\.png/);
+  assert.match(html, /assets\/tubeboard-og-1-2-6-20261118001152\.png/);
   assert.doesNotMatch(html, /assets\/product\/elizabeth-line-v1-1/i);
   assert.match(mobileApplication.operatingSystem, /watchOS 11\.5 or later/);
   assert.match(mobileApplication.operatingSystem, /visionOS 26\.0 or later/);
@@ -149,7 +149,7 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
     await fs.access(new URL(`../assets/product/${asset}.png`, import.meta.url));
     await fs.access(new URL(`../assets/product/${asset}.webp`, import.meta.url));
   }
-  await fs.access(new URL('../assets/tubeboard-og-v1-2-20260905103957.png', import.meta.url));
+  await fs.access(new URL('../assets/tubeboard-og-1-2-6-20261118001152.png', import.meta.url));
 });
 
 test('v1.2 support preserves widget recovery and explains added journeys', async () => {
@@ -165,7 +165,7 @@ test('v1.2 support preserves widget recovery and explains added journeys', async
   assert.match(html, /Route context and live train information are separate/);
   assert.match(html, /Browser live tracking is not available/);
   assert.match(html, /existing monthly, yearly or Lifetime purchase includes the new Premium features/);
-  assert.match(html, /assets\/tubeboard-og-v1-2-20260905103957\.png/);
+  assert.match(html, /assets\/tubeboard-og-1-2-6-20261118001152\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
 });
 

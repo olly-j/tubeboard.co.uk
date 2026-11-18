@@ -107,6 +107,6 @@ test('social cards use neutral product copy and preserve held asset and release 
   assert.match(draft, /build 20261117225101/);
   assert.match(home, /assets\/product\/add-station-1-2-6-20261117225101\.png/);
   assert.match(home, /TB-088 release gate/);
-  assert.match(home, /tubeboard-og-v1-2-20260905103957\.png/);
+  assert.match(home, /tubeboard-og-1-2-6-20261118001152\.png/);
   assert.doesNotMatch(home, /v1-1-20260825/);
 });
