@@ -43,8 +43,8 @@
   },
   "limits": [
     "Capture is simulator evidence, not physical/paired/background delivery or network-wide acceptance.",
-    "Current home hero, Follow, Lock Screen and social card use the exact build identified under currentCaptureUpdate. Remaining earlier assets retain their original attribution.",
-    "App integration owner must check parity against the eventual corrected archive before publication; these captures are not relabelled to that future build.",
+    "The homepage hero uses the exact build in finalSourceHero. The original Follow, Lock Screen and social card retain the source attribution in currentCaptureUpdate.",
+    "The hero identifies the actual capture build and source tree. It is independent of a later distribution build-number stamp.",
     "No website deployment, App Store upload, submission or publication occurred."
   ],
   "currentCaptureUpdate": {
@@ -105,5 +105,24 @@
       "Next departures",
       "Disruption Widget"
     ]
+  },
+  "finalSourceHero": {
+    "stem": "live-board-woodford-1-2-6-20261118110726-ed2e82e4",
+    "version": "1.2.6",
+    "build": "20261118110726",
+    "sourceCommit": "ed2e82e43f17d999941dc13eba679b5937e8b13e",
+    "gitTree": "b436b09d0a631c31ada67ecc1bf64a30dd986ec0",
+    "executableSHA256": "881c91e574a9917529857d45005909195b24a21936bed70a60ede8cf799f916c",
+    "sourceWithinTubeBoardReleaseEvidence": "20261118-passenger-release/marketing/final-ed2e82e43f17/raw/iphone-6.9/post-touch.png",
+    "capturedAt": "2026-11-18T18:54:26.824245+00:00",
+    "size": [
+      1320,
+      2868
+    ],
+    "rawSHA256": "044717185f2a76ac503acf32f17d9a6e57bdb6f423528924f31c2c8b27957ca8",
+    "pngSHA256": "044717185f2a76ac503acf32f17d9a6e57bdb6f423528924f31c2c8b27957ca8",
+    "webpSHA256": "9e8ee979ef35eac1e37015b06573bc890b0f8ba3e77658228a7bce2569a2b483",
+    "normalizedDecodedPixelSHA256": "4db0e5cb79beb751b360fe5d6e39c919da8638c7b015689d8093242a7d975f0b",
+    "capture": "Ordinary Release on iPhone 17 Pro Max simulator, dark appearance, standard Large text, naturally timed. Woodford, Central line, three westbound Platform 2 and seven eastbound Platform 3 predicted rows, Central severe-delay advisory."
   }
 }

@@ -6,7 +6,9 @@ This copy prepares the station → train destination → departure-time story fo
 
 ## Current release candidate
 
-The home page shows Woodford’s platform board, the route of Central line train 022 and a Lock Screen Live Activity. All three are native iPhone simulator captures of build 20261118001152, version 1.2.6, source e04fc15f0ebabfe4fe73c01bdb65e47d9c833fd3. Each PNG is the original capture. The WebP copies have identical decoded RGB pixels. The 1200 × 630 social card uses the actual board and route captures. The paired iPad and iPhone storefront images and seven en-GB metadata fields are in the private release evidence directory.
+The home page hero shows Woodford’s predicted Central line departures on platforms 2 and 3. The PNG is the original iPhone simulator capture from the ordinary Release build 20261118110726, version 1.2.6, at source ed2e82e43f17d999941dc13eba679b5937e8b13e. The WebP copy has identical decoded RGB pixels.
+
+The existing Follow route, Lock Screen Live Activity and social card retain their independent capture provenance in build 20261118001152. The paired iPad and iPhone storefront images and seven en-GB metadata fields are in the private release evidence directory.
 
 Add Station still uses build 20261117225101. The separate By destination, Next departures, Duo and disruption-widget images retain their earlier versions. See website-refresh-20261117-assets.json for provenance. Paid Follow was exercised using a local StoreKit test transaction. Sustained background delivery, StandBy geometry and a paired Watch still require physical verification.
 

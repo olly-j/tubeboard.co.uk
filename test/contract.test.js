@@ -30,7 +30,7 @@ const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
 const homepageProductAssets = [
   'follow-train-1-2-6-20261118001152',
-  'live-board-woodford-1-2-6-20261118001152',
+  'live-board-woodford-1-2-6-20261118110726-ed2e82e4',
   'by-destination-v1-2-20260905103957',
   'lock-screen-woodford-1-2-6-20261118001152',
   'add-station-1-2-6-20261117225101',
