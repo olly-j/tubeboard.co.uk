@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "status": "draft_source_not_published",
+  "runtime": {
+    "version": "1.2.6",
+    "build": "20261117225101",
+    "executableSHA256": "e4edfef74210af1ba565b3088a7852c40a549e93c37a4e7f8b7c7f37282317a2",
+    "equivalentSourceCommit": "94929d6233e808b23e5726646d91136e44f6c1a2",
+    "attribution": "Native capture owner confirms source-equivalent Release build with explicit build override; not a literal archive-source commit or future corrected binary."
+  },
+  "assets": [
+    {
+      "asset": "live-board-woodford-1-2-6-20261117225101",
+      "sourceWithinTubeBoardReleaseEvidence": "20261117-store-readiness/exploratory-journeys/woodford-crisp-burst-4.png",
+      "rawSHA256": "ffb4c703ae7c41719432b698beeb07930591063dd727c4b8804f60ba0756521e",
+      "pngSHA256": "ffb4c703ae7c41719432b698beeb07930591063dd727c4b8804f60ba0756521e",
+      "webpSHA256": "bab7e66fe21e8783c36b55cfefc82f1923038544bd54689edc3cae27696c1df6",
+      "dimensions": [
+        1320,
+        2868
+      ],
+      "notes": "Selected from five unedited frames by native and website visual inspection. Captured23:50:07.750294 through23:50:08.242045UTC; status23:50 and board23:50:07. Predicted West Ruislip/Epping/Grange Hill and separate Scheduled Epping rows. Ordinary viewport partially clips third Scheduled row. No countdown transition blur."
+    },
+    {
+      "asset": "add-station-1-2-6-20261117225101",
+      "sourceWithinTubeBoardReleaseEvidence": "20261117-release-marketing-native/phone-progress.png",
+      "rawSHA256": "f394e18947c24c70866ad32075c28062930a3f1a8e31e6f9ea472be175e40e7d",
+      "pngSHA256": "f394e18947c24c70866ad32075c28062930a3f1a8e31e6f9ea472be175e40e7d",
+      "webpSHA256": "4902bc5b8185a58c60a31cbfa236b307d004eb9b35787850aedc1e33b4240416",
+      "dimensions": [
+        1320,
+        2868
+      ],
+      "notes": "Owner-prepared screenshot received at handoff; independently byte-matched to raw phone-progress.png. Native Add Station picker with09:41 simulator status override. No painted controls."
+    }
+  ],
+  "heroConversion": {
+    "command": "cwebp -quiet -lossless -exact -metadata all INPUT.png -o OUTPUT.webp",
+    "pngEdits": "none; byte-for-byte copy",
+    "webpEdits": "lossless format conversion only",
+    "decodedPixels": "Exact BGR bytes independently compared after dwebp PNG roundtrip and macOS ImageIO BMP decode, normalizing opaque32-bit BGRA to24-bit BGR.",
+    "normalizedDecodedPixelSHA256": "e0f9fb6a2431dbc4e4be2f79a44ac951d7012987fd8f575aec254a0eb07bd25d"
+  },
+  "limits": [
+    "Capture is simulator evidence, not physical/paired/background delivery or network-wide acceptance.",
+    "The homepage hero uses the exact build in finalSourceHero. The original Follow, Lock Screen and social card retain the source attribution in currentCaptureUpdate.",
+    "The hero identifies the actual capture build and source tree. It is independent of a later distribution build-number stamp.",
+    "No website deployment, App Store upload, submission or publication occurred."
+  ],
+  "currentCaptureUpdate": {
+    "version": "1.2.6",
+    "build": "20261118001152",
+    "sourceCommit": "e04fc15f0ebabfe4fe73c01bdb65e47d9c833fd3",
+    "assets": [
+      {
+        "stem": "live-board-woodford-1-2-6-20261118001152",
+        "native": "phone-woodford-final-4.png",
+        "pngSHA256": "e5c048df39e6286f99b7ea0932dd7a20d9faa1497ccf4f24d83e78b66d3ebc4c",
+        "webpSHA256": "7de7c406a96a1f807643e44d682fdf5e6b8b4a0325f2f1e05335bff560855b62",
+        "size": [
+          1320,
+          2868
+        ],
+        "losslessPixelComparison": true
+      },
+      {
+        "stem": "follow-train-1-2-6-20261118001152",
+        "native": "phone-paid-follow-1.png",
+        "pngSHA256": "b65f1dbb0e412be81d1053c481a8d45bf6c2c29caba17aaaf52599e2e006e83b",
+        "webpSHA256": "2765e0ffc668fd4ad7d2a2e224877ea79be4241938c31ff109fc58413e8457d0",
+        "size": [
+          1320,
+          2868
+        ],
+        "losslessPixelComparison": true
+      },
+      {
+        "stem": "lock-screen-woodford-1-2-6-20261118001152",
+        "native": "phone-lock-live-activity-allowed.png",
+        "pngSHA256": "75f49092b6be89319073dedecbbb8ac1225d53bef0b7937f410863fc739b2dca",
+        "webpSHA256": "e7670dc13f36ffbf8d28a57af68cde7231d07167c0f85c6e37db739855298ce5",
+        "size": [
+          1320,
+          2868
+        ],
+        "losslessPixelComparison": true
+      }
+    ],
+    "socialCard": {
+      "name": "tubeboard-og-1-2-6-20261118001152.png",
+      "sha256": "b90b7e0c509667199b2ad1842ee871321577f83c345416a3191357e5777b03c1",
+      "size": [
+        1200,
+        630
+      ],
+      "inputs": [
+        "live-board-woodford-1-2-6-20261118001152",
+        "follow-train-1-2-6-20261118001152"
+      ]
+    },
+    "remainingEarlierAssets": [
+      "Add Station",
+      "By destination",
+      "Duo",
+      "Next departures",
+      "Disruption Widget"
+    ]
+  },
+  "finalSourceHero": {
+    "stem": "live-board-woodford-1-2-6-20261118110726-ed2e82e4",
+    "version": "1.2.6",
+    "build": "20261118110726",
+    "sourceCommit": "ed2e82e43f17d999941dc13eba679b5937e8b13e",
+    "gitTree": "b436b09d0a631c31ada67ecc1bf64a30dd986ec0",
+    "executableSHA256": "881c91e574a9917529857d45005909195b24a21936bed70a60ede8cf799f916c",
+    "sourceWithinTubeBoardReleaseEvidence": "20261118-passenger-release/marketing/final-ed2e82e43f17/raw/iphone-6.9/post-touch.png",
+    "capturedAt": "2026-11-18T18:54:26.824245+00:00",
+    "size": [
+      1320,
+      2868
+    ],
+    "rawSHA256": "044717185f2a76ac503acf32f17d9a6e57bdb6f423528924f31c2c8b27957ca8",
+    "pngSHA256": "044717185f2a76ac503acf32f17d9a6e57bdb6f423528924f31c2c8b27957ca8",
+    "webpSHA256": "9e8ee979ef35eac1e37015b06573bc890b0f8ba3e77658228a7bce2569a2b483",
+    "normalizedDecodedPixelSHA256": "4db0e5cb79beb751b360fe5d6e39c919da8638c7b015689d8093242a7d975f0b",
+    "capture": "Ordinary Release on iPhone 17 Pro Max simulator, dark appearance, standard Large text, naturally timed. Woodford, Central line, three westbound Platform 2 and seven eastbound Platform 3 predicted rows, Central severe-delay advisory."
+  }
+}

@@ -28,12 +28,12 @@ const trainScriptPath = new URL('../train-20260830-v2.js', import.meta.url);
 const aasaPath = new URL('../.well-known/apple-app-site-association', import.meta.url);
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
-const v12ProductAssets = [
-  'follow-train-v1-2-20260905103957',
-  'live-board-v1-2-20260905103957',
+const homepageProductAssets = [
+  'follow-train-1-2-6-20261118001152',
+  'live-board-woodford-1-2-6-20261118110726-ed2e82e4',
   'by-destination-v1-2-20260905103957',
-  'system-board-v1-2-20260905103957',
-  'overground-v1-2-20260905103957',
+  'lock-screen-woodford-1-2-6-20261118001152',
+  'add-station-1-2-6-20261117225101',
   'disruption-widget-v1-2-20260905103957',
   'next-departures-v1-2-20260905103957'
 ];
@@ -122,7 +122,8 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
   const mobileApplication = structuredData['@graph'].find((item) => item['@type'] === 'MobileApplication');
 
   assert.match(html, /Elizabeth line/);
-  assert.match(html, /saved station and one of its real platforms/i);
+  assert.match(html, /choose a saved station for your premium departure widget/i);
+  assert.match(html, /some sizes also let you choose a direction or platform/i);
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
   assert.match(html, /Opt-in disruption alerts/i);
@@ -133,7 +134,7 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
   assert.doesNotMatch(html, /refresh (?:their|its) Tube data throughout the day/i);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
   assert.doesNotMatch(html, /assets\/product\/(?:live-board|station-picker|detailed-board|time-to-leave)-20260723/i);
-  assert.match(html, /assets\/tubeboard-og-v1-2-20260905103957\.png/);
+  assert.match(html, /assets\/tubeboard-og-1-2-6-20261118001152\.png/);
   assert.doesNotMatch(html, /assets\/product\/elizabeth-line-v1-1/i);
   assert.match(mobileApplication.operatingSystem, /watchOS 11\.5 or later/);
   assert.match(mobileApplication.operatingSystem, /visionOS 26\.0 or later/);
@@ -143,19 +144,21 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
   assert.ok(mobileApplication.featureList.some((feature) => /By destination/i.test(feature)));
   assert.match(html, /Next departures within each direction/);
 
-  for (const asset of v12ProductAssets) {
+  for (const asset of homepageProductAssets) {
     assert.match(html, new RegExp(`/assets/product/${asset}\\.png`));
     assert.match(html, new RegExp(`/assets/product/${asset}\\.webp`));
     await fs.access(new URL(`../assets/product/${asset}.png`, import.meta.url));
     await fs.access(new URL(`../assets/product/${asset}.webp`, import.meta.url));
   }
-  await fs.access(new URL('../assets/tubeboard-og-v1-2-20260905103957.png', import.meta.url));
+  await fs.access(new URL('../assets/tubeboard-og-1-2-6-20261118001152.png', import.meta.url));
 });
 
 test('v1.2 support preserves widget recovery and explains added journeys', async () => {
   const html = await fs.readFile(supportPagePath, 'utf8');
 
-  assert.match(html, /choose a saved station and then choose one of its available platforms/i);
+  assert.match(html, /add a tubeboard departure widget and choose a saved station/i);
+  assert.match(html, /choose a platform or direction if the widget offers that setting/i);
+  assert.match(html, /large widget shows both directions when available/i);
   assert.match(html, /reports that it is offline/i);
   assert.match(html, /shown separately as no current departures/i);
   assert.match(html, /Apple Watch/);
@@ -165,7 +168,7 @@ test('v1.2 support preserves widget recovery and explains added journeys', async
   assert.match(html, /Route context and live train information are separate/);
   assert.match(html, /Browser live tracking is not available/);
   assert.match(html, /existing monthly, yearly or Lifetime purchase includes the new Premium features/);
-  assert.match(html, /assets\/tubeboard-og-v1-2-20260905103957\.png/);
+  assert.match(html, /assets\/tubeboard-og-1-2-6-20261118001152\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
 });
 
