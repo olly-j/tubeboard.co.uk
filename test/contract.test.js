@@ -122,7 +122,8 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
   const mobileApplication = structuredData['@graph'].find((item) => item['@type'] === 'MobileApplication');
 
   assert.match(html, /Elizabeth line/);
-  assert.match(html, /saved station and one of its real platforms/i);
+  assert.match(html, /choose a saved station for your premium departure widget/i);
+  assert.match(html, /some sizes also let you choose a direction or platform/i);
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
   assert.match(html, /Opt-in disruption alerts/i);
@@ -155,7 +156,9 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
 test('v1.2 support preserves widget recovery and explains added journeys', async () => {
   const html = await fs.readFile(supportPagePath, 'utf8');
 
-  assert.match(html, /choose a saved station and then choose one of its available platforms/i);
+  assert.match(html, /add a tubeboard departure widget and choose a saved station/i);
+  assert.match(html, /choose a platform or direction if the widget offers that setting/i);
+  assert.match(html, /large widget shows both directions when available/i);
   assert.match(html, /reports that it is offline/i);
   assert.match(html, /shown separately as no current departures/i);
   assert.match(html, /Apple Watch/);
