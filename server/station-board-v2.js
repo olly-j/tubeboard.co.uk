@@ -44,6 +44,12 @@ export function supportsRegularOrigin(record) {
     && !record.platformID && (rule.physicalEnd || rule.exclusiveFirstCalls.length > 0);
 }
 
+function hasExclusiveStartingCall(event, rule) {
+  const route = Array.isArray(event.routeStationIDs) ? event.routeStationIDs : [];
+  const first = event.nextScheduledStopID ?? route.find(stop => stop !== event.stationID);
+  return rule.exclusiveFirstCalls.includes(first);
+}
+
 export function validBoard(stationID, lineID) { return STATION_BOARD_STATIONS.get(stationID)?.lineIDs.includes(lineID) === true; }
 function lineStations(lineID) { return [...STATION_BOARD_STATIONS.values()].filter((station) => station.lineIDs.includes(lineID)); }
 function named(name, lineID) {
@@ -106,54 +112,58 @@ function retryAfterDelay(value, now) {
 export class StationArrivalReader {
   #entries = new Map();
 
-  observeNotBefore(url, notBefore) {
+  observeNotBefore(url, notBefore, rateLimitedUntil = 0) {
     if (!Number.isFinite(notBefore) || notBefore <= 0) return;
     const key = `station-arrivals:${url.href}`;
-    const entry = this.#entries.get(key) || { nextAttemptAt: 0, promise: null };
+    const entry = this.#entries.get(key) || { nextAttemptAt: 0, rateLimitedUntil: 0, promise: null };
     entry.nextAttemptAt = Math.max(entry.nextAttemptAt, notBefore);
+    if (Number.isFinite(rateLimitedUntil)) entry.rateLimitedUntil = Math.max(entry.rateLimitedUntil, rateLimitedUntil);
     this.#entries.set(key, entry);
   }
 
-  read(url, { fetchImpl = fetch, signal, clock = () => Date.now(), publicResponses = new Map(), notBefore = 0 } = {}) {
+  read(url, { fetchImpl = fetch, signal, clock = () => Date.now(), publicResponses = new Map(), notBefore = 0, rateLimitedUntil = 0 } = {}) {
     signal?.throwIfAborted();
     const key = `station-arrivals:${url.href}`;
     const now = clock();
     for (const [other, entry] of this.#entries) if (!entry.promise && entry.nextAttemptAt <= now) this.#entries.delete(other);
-    let entry = this.#entries.get(key);
-    if (!entry) { entry = { nextAttemptAt: 0, promise: null }; this.#entries.set(key, entry); }
     // A persisted cooldown is source/URL authority, including on a deferred
     // read or a second waiter joining already-running work after a restart.
-    entry.nextAttemptAt = Math.max(entry.nextAttemptAt, Number.isFinite(notBefore) ? notBefore : 0);
+    const restoredFloor = Math.max(Number.isFinite(notBefore) ? notBefore : 0, Number.isFinite(rateLimitedUntil) ? rateLimitedUntil : 0);
+    this.observeNotBefore(url, restoredFloor, rateLimitedUntil);
+    const entry = this.#entries.get(key) || { nextAttemptAt: 0, rateLimitedUntil: 0, promise: null };
+    this.#entries.set(key, entry);
+    const withAdmission = response => ({
+      ...response, nextAttemptAt: entry.nextAttemptAt,
+      ...(entry.rateLimitedUntil > now ? { rateLimitedUntil: entry.rateLimitedUntil } : {}),
+    });
     const admittedResult = promise => promise.then(response => {
       signal?.throwIfAborted();
       entry.nextAttemptAt = Math.max(entry.nextAttemptAt, response.nextAttemptAt || 0);
-      return { ...response, nextAttemptAt: entry.nextAttemptAt };
+      entry.rateLimitedUntil = Math.max(entry.rateLimitedUntil, response.rateLimitedUntil || 0);
+      return withAdmission(response);
     });
     if (publicResponses.has(key)) return admittedResult(publicResponses.get(key));
     if (entry.promise) return admittedResult(entry.promise);
     if (entry.nextAttemptAt > now) {
       // One cycle has one URL admission outcome, even if slower supplemental
       // work crosses the floor before its later registrations are visited.
-      const deferred = Promise.resolve({ ok: false, deferred: true, completedAt: now, nextAttemptAt: entry.nextAttemptAt });
+      const deferred = Promise.resolve(withAdmission({ ok: false, deferred: true, completedAt: now }));
       publicResponses.set(key, deferred);
       return deferred;
     }
     entry.nextAttemptAt = now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS;
     entry.promise = (async () => {
-      let retryAfter = null;
-      const transport = async (input, options) => {
-        const response = await fetchImpl(input, options);
-        retryAfter = response.headers?.get?.('retry-after') ?? null;
-        return response;
-      };
       try {
-        let response = await fetchJsonResponse(url, transport, { signal, includeHeaders: true });
-        if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, transport, { signal, includeHeaders: true });
+        let response = await fetchJsonResponse(url, fetchImpl, { signal, includeHeaders: true });
+        if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, fetchImpl, { signal, includeHeaders: true });
         const completedAt = clock();
-        if (response.status === 429) entry.nextAttemptAt = Math.max(entry.nextAttemptAt, completedAt + Math.max(300000, retryAfterDelay(retryAfter, completedAt)));
+        if (response.status === 429) {
+          entry.rateLimitedUntil = Math.max(entry.rateLimitedUntil, completedAt + Math.max(300000, retryAfterDelay(response.retryAfter, completedAt)));
+          entry.nextAttemptAt = Math.max(entry.nextAttemptAt, entry.rateLimitedUntil);
+        }
         else if (response.status >= 500) entry.nextAttemptAt = Math.max(entry.nextAttemptAt, completedAt + 120000);
         if (response.ok && Buffer.byteLength(JSON.stringify(response.value)) > 2000000) response = { ok: false };
-        return immutable(structuredClone({ ...response, completedAt, nextAttemptAt: entry.nextAttemptAt }));
+        return immutable(structuredClone(withAdmission({ ...response, completedAt })));
       } catch (error) {
         signal?.throwIfAborted();
         entry.nextAttemptAt = Math.max(entry.nextAttemptAt, clock() + 120000);
@@ -181,7 +191,8 @@ export async function refreshStationArrivals(record, previous, config, fetchImpl
   if (previous.arrivalsRefreshAt > now) return mergeContexts(previous, {}, record, now);
   const url = new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`);
   if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
-  const response = await arrivalReader.read(url, { fetchImpl, signal, clock, publicResponses, notBefore: previous.arrivalsNotBefore });
+  const response = await arrivalReader.read(url, { fetchImpl, signal, clock, publicResponses,
+    notBefore: previous.arrivalsNotBefore, rateLimitedUntil: previous.arrivalsRateLimitedUntil });
   return mergeStationArrivalRead(record, previous, response, clock(), config.workerIntervalMs);
 }
 
@@ -196,7 +207,7 @@ function mergeStationArrivalRead(record, previous, response, now, workerInterval
       sources['station-arrivals'] = { observedAt: events.length ? Math.max(...events.map(e => e.receivedAt)) : observation.observedAt, expiresAt: observation?.expiresAt, events };
     }
   }
-  const merged = mergeContexts(previous, { sources }, record, now);
+  const merged = mergeContexts(previous, { sources, arrivalsRateLimitedUntil: response.rateLimitedUntil }, record, now);
   const notBefore = Math.max(previous.arrivalsNotBefore || 0, response.nextAttemptAt || now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS);
   return { ...merged, arrivalsNotBefore: notBefore, arrivalsRefreshAt: nextStationArrivalRefresh(merged, now, notBefore, workerIntervalMs) };
 }
@@ -434,7 +445,8 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
     }
   }
   const ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, incoming.ordinaryNotBefore || 0);
-  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null, ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}) };
+  const arrivalsRateLimitedUntil = Math.max(previous.arrivalsRateLimitedUntil || 0, incoming.arrivalsRateLimitedUntil || 0);
+  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null, ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}) };
 }
 function selectionMatches(event, record) {
   if (record.selectionMode !== 'platform' && !record.platformID) return true;
@@ -477,16 +489,19 @@ export function selectEvents(cache, record, now, { retainingMaskedPlans = false,
     const rule = regularOriginRule(record);
     if (!rule.physicalEnd) {
       // A dated itinerary can board a through train at a mixed station.
-      // Keep its original source context, but it cannot replace the proved
-      // starting path on origin-aware displays.
-      events = events.filter(e => e.sourceID !== 'journey-planner' ||
-        rule.exclusiveFirstCalls.includes(e.nextScheduledStopID));
+      // Keep that fact in its source context. Only a proved first call can
+      // displace the independent starting path on an origin-aware board.
+      events = events.filter(e => e.kind !== 'outgoingDeparture' || e.timeEvidence !== 'scheduledDeparture'
+        || e.sourceID === 'regular-timetable' || hasExclusiveStartingCall(e, rule));
     }
   }
   const regularAnswers = events.filter(e => e.sourceID !== 'regular-timetable' && ['outgoingDeparture', 'throughArrival'].includes(e.kind)
     && Number.isFinite(e.time) && e.time <= now + 3600000);
   events = events.filter(e => e.sourceID !== 'regular-timetable' || (record.supportsRegularTimetable === true
-    && !regularAnswers.some(other => (!other.destinationStationID || other.destinationStationID === e.destinationStationID) && (!e.via || !other.via || key(e.via) === key(other.via)))));
+    && !regularAnswers.some(other =>
+      (!retainingPlannedAlternatives || !plannedSource(other) || other.expiresAt >= e.expiresAt)
+      && (!other.destinationStationID || other.destinationStationID === e.destinationStationID)
+      && (!e.via || !other.via || key(e.via) === key(other.via)))));
   const rail = events.filter((e) => e.sourceID === 'rail-departures' && e.kind === 'outgoingDeparture' && e.timeEvidence === 'predictedDeparture');
   events = events.filter((event) => retainsThroughArrival(event, rail));
   const seen = new Set(); events = events.filter((e) => { const signature = canonical(e); if (seen.has(signature)) return false; seen.add(signature); return true; });
@@ -528,7 +543,8 @@ export function compactPlanningSource(events) {
   const clocks = new Map();
   for (const e of events) { const source = plannedSource(e); if (source) clocks.set(source, Math.min(clocks.get(source) ?? Infinity, e.time)); }
   const primary = clocks.has('timetable') ? 'timetable' : clocks.has('journey-planner') ? 'journey-planner' : null;
-  return [...clocks.keys()].filter((s) => !['timetable', 'journey-planner'].includes(s) || s === primary).sort((a,b) => clocks.get(a) - clocks.get(b) || Number(b === primary) - Number(a === primary) || a.localeCompare(b))[0] || null;
+  return [...clocks.keys()].filter((s) => (s !== 'regular-timetable' || clocks.size === 1)
+    && (!['timetable', 'journey-planner'].includes(s) || s === primary)).sort((a,b) => clocks.get(a) - clocks.get(b) || Number(b === primary) - Number(a === primary) || a.localeCompare(b))[0] || null;
 }
 export function compactEvents(events) {
   const source = compactPlanningSource(events);
@@ -561,10 +577,13 @@ export function buildStationBoardState(record, cache, now) {
   } else rows = compactEvents(rows.filter(eligible)).slice(0, 3);
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
+  const origin = regularOriginRule(record);
   const wireRow = (e) => ({ ...(record.supportsRegularTimetable === true ? {
     boardingContext: { stationID: e.stationID, lineID: e.lineID, platform: e.platform || null,
       direction: e.direction || null, destinationStationID: e.destinationStationID || null, via: e.via || null },
-    ...(e.sourceID === 'regular-timetable' ? { originQualified: true } : {}),
+    ...(e.sourceID === 'regular-timetable' || e.kind === 'outgoingDeparture'
+      && e.timeEvidence === 'scheduledDeparture' && hasExclusiveStartingCall(e, origin)
+      ? { originQualified: true } : {}),
   } : {}), id: e.id, destination: e.destination, expectedArrival: Number.isFinite(e.time) ? swift(e.time) : null, countdownText: countdown(e, now), timeEvidence: evidence[e.kind] || (e.timeEvidence === 'predictedDeparture' ? 'estimatedDeparture' : 'scheduledDeparture'), via: e.via || null, reportedPlatform: e.platform || null, expiresAt: swift(e.expiresAt), isCached: false, ...(plannedSource(e) && (capable || plannedSource(e) !== 'rail-departures') ? { plannedSourceID: plannedSource(e) } : {}) });
   const observedAt = () => {
     // Derive the visible board clock after selection and the compact limit.
@@ -724,7 +743,8 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   const arrivalsURL = new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`);
   if (config.tflAppKey) arrivalsURL.searchParams.set('app_key', config.tflAppKey);
   const arrivalTask = arrivalReader
-    ? arrivalReader.read(arrivalsURL, { fetchImpl, signal, clock, publicResponses, notBefore: previous.arrivalsNotBefore })
+    ? arrivalReader.read(arrivalsURL, { fetchImpl, signal, clock, publicResponses,
+      notBefore: previous.arrivalsNotBefore, rateLimitedUntil: previous.arrivalsRateLimitedUntil })
     : request(arrivalsURL).catch(() => ({ ok: false }));
   const railTask = rail ? request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/ArrivalDepartures?lineIds=${record.lineID}`)).catch(() => ({ ok: false })) : Promise.resolve({ ok: false });
   const [service, station] = await Promise.all([
@@ -798,19 +818,41 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   // this line as a diversion. Only qualified controls for the selected board
   // can block its ordinary timetable.
   const explicitlyClosed = unknown20 && serviceObservation?.expiresAt > applicabilityAt;
-  const blockedOrdinary = Boolean(withdrawal) || explicitlyClosed || currentProofs.some(p =>
-    blocksScheduled(p, applicabilityAt, applicabilityAt));
-  const rateLimited = [service, station, journey].filter(response => response.status === 429);
-  let ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, ordinaryBoard ? (publicationAuthorityStore?.ordinaryTimetableAdmissionFloor?.(record.stationID, record.lineID) || 0) : 0, ...rateLimited.map(response =>
-    response.completedAt + Math.max(300000, retryAfterDelay(response.retryAfter, response.completedAt))));
+  const hasDatedWithdrawal = (previous.rejections || []).some(r => r.reason === 'regularSourceWithdrawn'
+    && Number.isFinite(r.regularWithdrawalUntil) && retainedRejection(r, record, applicabilityAt));
+  const blockedOrdinary = Boolean(withdrawal) || hasDatedWithdrawal || explicitlyClosed
+    || currentProofs.some(p => blocksScheduled(p, applicabilityAt, applicabilityAt));
+  const rateLimited = [service, station, journey, arrivals].filter(response => response.status === 429);
+  let ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, previous.arrivalsRateLimitedUntil || 0,
+    arrivals.rateLimitedUntil || 0, ordinaryBoard ? (publicationAuthorityStore?.ordinaryTimetableAdmissionFloor?.(record.stationID, record.lineID) || 0) : 0,
+    ...rateLimited.map(response => response.completedAt + Math.max(300000, retryAfterDelay(response.retryAfter, response.completedAt))));
   if (withdrawal) rejections.push({
     stationID: record.stationID, lineID: record.lineID, ...withdrawal, reason: 'regularSourceWithdrawn'
   });
-  if (ordinaryBoard && !blockedOrdinary
-    && !previous.sources?.['regular-timetable']?.events?.some(e => usable(e, record, applicabilityAt))
-    && ordinaryNotBefore <= applicabilityAt) {
+  let needsOrdinary = false;
+  if (ordinaryBoard && !blockedOrdinary && ordinaryNotBefore <= applicabilityAt) {
+    const board = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity }, record, applicabilityAt);
+    const eligible = selectEvents(board, record, applicabilityAt);
+    const upcoming = eligible.filter(e => Number.isFinite(e.time) && e.time >= applicabilityAt && e.time <= applicabilityAt + 3600000);
+    // Retain an already-qualified regular context even when today's dated
+    // answer masks it. An alternate must use its own original expiry.
+    const retainedRegular = board.sources['regular-timetable']?.events.some(e =>
+      e.time <= applicabilityAt + 3600000 && !currentProofs.some(p => blocksScheduled(p, e.time, applicabilityAt)));
+    const hasIncoming = terminalEvidence || upcoming.some(e => e.kind === 'incomingArrival');
+    needsOrdinary = !retainedRegular && !upcoming.some(e => {
+      if (e.kind === 'throughArrival') return originRule.physicalEnd && !hasIncoming;
+      if (e.kind !== 'outgoingDeparture') return false;
+      // A short-lived Journey can still benefit from retained regular
+      // coverage through the next admitted full-source refresh.
+      return e.sourceID !== 'journey-planner'
+        || e.expiresAt >= applicabilityAt + config.workerIntervalMs
+        || e.expiresAt === midnight(applicabilityAt);
+    });
+  }
+  if (needsOrdinary) {
     const direct = await request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Timetable/${record.stationID}`), 'GET', true, false, true);
-    if (direct.status === 429) ordinaryNotBefore = direct.completedAt + Math.max(300000, retryAfterDelay(direct.retryAfter, direct.completedAt));
+    ordinaryNotBefore = direct.completedAt + (direct.status === 429
+      ? Math.max(300000, retryAfterDelay(direct.retryAfter, direct.completedAt)) : config.workerIntervalMs);
     if (direct.ok && direct.status === 200) {
       try {
         const calendar = validatedPublicationProof(await readPublicationAsset('788955e868b7ae85219db15b4e05c2f187bdf3be1767f16b1c369b60dea08ad7'));

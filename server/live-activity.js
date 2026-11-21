@@ -291,14 +291,22 @@ export class LiveActivityStore extends TransactionalJsonStore {
     }));
   }
 
-  stationArrivalAdmissionFloors() {
-    return this.snapshot(state => state.records.filter(record => record.active !== false && record.contentStateContract === STATION_BOARD_CONTRACT && Number.isFinite(record.stationBoardCache?.arrivalsNotBefore)).map(record => ({ stationID: record.stationID, notBefore: record.stationBoardCache.arrivalsNotBefore })));
+  stationArrivalAdmissionFloors(at = Date.now()) {
+    // A provider denial belongs to the station URL. Replacing an Activity
+    // does not make that URL eligible before its original retry deadline.
+    return this.snapshot(state => state.records
+      .filter(record => record.contentStateContract === STATION_BOARD_CONTRACT
+        && Number.isFinite(record.stationBoardCache?.arrivalsNotBefore)
+        && (record.active !== false || record.stationBoardCache.arrivalsRateLimitedUntil > at))
+      .map(record => ({ stationID: record.stationID, notBefore: record.stationBoardCache.arrivalsNotBefore,
+        rateLimitedUntil: record.stationBoardCache.arrivalsRateLimitedUntil })));
   }
 
   ordinaryTimetableAdmissionFloor(stationID, lineID) {
-    return this.snapshot(state => Math.max(0, ...state.records.filter(record =>
-      record.active !== false && record.stationID === stationID && record.lineID === lineID
-        && record.supportsRegularTimetable === true).map(record => record.stationBoardCache?.ordinaryNotBefore || 0)));
+    return this.snapshot(state => state.records.reduce((floor, record) => {
+      if (record.stationID !== stationID || record.lineID !== lineID || record.supportsRegularTimetable !== true) return floor;
+      return Math.max(floor, record.stationBoardCache?.ordinaryNotBefore || 0);
+    }, 0));
   }
 
   async retainStationBoard(activityID, environment, incoming, now = new Date(), expectedTuple = null) {
@@ -1025,10 +1033,10 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
   }
   // Prime all active records, including APNs-backoff records, before the first
   // URL admission. Record order/new registration cannot bypass a saved429 floor.
-  for (const floor of typeof store.stationArrivalAdmissionFloors === 'function' ? store.stationArrivalAdmissionFloors() : []) {
+  for (const floor of typeof store.stationArrivalAdmissionFloors === 'function' ? store.stationArrivalAdmissionFloors(now.getTime()) : []) {
     const url = new URL(`https://api.tfl.gov.uk/StopPoint/${floor.stationID}/Arrivals`);
     if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
-    arrivalReader.observeNotBefore(url, floor.notBefore);
+    arrivalReader.observeNotBefore(url, floor.notBefore, floor.rateLimitedUntil);
   }
   for (const record of liveRecords.filter((record) => record.contentStateContract === STATION_BOARD_CONTRACT)) {
     signal?.throwIfAborted();

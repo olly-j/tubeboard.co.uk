@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import os from "node:os";
 import path from "node:path";
-import { buildStationBoardState, mergeContexts, refreshStationBoard, selectEvents } from '../server/station-board-v2.js';
+import { buildStationBoardState, compactEvents, mergeContexts, refreshStationBoard, selectEvents } from '../server/station-board-v2.js';
 import { LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, validateTokenPayload } from '../server/live-activity.js';
 
 // Window of the exact TfL Saturday response from 2026-11-21 18:31:58 UTC.
@@ -61,6 +61,33 @@ test('Stratford ordinary timetable withholds on closure and honors a shared 429 
   assert.equal(afterLimit.ordinaryNotBefore, now + 480000);
   await refreshStationBoard(record, afterLimit, config, limited.fetch, now + 90000, null);
   assert.equal(limited.requests.filter(path => path === direct).length, 1);
+});
+
+test('current and retained useful Stratford live evidence prevent an ordinary request', async () => {
+  const feed = async (url, at, kind) => {
+    const endpoint = new URL(url).pathname;
+    if (endpoint === direct) return reply(timetable);
+    if (endpoint !== '/StopPoint/940GZZLUSTD/Arrivals' || !kind) return allOutage();
+    return reply([{ id: 'synthetic-actual-shape', naptanId: record.stationID, lineId: record.lineID,
+      destinationNaptanId: kind === 'through' ? '940GZZLUSTM' : record.stationID,
+      expectedArrival: new Date(at + 110000).toISOString(), timestamp: new Date(at).toISOString(),
+      platformName: 'Platform 2' }],
+    { Date: new Date(at).toUTCString(), Age: '0', 'Cache-Control': 'public,max-age=30' });
+  };
+  const read = async (at, previous, kind, expectedDirectReads) => {
+    const requests = [];
+    const result = await refreshStationBoard(record, previous, config, url => {
+      requests.push(new URL(url).pathname);
+      return feed(url, at, kind);
+    }, at, null);
+    assert.equal(requests.filter(request => request === direct).length, expectedDirectReads);
+    return result;
+  };
+  const live = await read(now, {}, 'through', 0);
+  const retained = await read(now + 90000, live, null, 0);
+  assert.deepEqual(retained.sources['station-arrivals'], live.sources['station-arrivals']);
+  const terminal = await read(now, {}, 'incoming', 1);
+  assert.ok(terminal.sources['regular-timetable'], 'An incoming train does not answer the departure board');
 });
 
 test('an equal or older cached observation cannot replace a still-valid ordinary source', async () => {
@@ -164,8 +191,8 @@ async function initialDisplayFixture(t, { hold = 45000 } = {}) {
     assert.equal(parsed.ok, true, JSON.stringify(parsed.errors));
     return store.upsertToken(parsed.value, new Date(at));
   };
-  const cycle = (at, fetchImpl = fixture().fetch, cacheOnly = false) => runLiveActivityWorkerCycle({
-    store, config, now: new Date(at), clock: () => at, fetchImpl, cacheOnly, logger: { info() {}, warn() {} },
+  const cycle = (at, fetchImpl = fixture().fetch, cacheOnly = false, sourceOnly = false) => runLiveActivityWorkerCycle({
+    store, config, now: new Date(at), clock: () => at, fetchImpl, cacheOnly, sourceOnly, logger: { info() {}, warn() {} },
     pushImpl: async (_, body) => { push.push(body.aps['content-state']); },
     scheduleRolloverPush: (_, body) => { deadlines.push(body.nextBoardBoundaryAt); },
   });
@@ -173,6 +200,40 @@ async function initialDisplayFixture(t, { hold = 45000 } = {}) {
 }
 
 const allOutage = async () => new Response(null, { status: 503 });
+
+test('station arrivals 429 defers ordinary reads across restart and replacement registration', async t => {
+  for (const sourceOnly of [false, true]) {
+    const f = await initialDisplayFixture(t);
+    await f.register();
+    const arrivalPath = '/StopPoint/940GZZLUSTD/Arrivals';
+    const limitedRequests = [];
+    const limited = async url => {
+      const pathname = new URL(url).pathname;
+      limitedRequests.push(pathname);
+      if (pathname === arrivalPath) return new Response(null, { status: 429, headers: { 'Retry-After': '480' } });
+      return allOutage();
+    };
+    await f.cycle(now, limited, false, sourceOnly);
+    assert.equal(limitedRequests.includes(direct), false, 'A primary 429 cannot cause an extra timetable request');
+    f.restart();
+    await f.register({ ...f.payload, activityID: `synthetic-sibling-${sourceOnly}` }, now + 90000);
+    const requests = [];
+    const recovering = async url => {
+      const pathname = new URL(url).pathname;
+      requests.push(pathname);
+      return pathname === direct ? reply(timetable) : allOutage();
+    };
+    await f.cycle(now + 90000, recovering);
+    assert.equal(requests.includes(arrivalPath), false);
+    assert.equal(requests.includes(direct), false);
+    assert.ok(requests.some(request => request.endsWith('/Status')), 'Independent controls retain their cadence');
+    requests.length = 0;
+    await f.cycle(now + 480000, recovering);
+    assert.equal(requests.filter(request => request === arrivalPath).length, 1);
+    assert.equal(requests.filter(request => request === direct).length, 1);
+    assert.ok(f.push.some(state => state.arrivals.some(row => row.plannedSourceID === 'regular-timetable')));
+  }
+});
 
 test('initial outage holds only to the first immutable local deadline, across replay and restart', async t => {
   const f = await initialDisplayFixture(t);
@@ -354,6 +415,55 @@ test('the real Circle PAH journey cannot hide the independent PAC starter', asyn
     assert.ok(state.arrivals.every(row => row.plannedSourceID === 'regular-timetable' && row.originQualified));
     const legacy = selectEvents(cache, { ...selected, supportsRegularTimetable: undefined }, at);
     assert.deepEqual(legacy.map(row => row.id), [through.id]);
+  }
+});
+
+test('a proved dated Circle starter sends exact origin proof and retains necessary coverage for capable clients', async () => {
+  const dated = JSON.parse(fs.readFileSync(new URL('./fixtures/circle-edgware-road-journey-2032.json', import.meta.url)));
+  const directSource = JSON.parse(fs.readFileSync(new URL('./fixtures/circle-edgware-road-direct-2032.json', import.meta.url)));
+  const actualThroughLeg = dated.journeys.find(item => item.legs[0].routeOptions[0].lineIdentifier.id === 'circle').legs[0];
+  const at = Date.parse('2026-11-21T20:32:54Z');
+  const responseHeaders = { Date: new Date(at).toUTCString(), Age: '0', 'Cache-Control': 'public,max-age=150' };
+  const circle = { ...record, lineID: 'circle', stationID: '940GZZLUERC' };
+  const firstCall = '940GZZLUPAC';
+  // Synthesize one dated starting leg from the independently proved first call
+  // and leave the captured PAH through leg unchanged.
+  const starter = structuredClone(actualThroughLeg);
+  starter.path.stopPoints = [{ id: firstCall }];
+  starter.arrivalPoint.naptanId = firstCall;
+  starter.scheduledDepartureTime = '2026-11-21T20:43:00';
+  for (const age of [2, 1]) {
+    const response = { ...dated, recommendedMaxAgeMinutes: age, journeys: [...dated.journeys, { legs: [starter] }] };
+    const replays = [];
+    const fetch = async url => {
+      const pathname = new URL(url).pathname;
+      replays.push(pathname);
+      if (pathname.includes('/Journey/')) return reply(response, responseHeaders);
+      if (pathname.includes('/Timetable/')) return reply(directSource, {
+        ...responseHeaders, Date: 'Sat, 21 Nov 2026 19:44:42 GMT', 'Cache-Control': 'public,max-age=43200',
+      });
+      return allOutage();
+    };
+    const cache = await refreshStationBoard(circle, {}, config, fetch, at, null);
+    assert.deepEqual(cache.sources['journey-planner'].events.map(event => event.nextScheduledStopID), ['940GZZLUPAH', firstCall]);
+    assert.equal(replays.some(path => path.includes('/Timetable/')), age === 1,
+      'A dated answer needs supplemental coverage only if it expires before the next full read');
+    const [chosen] = compactEvents(selectEvents(cache, circle, at));
+    assert.equal(chosen.sourceID, 'journey-planner');
+    const wire = buildStationBoardState(circle, cache, at).arrivals;
+    const qualified = wire.find(row => row.id === chosen.id);
+    assert.equal(qualified.originQualified, true);
+    assert.equal(qualified.plannedSourceID, 'journey-planner');
+    assert.equal(qualified.boardingContext.stationID, circle.stationID);
+    assert.equal(qualified.boardingContext.lineID, circle.lineID);
+    if (age === 1) {
+      assert.ok(wire.some(row => row.plannedSourceID === 'regular-timetable'));
+      const [fallback] = compactEvents(selectEvents(cache, circle, at + 60000));
+      assert.equal(fallback.sourceID, 'regular-timetable');
+    }
+    const legacy = buildStationBoardState({ ...circle, supportsRegularTimetable: undefined }, cache, at).arrivals;
+    assert.equal(legacy.length, 2);
+    assert.ok(legacy.every(row => row.originQualified === undefined && row.boardingContext === undefined));
   }
 });
 
