@@ -197,9 +197,8 @@ test('independent raw group prioritizes useful live rows before masked rail sche
   const state = buildStationBoardState(record, original, at(50)); assert.deepEqual(state.arrivals.map((r) => r.id), ['rail-0', 'rail-1', 'rail-2', 'live-A', 'live-B', 'live-C']); assert.deepEqual(renderedIDs(state, at(50)), ['live-A', 'live-B', 'live-C']);
   const long = cache([event('TT', 250, 0, 600, { destination: 'x'.repeat(3000) }), event('JP', 260, 20, 140, { sourceID: 'journey-planner' }), ...rail, live('live-A'), live('live-B'), live('live-C')], [proof()]);
   const fallback = buildStationBoardState(record, long, at(50));
-  assert.ok(!fallback.arrivals.some(r => r.id === 'TT'));
-  assert.deepEqual(fallback.plannedAvailability, state.plannedAvailability);
-  assert.deepEqual(renderedIDs(fallback, at(50)), ['JP', 'live-A', 'live-B']);
-  assert.deepEqual(fallback.arrivals.filter(r => r.timeEvidence === 'estimatedDeparture').map(r => r.id), ['live-A', 'live-B', 'live-C']);
+  assert.equal(fallback.plannedAvailability, undefined);
+  assert.deepEqual(fallback.arrivals.map(r => r.id), ['live-A', 'live-B', 'live-C']);
+  assert.ok(fallback.arrivals.every(r => r.timeEvidence === 'estimatedDeparture'));
   assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(fallback, new Date(at(50))))) <= 4096);
 });

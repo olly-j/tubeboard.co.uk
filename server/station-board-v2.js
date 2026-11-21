@@ -623,20 +623,13 @@ export function buildStationBoardState(record, cache, now) {
   state.statusReason = null;
   if (fits()) return state;
 
-  const candidates = new Set([...rows, ...originalRows.filter(e => !planned(e)).slice(0, 3)]);
-  const ordered = originalRows.filter(e => candidates.has(e));
-  const priority = (e) => {
-    if (!eligible(e)) return 2;
-    if (['outgoingDeparture', 'outgoingDestinationOnly'].includes(e.kind)
-      || e.kind === 'throughArrival' && Number.isFinite(e.time)) return 0;
-    return 1;
-  };
-  const prioritized = [...ordered].sort((a, b) => priority(a) - priority(b));
-  const rowLimit = retainsContexts ? 9 : 3;
-  const pack = (options) => {
-    const selected = new Set();
-    for (const e of options) {
-      if (selected.size === rowLimit) break;
+  const selectedRows = rows;
+  const outgoing = selectedRows.filter(e => planned(e) || ['outgoingDeparture', 'outgoingDestinationOnly'].includes(e.kind)
+    || e.kind === 'throughArrival' && Number.isFinite(e.time));
+  const pack = (required, ordered) => {
+    const selected = new Set(required);
+    for (const e of ordered) {
+      if (selected.has(e)) continue;
       selected.add(e);
       updateRows(ordered.filter(row => selected.has(row)));
       if (!fits()) selected.delete(e);
@@ -648,14 +641,16 @@ export function buildStationBoardState(record, cache, now) {
   updateRows([]);
   if (!fits()) state.status = 'Status unavailable';
   if (!fits()) state.platform = 'Selected platform';
-  if (availability) {
-    // The renderer can only use the original schedule safely with all its proofs.
-    state.plannedAvailability = availability;
-    pack(prioritized);
-    if (rows.some(planned)) return state;
-    delete state.plannedAvailability;
+  if (availability) state.plannedAvailability = availability;
+  // The renderer elects schedules from overlapping sources and live clocks.
+  // Keep that evidence together so a missing row can't promote its alternate.
+  updateRows(outgoing);
+  if (fits()) {
+    pack(outgoing, selectedRows);
+    return state;
   }
-  pack(availability ? prioritized.filter(e => !planned(e)) : prioritized);
+  delete state.plannedAvailability;
+  pack([], originalRows.filter(e => !planned(e)).slice(0, 3));
   return state;
 }
 

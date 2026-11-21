@@ -122,6 +122,32 @@ test('an Edgware update keeps booked departures and complete availability ahead 
   assert.equal(reads, 0);
 });
 
+test('the payload budget keeps complete outgoing contexts and never promotes a suppressed schedule', () => {
+  const at = Date.parse('2026-11-21T23:30:00Z');
+  const scoped = { ...record, supportsRegularTimetable: true };
+  const bank = { via: 'Bank', receivedAt: at - 30000, expiresAt: at + 180000 };
+  const timetable = row({ ...bank, sourceID: 'timetable', id: 'published', time: at + 90000, expiresAt: at + 60000 });
+  const journey = row({ ...bank, id: 'alternate', time: at + 110000 });
+  const prediction = row({ ...bank, sourceID: 'station-arrivals', kind: 'throughArrival', timeEvidence: 'arrivalPrediction',
+    id: 'live', time: at + 95000 });
+  const incoming = row({ ...bank, sourceID: 'station-arrivals', kind: 'incomingArrival', timeEvidence: 'arrivalPrediction',
+    id: 'incoming', time: at + 30000, destination: 'Edgware', destinationStationID: scoped.stationID });
+
+  for (const higherEvidence of [timetable, prediction]) {
+    const oversized = { ...higherEvidence, id: `${higherEvidence.id}-${'x'.repeat(4000)}` };
+    const state = buildStationBoardState(scoped, cacheOf(oversized, journey, incoming), at);
+    assert.deepEqual(state.arrivals.map(r => r.id), [incoming.id]);
+    assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(state, new Date(at)))) <= 4096);
+  }
+
+  const cached = cacheOf(timetable, journey, { ...incoming, id: 'x'.repeat(4000) });
+  const packed = buildStationBoardState(scoped, cached, at);
+  assert.deepEqual(packed.arrivals.map(r => r.id), [timetable.id, journey.id]);
+  const afterExpiry = buildStationBoardState(scoped, cached, timetable.expiresAt);
+  assert.deepEqual(afterExpiry.arrivals.map(r => r.id), [journey.id]);
+  assert.equal(afterExpiry.arrivals[0].expiresAt, packed.arrivals[1].expiresAt);
+});
+
 test('selection precedes publication/planner preference and physical platforms never guess schedules', () => {
   const tt = ['Bank', 'Charing Cross', 'Morden'].map((destination, i) => row({ id: `tt-${i}`, sourceID: 'timetable', destination, providerDirection: null }));
   const planner = row({ id: 'planner' }), cache = cacheOf(...tt, planner);
