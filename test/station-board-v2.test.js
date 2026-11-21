@@ -1,10 +1,11 @@
+import crypto from "node:crypto";
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { STATION_BOARD_LINES, STATION_BOARD_STATIONS, validBoard, httpObservation, stationArrivalObservation, StationArrivalReader, refreshStationArrivals, londonClock, londonLocal, journeyURL, parseJourney, parseRailDepartures, parseStationArrivals, parseDestinationFacts, mergeContexts, selectEvents, countdown, nextBoundary, buildStationBoardState, refreshStationBoard } from '../server/station-board-v2.js';
-import { validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, getStationArrivalsRefreshDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
+import { pushLiveActivityUpdate, stationBoardContentDigest, validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, getStationArrivalsRefreshDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
 import { SerialWorker } from '../server/worker-lifecycle.js';
 const now = Date.parse('2026-10-01T13:00:00Z');
 const record = { activityID: 'synthetic-v2', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1.0', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 };
@@ -155,8 +156,61 @@ test('worker cache-only minute/Due/elapsed/source-expiry updates make zero reads
   await cycle(); assert.equal(pushes.at(-1).aps['content-state'].arrivals[0].countdownText, '1 min'); assert.equal(pushes.at(-1).aps['stale-date'], (now + 90000) / 1000);
   tick = now + 31000; await cycle(); assert.equal(pushes.at(-1).aps['content-state'].arrivals[0].countdownText, 'Due');
   tick = now + 90001; await cycle(); assert.equal(pushes.at(-1).aps['content-state'].arrivals[0].id, 'B');
+  assert.equal(pushes.at(-1).aps['content-state'].updatedAt, (now - 978307200000) / 1000);
+  assert.equal(pushes.at(-1).aps.timestamp, Math.floor(tick / 1000));
   const restarted = new LiveActivityStore(store.filePath); tick = now + 120000; await cycle(restarted); assert.deepEqual(pushes.at(-1).aps['content-state'].arrivals, []); assert.equal(fetches, 0); assert.ok(scheduled.some((delay) => delay > 0));
   const count = pushes.length; await cycle(restarted); assert.equal(pushes.length, count);
+});
+
+test('a send crossing an incoming train boundary schedules immediate cache-only turnover', async (t) => {
+  const store = await temporaryStore(t);
+  const incoming = row({ id: 'incoming', sourceID: 'station-arrivals', kind: 'incomingArrival',
+    timeEvidence: 'arrivalPrediction', time: now + 5_000 });
+  const departure = row({ id: 'departure', time: now + 75_000 });
+  await store.retainStationBoard(record.activityID, record.environment, cacheOf(departure, incoming), new Date(now));
+  let tick = now;
+  let reads = 0;
+  const pushes = [];
+  const schedules = [];
+  const cycle = () => runLiveActivityWorkerCycle({
+    store, config: loadConfig({}), cacheOnly: true, now: new Date(tick), clock: () => tick, logger,
+    fetchImpl: async () => { reads++; throw new Error('boundary ran a source read'); },
+    pushImpl: async (_, payload, _config, { priority }) => {
+      pushes.push({ payload, priority });
+      if (pushes.length === 1) tick = incoming.time + 5;
+    },
+    scheduleRolloverPush: (_, state, current, interval) => schedules.push(getRolloverDelayMs(state, current, interval)),
+  });
+  const rowsOf = push => push.payload.aps['content-state'].arrivals;
+
+  await cycle();
+  assert.deepEqual(rowsOf(pushes[0]).map(row => row.id), ['departure', 'incoming']);
+  assert.equal(schedules[0], 1, 'The rollover remains armed when the APNs send crosses its deadline');
+  tick += schedules[0];
+  await cycle();
+  assert.deepEqual(rowsOf(pushes[1]), [rowsOf(pushes[0])[0]], 'The useful scheduled train keeps its source and original clock');
+  assert.equal(pushes[1].priority, '10', 'The incoming row has elapsed even though the primary train stays upcoming');
+  assert.equal(pushes[1].payload.aps['content-state'].updatedAt, pushes[0].payload.aps['content-state'].updatedAt);
+  assert.ok(schedules[1] > 1, 'After catching up, the worker waits for the next real boundary');
+  assert.equal(reads, 0);
+});
+
+test('selected board observation survives rollover and advances only with new selected evidence', () => {
+  const scoped = { ...record, selectionMode: 'platform', platformLabel: 'Platform 2' };
+  const first = row({ id: 'first', platform: 'Platform 2', time: now + 90_000 });
+  const later = row({ id: 'later', platform: 'Platform 2', time: now + 150_000 });
+  const offBoard = row({ id: 'off-board', platform: 'Platform 1', receivedAt: now + 60_000 });
+  const at = now + 90_001;
+  const build = (events) => buildApnsPayload(buildStationBoardState(scoped, cacheOf(...events), at), new Date(at));
+  const rollover = build([first, later, offBoard]).aps;
+  const swift = (msec) => (msec - 978307200000) / 1000;
+  assert.equal(rollover.timestamp, Math.floor(at / 1000));
+  assert.deepEqual(rollover['content-state'].arrivals.map((row) => row.id), ['later']);
+  assert.equal(rollover['content-state'].updatedAt, swift(now));
+  assert.equal(rollover['content-state'].arrivals[0].expiresAt, swift(later.expiresAt));
+  const replacement = build([{ ...later, receivedAt: now + 70_000 }, offBoard]).aps;
+  assert.equal(replacement['content-state'].updatedAt, swift(now + 70_000));
+  assert.equal(replacement['content-state'].arrivals[0].expiresAt, swift(later.expiresAt));
 });
 
 test('APNs failure does not acknowledge cached transition; retry retains original source expiry', async (t) => {
@@ -681,4 +735,151 @@ test('UF276 blank Age cannot make a clockless empty authoritative in full or sou
     if (age === '0') { assert.deepEqual(source.events, []); assert.equal(source.expiresAt, at + 30000); }
     else { assert.equal(source.events.length, 1); assert.equal(source.observedAt, now); assert.equal(source.events[0].expiresAt, now + 120000); }
   }
+});
+
+test('repeated cache-only outage ticks preserve the last board observation and deliver one empty transition', async t => {
+  const store = await temporaryStore(t);
+  const calls = [];
+  const clock = (activeStore, tick) => runLiveActivityWorkerCycle({
+    store: activeStore, config: loadConfig({}), cacheOnly: true, now: new Date(tick), clock: () => tick,
+    fetchImpl: async () => assert.fail('cache-only rollover must never read the provider'),
+    pushImpl: async (_record, payload) => { calls.push(payload.aps); }, logger,
+  });
+
+  // A newly registered board with no provider observation also has one
+  // stable unavailable payload across identical scans.
+  await clock(store, now + 1000);
+  await clock(store, now + 2000);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]['content-state'].updatedAt, (now - 978307200000) / 1000);
+
+  const fresh = row({ receivedAt: now + 10000, time: now + 55000, expiresAt: now + 60000 });
+  await store.retainStationBoard(record.activityID, record.environment, cacheOf(fresh), new Date(now + 10000));
+  await clock(store, now + 10000);
+  assert.deepEqual(calls.at(-1)['content-state'].arrivals.map(item => item.id), [fresh.id]);
+
+  const restarted = new LiveActivityStore(store.filePath);
+  await clock(restarted, now + 55001);
+  const empty = calls.at(-1);
+  assert.deepEqual(empty['content-state'].arrivals, []);
+  assert.equal(empty['content-state'].updatedAt, (fresh.receivedAt - 978307200000) / 1000);
+  assert.equal(empty['stale-date'], fresh.receivedAt / 1000);
+  const count = calls.length;
+  await clock(restarted, now + 56000);
+  await clock(restarted, now + 119000);
+  assert.equal(calls.length, count);
+});
+
+test('capable scheduled rows keep the original clock without minute-only wakes or payloads', () => {
+  const capable = { ...record, supportsRegularTimetable: true };
+  const published = row({ time: now + 90000 });
+  const cache = cacheOf(published);
+  const first = buildStationBoardState(capable, cache, now);
+  const changedMinute = buildStationBoardState(capable, cache, now + 31000);
+  assert.equal(first.nextBoardBoundaryAt, now + 90001);
+  assert.equal(first.arrivals[0].countdownText, '1 min');
+  assert.equal(changedMinute.arrivals[0].countdownText, 'Due');
+  assert.notEqual(stationBoardContentDigest(first), stationBoardContentDigest(changedMinute));
+  const dynamic = { dynamicScheduledCountdown: true };
+  assert.equal(stationBoardContentDigest(first, dynamic), stationBoardContentDigest(changedMinute, dynamic));
+  const departed = buildStationBoardState(capable, cache, now + 90001);
+  assert.deepEqual(departed.arrivals, []);
+  assert.notEqual(stationBoardContentDigest(first, dynamic), stationBoardContentDigest(departed, dynamic));
+});
+
+test('typed Activity delivery uses routine priority for renewal and prompt priority for boarding changes', async t => {
+  const store = await temporaryStore(t);
+  const priorities = [];
+  async function cycle(offset, { destination = 'Morden', id = 'train', time = 90000, expiry = 120000 } = {}) {
+    const at = now + offset;
+    const train = row({ id, destination, time: now + time, receivedAt: at, expiresAt: now + expiry });
+    await store.retainStationBoard(record.activityID, record.environment, cacheOf(train), new Date(at));
+    await runLiveActivityWorkerCycle({
+      store, config: loadConfig({}), cacheOnly: true, now: new Date(at), clock: () => at, logger,
+      pushImpl: async (_, payload, _config, options) => {
+        priorities.push(options.priority);
+        assert.equal(payload.aps.alert, undefined);
+      },
+    });
+  }
+  await cycle(0);
+  await cycle(10000, { id: 'reobserved-with-new-provider-id', expiry: 140000 });
+  await cycle(15000, { id: 'slightly-shifted', time: 100000, expiry: 140000 });
+  await cycle(20000, { id: 'towards-a-different-destination', destination: 'Kennington', time: 100000, expiry: 140000 });
+  await cycle(100001, { id: 'next-service', destination: 'Kennington', time: 130000, expiry: 150000 });
+  await cycle(150000, { id: 'expired-source', time: 130000, expiry: 150000 });
+  assert.deepEqual(priorities, ['10', '5', '5', '10', '10', '10']);
+});
+
+test('APNs transport uses the selected precedence header and keeps the payload', async () => {
+  const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const config = { apns: { teamId: 'synthetic-team', keyId: 'synthetic-test-key',
+    authKey: privateKey.export({ format: 'pem', type: 'pkcs8' }) } };
+  const payload = buildApnsPayload(buildStationBoardState(record, cacheOf(row()), now), new Date(now));
+  const actual = [];
+  const send = async (host, headers, body) => {
+    assert.equal(host, 'api.sandbox.push.apple.com');
+    assert.equal(headers['apns-push-type'], 'liveactivity');
+    assert.equal(headers['apns-topic'], 'OllyJ.My-Train-Times.push-type.liveactivity');
+    assert.deepEqual(body, payload);
+    actual.push(headers['apns-priority']);
+    return { status: 200 };
+  };
+  await pushLiveActivityUpdate(record, payload, config, { priority: '5', send });
+  await pushLiveActivityUpdate(record, payload, config, { send });
+  assert.deepEqual(actual, ['5', '10']);
+});
+
+test('queued typed Activity snapshots expire at their original cutoff and can be replaced by current rows', async () => {
+  const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const config = { apns: { teamId: 'synthetic-team', keyId: 'synthetic-test-key',
+    authKey: privateKey.export({ format: 'pem', type: 'pkcs8' }) } };
+  const early = row({ id: 'early', time: now + 30_000 });
+  const next = row({ id: 'next', time: now + 90_000, expiresAt: now + 75_000 });
+  const queue = [];
+  const send = async (_, headers, payload) => {
+    queue.push({ expiration: headers['apns-expiration'], payload });
+    return { status: 200 };
+  };
+  const sendBoard = async (tick, ...rows) => {
+    const state = buildStationBoardState(record, cacheOf(...rows), tick);
+    await pushLiveActivityUpdate(record, buildApnsPayload(state, new Date(tick)), config, { send });
+  };
+
+  await sendBoard(now, early, next);
+  await sendBoard(early.time + 1, early, next);
+  const [initial, replacement] = queue;
+  assert.equal(initial.expiration, String(early.time / 1000));
+  assert.equal(replacement.expiration, String(next.expiresAt / 1000));
+
+  // Model APNs's documented storage policy, without asserting device delivery.
+  const reconnectedAt = early.time + 2_000;
+  const stillEligible = queue.filter(update => Number(update.expiration) * 1000 > reconnectedAt);
+  assert.deepEqual(stillEligible.flatMap(update => update.payload.aps['content-state'].arrivals.map(row => row.id)), ['next']);
+
+  const sameWireSecond = { ...next, expiresAt: next.expiresAt + 500 };
+  await sendBoard(sameWireSecond.expiresAt - 1, sameWireSecond);
+  assert.equal(queue.at(-1).expiration, '0', 'A cutoff in the dispatch second makes the update immediate-only');
+  await sendBoard(next.expiresAt, next);
+  assert.deepEqual(queue.at(-1).payload.aps['content-state'].arrivals, []);
+  assert.equal(queue.at(-1).expiration, undefined, 'Allow the waiting state to reach a reconnecting phone');
+});
+
+test('a fresh scoped closure prompts a priority-10 update even with the same boarding clock', async t => {
+  const store = await temporaryStore(t);
+  const live = row({ sourceID: 'station-arrivals', kind: 'throughArrival', timeEvidence: 'arrivalPrediction' });
+  await store.retainStationBoard(record.activityID, record.environment, cacheOf(live), new Date(now));
+  const pushes = [];
+  const cycle = at => runLiveActivityWorkerCycle({
+    store, config: loadConfig({}), cacheOnly: true, now: new Date(at), clock: () => at, logger,
+    pushImpl: async (_, payload, _config, options) => pushes.push({ payload, priority: options.priority }),
+  });
+  await cycle(now);
+  const closedAt = now + 10000;
+  const proof = { stationID: record.stationID, lineID: record.lineID, sourceScope: 'stationDisruptions', closed: true,
+    observedAt: closedAt, expiresAt: closedAt + 30000, validFrom: closedAt, validUntil: closedAt + 30000 };
+  await store.retainStationBoard(record.activityID, record.environment, { availabilityProofs: [proof] }, new Date(closedAt));
+  await cycle(closedAt);
+  assert.deepEqual(pushes.map(push => push.priority), ['10', '10']);
+  assert.deepEqual(pushes.map(push => push.payload.aps['content-state'].arrivals[0].id), [live.id, live.id]);
 });

@@ -6,11 +6,11 @@ import path from 'node:path';
 import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
 import { TransactionalJsonStore } from './transactional-json-store.js';
 import { admitPlannedSeed } from './station-board-seed.js';
-import { STATION_ARRIVAL_ATTEMPT_FLOOR_MS, STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, refreshStationArrivals, StationArrivalReader, buildStationBoardState } from './station-board-v2.js';
+import { STATION_ARRIVAL_ATTEMPT_FLOOR_MS, STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, refreshStationArrivals, StationArrivalReader, buildStationBoardState, supportsRegularOrigin, regularReplacementAuthorized } from './station-board-v2.js';
 
 // Never log this tuple: it includes token custody and exact selected scope.
 export function registrationTuple(record) {
-  return JSON.stringify(['environment','activityID','tokenUpdatedAt','pushTokenHex','stationID','lineID','selectionMode','platformID','platformHeading','platformLabel','platformDirection','activityStartedAt','activityEndsAt','contentStateContract','plannedPresentationVersion','timetablePublicationAuthorityVersion'].map((k) => record[k] ?? null));
+  return JSON.stringify(['environment','activityID','tokenUpdatedAt','pushTokenHex','stationID','lineID','selectionMode','platformID','platformHeading','platformLabel','platformDirection','activityStartedAt','activityEndsAt','contentStateContract','plannedPresentationVersion','timetablePublicationAuthorityVersion','supportsRegularTimetable'].map((k) => record[k] ?? null));
 }
 // Use an initial worker opportunity unless the armed regular cycle is already
 // within the existing request floor. No new clock, budget or APNs bypass; SerialWorker and
@@ -136,7 +136,7 @@ export class LiveActivityStore extends TransactionalJsonStore {
       if (isSameActivity && previous.contentStateContract === STATION_BOARD_CONTRACT && Date.parse(payload.tokenUpdatedAt) === Date.parse(previous.tokenUpdatedAt)) {
         // Equal observations cannot establish a different board/token contract.
         let capabilityChanged = false;
-        const equalScope = registrationTuple({ ...payload, plannedPresentationVersion: previous.plannedPresentationVersion, timetablePublicationAuthorityVersion: previous.timetablePublicationAuthorityVersion }) === registrationTuple(previous);
+        const equalScope = registrationTuple({ ...payload, plannedPresentationVersion: previous.plannedPresentationVersion, timetablePublicationAuthorityVersion: previous.timetablePublicationAuthorityVersion, supportsRegularTimetable: previous.supportsRegularTimetable }) === registrationTuple(previous);
         if (!equalScope) return { changed: authorityChanged, value: { ...redactRecord(previous), registrationAccepted: false } };
         if (previous.timetablePublicationAuthorityVersion !== payload.timetablePublicationAuthorityVersion) {
           if (previous.timetablePublicationAuthorityVersion === undefined && payload.timetablePublicationAuthorityVersion === 1
@@ -147,8 +147,13 @@ export class LiveActivityStore extends TransactionalJsonStore {
           } else return { value: { ...redactRecord(previous), registrationAccepted: false } };
         }
         if (previous.plannedPresentationVersion !== payload.plannedPresentationVersion) {
-          if (payload.plannedPresentationVersion === undefined) { delete previous.plannedPresentationVersion; delete previous.lastBoardContentDigest; }
+          if (payload.plannedPresentationVersion === undefined) { delete previous.plannedPresentationVersion; delete previous.supportsRegularTimetable; delete previous.lastBoardContentDigest; }
           return { value: { ...redactRecord(previous), registrationAccepted: payload.plannedPresentationVersion === undefined } };
+        }
+        if (payload.supportsRegularTimetable === true && previous.supportsRegularTimetable !== true) {
+          previous.supportsRegularTimetable = true;
+          delete previous.lastBoardContentDigest;
+          capabilityChanged = true;
         }
         const seed = admitPlannedSeed(payload.plannedContextSeed, previous, now.getTime());
         if (!seed.errors.length && (Object.keys(seed.sources).length || seed.availabilityProofs?.length)) previous.stationBoardCache = applyPublicationAuthority(mergeContexts(applyPublicationAuthority(previous.stationBoardCache, state.publicationAuthority), { ...seed, sources: Object.fromEntries(Object.entries(seed.sources).filter(([source]) => source !== 'timetable' || (payload.plannedContextSeed.contexts.filter(c => ['timetable','unified-timetable'].includes(c.sourceID)).every(c => scopedSeedMatchesAsset(c, assets.get(c.publication.sha256), previous))))) }, previous, now.getTime()), state.publicationAuthority);
@@ -196,8 +201,25 @@ export class LiveActivityStore extends TransactionalJsonStore {
         else delete record.timetablePublicationAuthorityVersion;
         if (payload.plannedPresentationVersion === 2) record.plannedPresentationVersion = 2;
         else delete record.plannedPresentationVersion;
+        if (payload.supportsRegularTimetable === true) record.supportsRegularTimetable = true;
+        else delete record.supportsRegularTimetable;
+        // A client deadline protects a single initial presentation only. Token
+        // refresh and same-activity re-registration never create a new lease.
+        if (!isSameActivity && supportsRegularOrigin(record) && payload.initialRegularDisplayUntil) {
+          const until = Math.min(Date.parse(payload.initialRegularDisplayUntil), now.getTime() + 600000,
+            Date.parse(record.activityEndsAt || '') || Infinity);
+          if (until > now.getTime()) record.initialRegularDisplayUntil = new Date(until).toISOString();
+        } else if (!supportsRegularOrigin(record)
+            || ['stationID', 'lineID', 'selectionMode', 'platformID'].some(key => previous[key] !== record[key])) {
+          delete record.initialRegularDisplayUntil;
+        }
         if (isSameActivity && registrationTuple(previous) !== registrationTuple(record)) delete record.lastBoardContentDigest;
         if (previous.stationID !== payload.stationID || previous.lineID !== payload.lineID) delete record.stationBoardCache;
+        if (['stationID', 'lineID', 'selectionMode', 'platformID', 'platformHeading', 'platformLabel', 'platformDirection']
+          .some(key => previous[key] !== record[key])) {
+          delete record.lastBoardObservedAt;
+          delete record.lastBoardDelivery;
+        }
         const seed = admitPlannedSeed(payload.plannedContextSeed, record, now.getTime());
         if (!seed.errors.length && (Object.keys(seed.sources).length || Object.keys(seed.closureSources).length || seed.availabilityProofs?.length)) record.stationBoardCache = applyPublicationAuthority(mergeContexts(applyPublicationAuthority(record.stationBoardCache, state.publicationAuthority), { sources: Object.fromEntries(Object.entries(seed.sources).filter(([source]) => source !== 'timetable' || payload.plannedContextSeed.contexts.filter(c => ['timetable','unified-timetable'].includes(c.sourceID)).every(c => scopedSeedMatchesAsset(c, assets.get(c.publication.sha256), record)))), closureSources: seed.closureSources, availabilityProofs: seed.availabilityProofs }, record, now.getTime()), state.publicationAuthority);
       }
@@ -269,8 +291,22 @@ export class LiveActivityStore extends TransactionalJsonStore {
     }));
   }
 
-  stationArrivalAdmissionFloors() {
-    return this.snapshot(state => state.records.filter(record => record.active !== false && record.contentStateContract === STATION_BOARD_CONTRACT && Number.isFinite(record.stationBoardCache?.arrivalsNotBefore)).map(record => ({ stationID: record.stationID, notBefore: record.stationBoardCache.arrivalsNotBefore })));
+  stationArrivalAdmissionFloors(at = Date.now()) {
+    // A provider denial belongs to the station URL. Replacing an Activity
+    // does not make that URL eligible before its original retry deadline.
+    return this.snapshot(state => state.records
+      .filter(record => record.contentStateContract === STATION_BOARD_CONTRACT
+        && Number.isFinite(record.stationBoardCache?.arrivalsNotBefore)
+        && (record.active !== false || record.stationBoardCache.arrivalsRateLimitedUntil > at))
+      .map(record => ({ stationID: record.stationID, notBefore: record.stationBoardCache.arrivalsNotBefore,
+        rateLimitedUntil: record.stationBoardCache.arrivalsRateLimitedUntil })));
+  }
+
+  ordinaryTimetableAdmissionFloor(stationID, lineID) {
+    return this.snapshot(state => state.records.reduce((floor, record) => {
+      if (record.stationID !== stationID || record.lineID !== lineID || record.supportsRegularTimetable !== true) return floor;
+      return Math.max(floor, record.stationBoardCache?.ordinaryNotBefore || 0);
+    }, 0));
   }
 
   async retainStationBoard(activityID, environment, incoming, now = new Date(), expectedTuple = null) {
@@ -299,6 +335,8 @@ export class LiveActivityStore extends TransactionalJsonStore {
         record.lastPlatform = info.contentState.platform;
         if (record.contentStateContract === STATION_BOARD_CONTRACT) {
           record.lastBoardContentDigest = info.contentDigest;
+          record.lastBoardObservedAt = (info.contentState.updatedAt + APPLE_REFERENCE_UNIX_SECONDS) * 1000;
+          record.lastBoardDelivery = info.boardDelivery;
           record.nextBoardBoundaryAt = info.contentState.nextBoardBoundaryAt;
         }
       }
@@ -585,6 +623,7 @@ export function validateTokenPayload(input, now = new Date()) {
 
   const v2 = payload.contentStateContract === STATION_BOARD_CONTRACT;
   if (payload.timetablePublicationAuthorityVersion !== undefined && (!v2 || payload.plannedPresentationVersion !== 2 || payload.timetablePublicationAuthorityVersion !== 1)) errors.push('timetablePublicationAuthorityVersion is unsupported');
+  if (payload.supportsRegularTimetable !== undefined && (!v2 || payload.plannedPresentationVersion !== 2 || payload.supportsRegularTimetable !== true)) errors.push('supportsRegularTimetable is unsupported');
   if (payload.plannedPresentationVersion !== undefined && (!v2 || payload.plannedPresentationVersion !== 2)) errors.push('plannedPresentationVersion is unsupported');
   if (payload.contentStateContract !== undefined && !v2) errors.push('contentStateContract is unsupported');
   if (v2 && !validBoard(payload.stationID, payload.lineID)) errors.push('stationID is not on the selected station-board line');
@@ -598,6 +637,14 @@ export function validateTokenPayload(input, now = new Date()) {
   const selectionMode = inferSelectionMode(payload);
   if (explicitSelectionMode && !['platform', 'allPlatforms'].includes(explicitSelectionMode)) {
     errors.push('selectionMode must be platform or allPlatforms');
+  }
+
+  if (payload.initialRegularDisplayUntil !== undefined &&
+      (!v2 || !supportsRegularOrigin({ ...payload, selectionMode })
+        || typeof payload.initialRegularDisplayUntil !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(payload.initialRegularDisplayUntil)
+        || !Number.isFinite(Date.parse(payload.initialRegularDisplayUntil)))) {
+    errors.push('initialRegularDisplayUntil is unsupported');
   }
 
   if (selectionMode === 'platform' && !optionalString(payload.platformID)) {
@@ -647,7 +694,7 @@ export function validateTokenPayload(input, now = new Date()) {
       appVersion: String(payload.appVersion || '').trim(),
       buildNumber: String(payload.buildNumber || '').trim(),
       environment: String(payload.environment || '').trim(),
-      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(payload.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}), ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
+      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(payload.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}), ...(payload.supportsRegularTimetable === true ? { supportsRegularTimetable: true } : {}), ...(payload.initialRegularDisplayUntil !== undefined ? { initialRegularDisplayUntil: payload.initialRegularDisplayUntil } : {}), ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
     }
   };
 }
@@ -784,7 +831,7 @@ export function buildContentState(record, arrivals, statuses, now = new Date()) 
   };
 }
 
-export function stationBoardContentDigest(contentState) {
+export function stationBoardContentDigest(contentState, { dynamicScheduledCountdown = false } = {}) {
   const input = { ...contentState };
   delete input.updatedAt;
   delete input.nextBoardBoundaryAt;
@@ -793,7 +840,8 @@ export function stationBoardContentDigest(contentState) {
       // These typed clients derive the visible timer from the original ETA.
       // Normalize only the comparison copy; preserve fallback text on wire.
       if (row.isCached === false && Number.isFinite(row.expectedArrival) && Number.isFinite(row.expiresAt)
-        && ['throughArrivalPrediction', 'reportedIncomingArrival', 'estimatedDeparture'].includes(row.timeEvidence)) {
+        && (['throughArrivalPrediction', 'reportedIncomingArrival', 'estimatedDeparture'].includes(row.timeEvidence)
+          || dynamicScheduledCountdown && row.timeEvidence === 'scheduledDeparture')) {
         const { countdownText, ...semantic } = row;
         return semantic;
       }
@@ -855,7 +903,7 @@ export function buildEndApnsPayload(record, now = new Date()) {
   };
 }
 
-export async function pushLiveActivityUpdate(record, payload, config, options = {}) {
+export async function pushLiveActivityUpdate(record, payload, config, { priority = '10', send = sendApnsRequest, ...options } = {}) {
   if (!config.apns.teamId || !config.apns.keyId || (!config.apns.authKey && !config.apns.authKeyPath)) {
     const error = new Error('APNs is not configured');
     error.retryable = true;
@@ -866,13 +914,21 @@ export async function pushLiveActivityUpdate(record, payload, config, options = 
   const jwt = await createApnsJwt(config.apns);
   const host = record.environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
   const topicBundleId = record.appBundleID || config.apns.bundleId;
-  const { status, body } = await sendApnsRequest(host, {
+  const state = payload.aps?.['content-state'];
+  const staleDate = payload.aps?.['stale-date'];
+  const expiresWithRows = payload.aps?.event === 'update'
+    && state?.contentStateContract === STATION_BOARD_CONTRACT
+    && state.arrivals?.length > 0 && Number.isSafeInteger(staleDate);
+  const { status, body } = await send(host, {
     ':method': 'POST',
     ':path': `/3/device/${record.pushTokenHex}`,
     authorization: `bearer ${jwt}`,
     'apns-push-type': 'liveactivity',
     'apns-topic': `${topicBundleId}.push-type.liveactivity`,
-    'apns-priority': '10',
+    'apns-priority': priority === '5' ? '5' : '10',
+    // A queued snapshot must not remain eligible for storage after any of
+    // its original train facts expire. Zero keeps same-second updates immediate-only.
+    ...(expiresWithRows ? { 'apns-expiration': String(staleDate > payload.aps.timestamp ? staleDate : 0) } : {}),
     'content-type': 'application/json'
   }, payload, options);
   if (status === 200) return { status };
@@ -885,6 +941,35 @@ export async function pushLiveActivityUpdate(record, payload, config, options = 
   error.retryable = status === 429 || status >= 500;
   error.backoffMs = status === 429 ? 5 * 60 * 1000 : 2 * 60 * 1000;
   throw error;
+}
+
+const boardingClockEvidence = ['estimatedDeparture', 'scheduledDeparture', 'throughArrivalPrediction'];
+
+function boardDeliveryObservation(state, authoritativeClosure) {
+  const first = state.arrivals.find(row => Number.isFinite(row.expectedArrival)
+    && boardingClockEvidence.includes(row.timeEvidence));
+  return {
+    nextAt: first ? (first.expectedArrival + APPLE_REFERENCE_UNIX_SECONDS) * 1000 : null,
+    staleAt: state.arrivals.length > 0
+      ? Math.round((state.staleAt + APPLE_REFERENCE_UNIX_SECONDS) * 1000) : null,
+    // Provider row IDs can vary even for unchanged data. Persist only an
+    // opaque digest of the visible boarding context, never another text copy.
+    context: first ? crypto.createHash('sha256').update(JSON.stringify([
+      first.destination, first.via, first.reportedPlatform, first.boardingContext?.direction,
+    ])).digest('hex') : null,
+    closed: authoritativeClosure,
+  };
+}
+
+function boardDeliveryPriority(before, after, now) {
+  if (!before || before.closed !== after.closed
+    || (before.nextAt === null) !== (after.nextAt === null)
+    || (Number.isFinite(before.staleAt) && before.staleAt <= now)
+    || (Number.isFinite(before.nextAt) && before.nextAt < now)) return '10';
+  const imminent = Math.min(before.nextAt ?? Infinity, after.nextAt ?? Infinity) <= now + 180000;
+  const boardingChanged = before.context !== after.context
+    || Math.abs(before.nextAt - after.nextAt) >= 60000;
+  return imminent && boardingChanged ? '10' : '5';
 }
 
 const stationArrivalReaders = new WeakMap();
@@ -948,10 +1033,10 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
   }
   // Prime all active records, including APNs-backoff records, before the first
   // URL admission. Record order/new registration cannot bypass a saved429 floor.
-  for (const floor of typeof store.stationArrivalAdmissionFloors === 'function' ? store.stationArrivalAdmissionFloors() : []) {
+  for (const floor of typeof store.stationArrivalAdmissionFloors === 'function' ? store.stationArrivalAdmissionFloors(now.getTime()) : []) {
     const url = new URL(`https://api.tfl.gov.uk/StopPoint/${floor.stationID}/Arrivals`);
     if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
-    arrivalReader.observeNotBefore(url, floor.notBefore);
+    arrivalReader.observeNotBefore(url, floor.notBefore, floor.rateLimitedUntil);
   }
   for (const record of liveRecords.filter((record) => record.contentStateContract === STATION_BOARD_CONTRACT)) {
     signal?.throwIfAborted();
@@ -979,12 +1064,20 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       cache = applyPublicationAuthority(cache, publicationAuthority);
       expectedPublicationGeneration = publicationGeneration(publicationAuthority);
       const contentState = buildStationBoardState(record, cache, effectiveNow.getTime());
-      const contentDigest = stationBoardContentDigest(contentState);
-      if (contentDigest !== record.lastBoardContentDigest) {
+      const contentDigest = stationBoardContentDigest(contentState, { dynamicScheduledCountdown: record.supportsRegularTimetable === true });
+      const displayUntil = Date.parse(record.initialRegularDisplayUntil || '');
+      const authoritativeClosure = regularReplacementAuthorized(cache, record, effectiveNow.getTime());
+      const delivery = boardDeliveryObservation(contentState, authoritativeClosure);
+      const holdInitial = !record.lastSuccessAt && displayUntil > effectiveNow.getTime() && delivery.nextAt === null
+        && !authoritativeClosure;
+      if (holdInitial) contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, displayUntil);
+      if (!holdInitial && contentDigest !== record.lastBoardContentDigest) {
         const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
         if (!current || registrationTuple(current) !== expectedTuple || publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;
-        await pushImpl(current, buildApnsPayload(contentState, effectiveNow), config, { signal });
-        await store.markPushed(record.activityID, record.environment, { emptyArrivals: contentState.arrivals.length === 0, contentState, contentDigest, expectedTuple, expectedPublicationGeneration }, effectiveNow);
+        const priority = boardDeliveryPriority(current.lastBoardDelivery, delivery, effectiveNow.getTime());
+        await pushImpl(current, buildApnsPayload(contentState, effectiveNow), config, { signal, priority });
+        await store.markPushed(record.activityID, record.environment, { emptyArrivals: contentState.arrivals.length === 0, contentState,
+          contentDigest, boardDelivery: delivery, expectedTuple, expectedPublicationGeneration }, effectiveNow);
         logger.info(`Live Activity station-board update pushed, arrivals ${contentState.arrivals.length}`);
       }
       const retainedRecord = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
@@ -1076,8 +1169,11 @@ export function getStationArrivalsRefreshDelayMs(cache, now = new Date(), worker
 
 export function getRolloverDelayMs(contentState, now = new Date(), workerIntervalMs = 90_000) {
   if (contentState.contentStateContract === STATION_BOARD_CONTRACT) {
-    const delay = contentState.nextBoardBoundaryAt - now.getTime();
-    return Number.isFinite(contentState.nextBoardBoundaryAt) && delay > 0 && delay < workerIntervalMs ? delay : null;
+    if (!Number.isFinite(contentState.nextBoardBoundaryAt)) return null;
+    // A push can take us past this boundary between building the snapshot
+    // and arming its rollover. Recompute immediately from the retained source.
+    const delay = Math.max(1, contentState.nextBoardBoundaryAt - now.getTime());
+    return delay < workerIntervalMs ? delay : null;
   }
   const firstExpectedArrival = contentState.arrivals?.[0]?.expectedArrival;
   if (typeof firstExpectedArrival !== 'number') {

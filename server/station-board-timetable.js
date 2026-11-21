@@ -315,3 +315,30 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
   for(const e of events){e.receivedAt=observedAt;e.expiresAt=expiresAt;}
   return {observedAt,expiresAt,events,qualificationOrigin:'server',evidence:{publication:{url:URL,sha256:proof.publication.sha256,timezone:'Europe/London',operatingStartDate:entry.operatingStartDate,operatingEndDate:entry.operatingEndDate,holidayCoverageStart:proof.holidayCoverageStart,holidayCoverageEnd:proof.holidayCoverageEnd,nonOperationBankHolidays:true},publicationProofIdentity:{...asset.identity},independentPublicationObservedAt:head.observedAt,...(entry.directionalDefinitions===undefined?{sourceSHA256:rawHashes[0].sha256}:{publicationDirections:sets.map(s=>s.direction)}),rawTimetableResponses:rawHashes,rows:rowEvidence,qualification}};
 }
+
+// Ordinary profiles provide scheduled clocks only for a proved origin. The
+// selected stop and destination must be supported by the same response.
+const ordinaryWeekdays = new Map([
+  ['Monday', [2]], ['Mondays', [2]], ['Tuesday', [3]], ['Tuesdays', [3]],
+  ['Wednesday', [4]], ['Wednesdays', [4]], ['Thursday', [5]], ['Thursdays', [5]],
+  ['Friday', [6]], ['Fridays', [6]], ['Saturday', [7]], ['Saturdays', [7]],
+  ['Sunday', [1]], ['Sundays', [1]], ['Monday - Thursday', [2, 3, 4, 5]],
+  ['Monday - Friday', [2, 3, 4, 5, 6]], ['Saturday (also Good Friday)', [7]],
+  ['Saturdays and Public Holidays', [7]],
+]);
+
+export function regularTimetableJourneys(response, record, originRule, serviceDate, { previousDay = false } = {}) {
+  const { stationID, lineID } = record;
+  responseShape(response);
+  if (response.lineId.toLowerCase() !== lineID || response.timetable.departureStopId.toUpperCase() !== stationID) fail('wrongBoard');
+  const names = new Set(response.timetable.routes.flatMap(route => route.schedules.map(schedule => schedule.name)));
+  if (!names.size || [...names].some(name => !ordinaryWeekdays.has(name))) fail('unsupportedCalendar');
+  const active = [...names].filter(name => ordinaryWeekdays.get(name).includes(weekday(serviceDate)));
+  if (previousDay && active.length === 0) return [];
+  if (active.length !== 1) fail('unsupportedCalendar');
+  return profileJourneys(response, active[0]).filter(row => {
+    const firstCall = row.path.find(stop => stop !== stationID);
+    return firstCall && (originRule.physicalEnd || originRule.exclusiveFirstCalls.includes(firstCall))
+      && (row.path.at(-1) !== stationID || lineID === 'circle') && row.path.every(stop => validBoard(stop, lineID));
+  });
+}

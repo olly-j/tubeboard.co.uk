@@ -2,7 +2,7 @@ import { applyPublicationAuthority } from './station-board-publication.js';
 import { readPublicationAsset } from './timetable-publication-resource.js';
 import crypto from 'node:crypto';
 import { parseBoundedJSON } from './bounded-json.js';
-import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation } from './station-board-timetable.js';
+import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation, regularTimetableJourneys, validatedPublicationProof } from './station-board-timetable.js';
 import fs from 'node:fs';
 import { retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability, containsServiceClosed, knownNonClosure, activeClosure, expiredBarrier, completePlannedApplicability } from './station-board-availability.js';
 import { fetchJsonResponse } from './notification-transport.js';
@@ -11,6 +11,7 @@ export const STATION_BOARD_CONTRACT = 'station-board-v2';
 const catalogue = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-catalogue-v2.json', import.meta.url)));
 export const STATION_BOARD_LINES = new Map(catalogue.lines.map((line) => [line.lineID, line]));
 export const STATION_BOARD_STATIONS = new Map(catalogue.stations.map((station) => [station.stationID, station]));
+const regularOrigins = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-regular-origins-v1.json', import.meta.url))).lines;
 const APPLE_EPOCH = 978307200000;
 const key = (value) => String(value || '').toLowerCase().replace(/ (underground|rail|dlr) station/g, '').replace(/\s*\([^)]*\)/g, '').replace(/\s+(station|terminus)$/, '').trim().replace(/\s+/g, ' ');
 const hash = (value) => crypto.createHash('sha256').update(canonical(value)).digest('hex');
@@ -24,13 +25,31 @@ const isoClock = (value) => {
 };
 const swift = (ms) => (ms - APPLE_EPOCH) / 1000;
 const sourceKey = (source) => ['timetable', 'unified-timetable'].includes(source) ? 'timetable' : source;
-const plannedSource = (event) => event.kind === 'outgoingDeparture' && event.timeEvidence === 'scheduledDeparture' && ['timetable', 'journey-planner', 'rail-departures'].includes(sourceKey(event.sourceID)) ? sourceKey(event.sourceID) : null;
+const plannedSource = (event) => event.kind === 'outgoingDeparture' && event.timeEvidence === 'scheduledDeparture' && ['timetable', 'journey-planner', 'rail-departures', 'regular-timetable'].includes(sourceKey(event.sourceID)) ? sourceKey(event.sourceID) : null;
 const planned = (event) => ['timetable', 'journey-planner'].includes(sourceKey(event.sourceID)) || (event.kind === 'outgoingDeparture' && event.timeEvidence === 'scheduledDeparture');
 export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
   return JSON.stringify(value);
 }
+export function regularOriginRule(record) {
+  const line = regularOrigins[record.lineID];
+  return { physicalEnd: line?.physicalEnds.includes(record.stationID) === true,
+    exclusiveFirstCalls: line?.exclusiveFirstCalls[record.stationID] || [] };
+}
+
+export function supportsRegularOrigin(record) {
+  const rule = regularOriginRule(record);
+  return record.supportsRegularTimetable === true && record.selectionMode === 'allPlatforms'
+    && !record.platformID && (rule.physicalEnd || rule.exclusiveFirstCalls.length > 0);
+}
+
+function hasExclusiveStartingCall(event, rule) {
+  const route = Array.isArray(event.routeStationIDs) ? event.routeStationIDs : [];
+  const first = event.nextScheduledStopID ?? route.find(stop => stop !== event.stationID);
+  return rule.exclusiveFirstCalls.includes(first);
+}
+
 export function validBoard(stationID, lineID) { return STATION_BOARD_STATIONS.get(stationID)?.lineIDs.includes(lineID) === true; }
 function lineStations(lineID) { return [...STATION_BOARD_STATIONS.values()].filter((station) => station.lineIDs.includes(lineID)); }
 function named(name, lineID) {
@@ -93,54 +112,58 @@ function retryAfterDelay(value, now) {
 export class StationArrivalReader {
   #entries = new Map();
 
-  observeNotBefore(url, notBefore) {
+  observeNotBefore(url, notBefore, rateLimitedUntil = 0) {
     if (!Number.isFinite(notBefore) || notBefore <= 0) return;
     const key = `station-arrivals:${url.href}`;
-    const entry = this.#entries.get(key) || { nextAttemptAt: 0, promise: null };
+    const entry = this.#entries.get(key) || { nextAttemptAt: 0, rateLimitedUntil: 0, promise: null };
     entry.nextAttemptAt = Math.max(entry.nextAttemptAt, notBefore);
+    if (Number.isFinite(rateLimitedUntil)) entry.rateLimitedUntil = Math.max(entry.rateLimitedUntil, rateLimitedUntil);
     this.#entries.set(key, entry);
   }
 
-  read(url, { fetchImpl = fetch, signal, clock = () => Date.now(), publicResponses = new Map(), notBefore = 0 } = {}) {
+  read(url, { fetchImpl = fetch, signal, clock = () => Date.now(), publicResponses = new Map(), notBefore = 0, rateLimitedUntil = 0 } = {}) {
     signal?.throwIfAborted();
     const key = `station-arrivals:${url.href}`;
     const now = clock();
     for (const [other, entry] of this.#entries) if (!entry.promise && entry.nextAttemptAt <= now) this.#entries.delete(other);
-    let entry = this.#entries.get(key);
-    if (!entry) { entry = { nextAttemptAt: 0, promise: null }; this.#entries.set(key, entry); }
     // A persisted cooldown is source/URL authority, including on a deferred
     // read or a second waiter joining already-running work after a restart.
-    entry.nextAttemptAt = Math.max(entry.nextAttemptAt, Number.isFinite(notBefore) ? notBefore : 0);
+    const restoredFloor = Math.max(Number.isFinite(notBefore) ? notBefore : 0, Number.isFinite(rateLimitedUntil) ? rateLimitedUntil : 0);
+    this.observeNotBefore(url, restoredFloor, rateLimitedUntil);
+    const entry = this.#entries.get(key) || { nextAttemptAt: 0, rateLimitedUntil: 0, promise: null };
+    this.#entries.set(key, entry);
+    const withAdmission = response => ({
+      ...response, nextAttemptAt: entry.nextAttemptAt,
+      ...(entry.rateLimitedUntil > now ? { rateLimitedUntil: entry.rateLimitedUntil } : {}),
+    });
     const admittedResult = promise => promise.then(response => {
       signal?.throwIfAborted();
       entry.nextAttemptAt = Math.max(entry.nextAttemptAt, response.nextAttemptAt || 0);
-      return { ...response, nextAttemptAt: entry.nextAttemptAt };
+      entry.rateLimitedUntil = Math.max(entry.rateLimitedUntil, response.rateLimitedUntil || 0);
+      return withAdmission(response);
     });
     if (publicResponses.has(key)) return admittedResult(publicResponses.get(key));
     if (entry.promise) return admittedResult(entry.promise);
     if (entry.nextAttemptAt > now) {
       // One cycle has one URL admission outcome, even if slower supplemental
       // work crosses the floor before its later registrations are visited.
-      const deferred = Promise.resolve({ ok: false, deferred: true, completedAt: now, nextAttemptAt: entry.nextAttemptAt });
+      const deferred = Promise.resolve(withAdmission({ ok: false, deferred: true, completedAt: now }));
       publicResponses.set(key, deferred);
       return deferred;
     }
     entry.nextAttemptAt = now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS;
     entry.promise = (async () => {
-      let retryAfter = null;
-      const transport = async (input, options) => {
-        const response = await fetchImpl(input, options);
-        retryAfter = response.headers?.get?.('retry-after') ?? null;
-        return response;
-      };
       try {
-        let response = await fetchJsonResponse(url, transport, { signal, includeHeaders: true });
-        if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, transport, { signal, includeHeaders: true });
+        let response = await fetchJsonResponse(url, fetchImpl, { signal, includeHeaders: true });
+        if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, fetchImpl, { signal, includeHeaders: true });
         const completedAt = clock();
-        if (response.status === 429) entry.nextAttemptAt = Math.max(entry.nextAttemptAt, completedAt + Math.max(300000, retryAfterDelay(retryAfter, completedAt)));
+        if (response.status === 429) {
+          entry.rateLimitedUntil = Math.max(entry.rateLimitedUntil, completedAt + Math.max(300000, retryAfterDelay(response.retryAfter, completedAt)));
+          entry.nextAttemptAt = Math.max(entry.nextAttemptAt, entry.rateLimitedUntil);
+        }
         else if (response.status >= 500) entry.nextAttemptAt = Math.max(entry.nextAttemptAt, completedAt + 120000);
         if (response.ok && Buffer.byteLength(JSON.stringify(response.value)) > 2000000) response = { ok: false };
-        return immutable(structuredClone({ ...response, completedAt, nextAttemptAt: entry.nextAttemptAt }));
+        return immutable(structuredClone(withAdmission({ ...response, completedAt })));
       } catch (error) {
         signal?.throwIfAborted();
         entry.nextAttemptAt = Math.max(entry.nextAttemptAt, clock() + 120000);
@@ -168,7 +191,8 @@ export async function refreshStationArrivals(record, previous, config, fetchImpl
   if (previous.arrivalsRefreshAt > now) return mergeContexts(previous, {}, record, now);
   const url = new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`);
   if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
-  const response = await arrivalReader.read(url, { fetchImpl, signal, clock, publicResponses, notBefore: previous.arrivalsNotBefore });
+  const response = await arrivalReader.read(url, { fetchImpl, signal, clock, publicResponses,
+    notBefore: previous.arrivalsNotBefore, rateLimitedUntil: previous.arrivalsRateLimitedUntil });
   return mergeStationArrivalRead(record, previous, response, clock(), config.workerIntervalMs);
 }
 
@@ -183,7 +207,7 @@ function mergeStationArrivalRead(record, previous, response, now, workerInterval
       sources['station-arrivals'] = { observedAt: events.length ? Math.max(...events.map(e => e.receivedAt)) : observation.observedAt, expiresAt: observation?.expiresAt, events };
     }
   }
-  const merged = mergeContexts(previous, { sources }, record, now);
+  const merged = mergeContexts(previous, { sources, arrivalsRateLimitedUntil: response.rateLimitedUntil }, record, now);
   const notBefore = Math.max(previous.arrivalsNotBefore || 0, response.nextAttemptAt || now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS);
   return { ...merged, arrivalsNotBefore: notBefore, arrivalsRefreshAt: nextStationArrivalRefresh(merged, now, notBefore, workerIntervalMs) };
 }
@@ -345,20 +369,35 @@ export function parseJourney(root, record, headers, requestedAt, now, actualRequ
     const prior = seen.get(service) || [];
     if (prior.some((previous) => previous.slice(0, Math.min(previous.length, calls.length)).every((id, index) => id === calls[index]))) continue;
     seen.set(service, [...prior, calls]);
-    events.push(event(record, 'journey-planner', { id: `journey:${hash([service, calls])}`, kind: 'outgoingDeparture', destination: destination.stationName, destinationStationID: destination.stationID, time: departure, timeEvidence: 'scheduledDeparture', platform: null, via: viaStation?.stationName || null, direction: null, providerDirection: text(option.direction) }, observation));
+    events.push(event(record, 'journey-planner', { id: `journey:${hash([service, calls])}`, kind: 'outgoingDeparture', destination: destination.stationName, destinationStationID: destination.stationID, time: departure, timeEvidence: 'scheduledDeparture', platform: null, via: viaStation?.stationName || null, direction: null, providerDirection: text(option.direction), nextScheduledStopID: calls.find(call => call !== record.stationID) || null }, observation));
   }
   return events;
 }
 export function usable(event, record, now) {
   if (!objectRow(event)) return false;
-  const knownSource = ['station-arrivals', 'unified-arrivals', 'rail-departures', 'at-station-destination', 'timetable', 'unified-timetable', 'journey-planner'].includes(event.sourceID);
+  const knownSource = ['station-arrivals', 'unified-arrivals', 'rail-departures', 'at-station-destination', 'timetable', 'unified-timetable', 'journey-planner', 'regular-timetable'].includes(event.sourceID);
   const knownKind = ['outgoingDeparture', 'outgoingDestinationOnly', 'incomingArrival', 'throughArrival', 'unverifiedArrival'].includes(event.kind);
   if (typeof event.id !== 'string' || !knownSource || !knownKind || (event.kind === 'outgoingDeparture' && !['scheduledDeparture', 'predictedDeparture'].includes(event.timeEvidence)) || (['throughArrival', 'incomingArrival', 'unverifiedArrival'].includes(event.kind) && event.timeEvidence !== 'arrivalPrediction' && event.timeEvidence != null)) return false;
   return event.stationID === record.stationID && event.lineID === record.lineID && Number.isFinite(event.receivedAt) && event.receivedAt <= now && Number.isFinite(event.expiresAt) && event.expiresAt > now && typeof event.destination === 'string'
     && (event.kind === 'outgoingDestinationOnly' ? event.time == null && event.timeEvidence == null : ['incomingArrival', 'throughArrival'].includes(event.kind) && event.time == null ? event.timeEvidence == null : Number.isFinite(event.time) && event.time >= now && ['arrivalPrediction', 'scheduledDeparture', 'predictedDeparture'].includes(event.timeEvidence));
 }
+function retainedRejection(rejection, record, now) {
+  if (!rejection || rejection.stationID !== record.stationID || rejection.lineID !== record.lineID
+    || !Number.isFinite(rejection.observedAt) || rejection.observedAt > now) return false;
+  if (rejection.reason === 'regularSourceWithdrawn' && rejection.regularWithdrawalUntil !== undefined) {
+    const until = rejection.regularWithdrawalUntil;
+    return Number.isFinite(until) && until > rejection.observedAt
+      && until - rejection.observedAt <= 26 * 3600000 && now <= until;
+  }
+  return rejection.observedAt + 600000 > now;
+}
 function rejectionInvalidates(rejection, event, record, now) {
-  return rejection.stationID === record.stationID && rejection.lineID === record.lineID && rejection.observedAt <= now && rejection.observedAt + 600000 > now && event.receivedAt <= rejection.observedAt
+  if (!retainedRejection(rejection, record, now)) return false;
+  if (rejection.reason === 'regularSourceWithdrawn') {
+    return event.sourceID === 'regular-timetable'
+      && (Number.isFinite(rejection.regularWithdrawalUntil) || event.receivedAt <= rejection.observedAt);
+  }
+  return event.receivedAt <= rejection.observedAt
     && (['serviceUnavailable', 'stationDisrupted'].includes(rejection.reason) ? planned(event) : sourceKey(event.sourceID) === 'timetable');
 }
 function mergeStationArrivalSchedule(previous, incoming, sources) {
@@ -375,9 +414,16 @@ function mergeStationArrivalSchedule(previous, incoming, sources) {
 }
 
 export function mergeContexts(previous = {}, incoming = {}, record, now) {
-  const rejections = [...(previous.rejections || []), ...(incoming.rejections || [])].filter((r) => r && ['publicationChanged', 'timetableChanged', 'unsupportedCalendar', 'serviceUnavailable', 'stationDisrupted'].includes(r.reason) && r.stationID === record.stationID && r.lineID === record.lineID && Number.isFinite(r.observedAt) && r.observedAt <= now && r.observedAt + 600000 > now);
+  const rejections = [...(previous.rejections || []), ...(incoming.rejections || [])].filter(r =>
+    retainedRejection(r, record, now) && ['publicationChanged', 'timetableChanged', 'unsupportedCalendar',
+      'serviceUnavailable', 'stationDisrupted', 'regularSourceWithdrawn'].includes(r.reason));
   const markerMap = new Map();
-  for (const marker of rejections) { const scope = ['stationDisrupted', 'serviceUnavailable'].includes(marker.reason) ? 'planned-service' : 'publication'; if ((markerMap.get(scope)?.observedAt ?? -Infinity) < marker.observedAt) markerMap.set(scope, marker); }
+  for (const marker of rejections) {
+    const scope = marker.reason === 'regularSourceWithdrawn' ? 'regular'
+      : ['stationDisrupted', 'serviceUnavailable'].includes(marker.reason) ? 'planned-service' : 'publication';
+    const rank = candidate => candidate?.regularWithdrawalUntil ?? candidate?.observedAt ?? -Infinity;
+    if (rank(markerMap.get(scope)) < rank(marker)) markerMap.set(scope, marker);
+  }
   const markers = [...markerMap.values()], sources = {};
   const availabilityProofs = retainAvailability(previous, incoming, record, now);
   const closureSources = legacyClosureSources(availabilityProofs);
@@ -398,7 +444,9 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       if (!old || context.observedAt > old.observedAt) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }
-  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null };
+  const ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, incoming.ordinaryNotBefore || 0);
+  const arrivalsRateLimitedUntil = Math.max(previous.arrivalsRateLimitedUntil || 0, incoming.arrivalsRateLimitedUntil || 0);
+  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null, ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}) };
 }
 function selectionMatches(event, record) {
   if (record.selectionMode !== 'platform' && !record.platformID) return true;
@@ -437,6 +485,23 @@ export function selectEvents(cache, record, now, { retainingMaskedPlans = false,
   const proofs = retainAvailability(cache, {}, record, now);
   let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && proofs.some((p) => (!retainingMaskedPlans || p.plannedUnavailable === true && p.scheduledClockOnly !== true) && blocksScheduled(p, e.time, now))) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
   if (!retainingPlannedAlternatives && events.some((e) => plannedSource(e) === 'timetable')) events = events.filter((e) => plannedSource(e) !== 'journey-planner');
+  if (supportsRegularOrigin(record)) {
+    const rule = regularOriginRule(record);
+    if (!rule.physicalEnd) {
+      // A dated itinerary can board a through train at a mixed station.
+      // Keep that fact in its source context. Only a proved first call can
+      // displace the independent starting path on an origin-aware board.
+      events = events.filter(e => e.kind !== 'outgoingDeparture' || e.timeEvidence !== 'scheduledDeparture'
+        || e.sourceID === 'regular-timetable' || hasExclusiveStartingCall(e, rule));
+    }
+  }
+  const regularAnswers = events.filter(e => e.sourceID !== 'regular-timetable' && ['outgoingDeparture', 'throughArrival'].includes(e.kind)
+    && Number.isFinite(e.time) && e.time <= now + 3600000);
+  events = events.filter(e => e.sourceID !== 'regular-timetable' || (record.supportsRegularTimetable === true
+    && !regularAnswers.some(other =>
+      (!retainingPlannedAlternatives || !plannedSource(other) || other.expiresAt >= e.expiresAt)
+      && (!other.destinationStationID || other.destinationStationID === e.destinationStationID)
+      && (!e.via || !other.via || key(e.via) === key(other.via)))));
   const rail = events.filter((e) => e.sourceID === 'rail-departures' && e.kind === 'outgoingDeparture' && e.timeEvidence === 'predictedDeparture');
   events = events.filter((event) => retainsThroughArrival(event, rail));
   const seen = new Set(); events = events.filter((e) => { const signature = canonical(e); if (seen.has(signature)) return false; seen.add(signature); return true; });
@@ -456,11 +521,17 @@ export function countdown(event, now) {
 }
 export function nextBoundary(cache, record, now) {
   const boundaries = availabilityBoundaries(retainAvailability(cache, {}, record, now), now);
+  for (const marker of cache.rejections || []) {
+    if (marker.reason === 'regularSourceWithdrawn' && retainedRejection(marker, record, now)
+      && Number.isFinite(marker.regularWithdrawalUntil)) boundaries.push(marker.regularWithdrawalUntil + 1);
+  }
   if (cache.status?.expiresAt > now) boundaries.push(cache.status.expiresAt);
   for (const event of Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now))) {
     boundaries.push(event.expiresAt);
     if (Number.isFinite(event.time)) {
       boundaries.push(event.time + 1);
+      // Capable clients render the original countdown clock directly.
+      if (record.supportsRegularTimetable === true && planned(event)) continue;
       const seconds = Math.ceil((event.time - now) / 1000);
       if (seconds >= 60) boundaries.push(event.time - Math.floor(seconds / 60) * 60000 + 1000);
     }
@@ -472,7 +543,8 @@ export function compactPlanningSource(events) {
   const clocks = new Map();
   for (const e of events) { const source = plannedSource(e); if (source) clocks.set(source, Math.min(clocks.get(source) ?? Infinity, e.time)); }
   const primary = clocks.has('timetable') ? 'timetable' : clocks.has('journey-planner') ? 'journey-planner' : null;
-  return [...clocks.keys()].filter((s) => !['timetable', 'journey-planner'].includes(s) || s === primary).sort((a,b) => clocks.get(a) - clocks.get(b) || Number(b === primary) - Number(a === primary) || a.localeCompare(b))[0] || null;
+  return [...clocks.keys()].filter((s) => (s !== 'regular-timetable' || clocks.size === 1)
+    && (!['timetable', 'journey-planner'].includes(s) || s === primary)).sort((a,b) => clocks.get(a) - clocks.get(b) || Number(b === primary) - Number(a === primary) || a.localeCompare(b))[0] || null;
 }
 export function compactEvents(events) {
   const source = compactPlanningSource(events);
@@ -505,27 +577,56 @@ export function buildStationBoardState(record, cache, now) {
   } else rows = compactEvents(rows.filter(eligible)).slice(0, 3);
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
-  const wireRow = (e) => ({ id: e.id, destination: e.destination, expectedArrival: Number.isFinite(e.time) ? swift(e.time) : null, countdownText: countdown(e, now), timeEvidence: evidence[e.kind] || (e.timeEvidence === 'predictedDeparture' ? 'estimatedDeparture' : 'scheduledDeparture'), via: e.via || null, reportedPlatform: e.platform || null, expiresAt: swift(e.expiresAt), isCached: false, ...(plannedSource(e) && (capable || plannedSource(e) !== 'rail-departures') ? { plannedSourceID: plannedSource(e) } : {}) });
+  const origin = regularOriginRule(record);
+  const wireRow = (e) => ({ ...(record.supportsRegularTimetable === true ? {
+    boardingContext: { stationID: e.stationID, lineID: e.lineID, platform: e.platform || null,
+      direction: e.direction || null, destinationStationID: e.destinationStationID || null, via: e.via || null },
+    ...(e.sourceID === 'regular-timetable' || e.kind === 'outgoingDeparture'
+      && e.timeEvidence === 'scheduledDeparture' && hasExclusiveStartingCall(e, origin)
+      ? { originQualified: true } : {}),
+  } : {}), id: e.id, destination: e.destination, expectedArrival: Number.isFinite(e.time) ? swift(e.time) : null, countdownText: countdown(e, now), timeEvidence: evidence[e.kind] || (e.timeEvidence === 'predictedDeparture' ? 'estimatedDeparture' : 'scheduledDeparture'), via: e.via || null, reportedPlatform: e.platform || null, expiresAt: swift(e.expiresAt), isCached: false, ...(plannedSource(e) && (capable || plannedSource(e) !== 'rail-departures') ? { plannedSourceID: plannedSource(e) } : {}) });
+  const observedAt = () => {
+    // Derive the visible board clock after selection and the compact limit.
+    // Masked alternatives, status and a cache-only dispatch cannot renew it.
+    const clocks = compactEvents(rows.filter(eligible)).slice(0, 3)
+      .filter((row) => row.kind !== 'unverifiedArrival')
+      .map((row) => row.receivedAt).filter(Number.isFinite);
+    const explicitEmpty = cache.sources?.['station-arrivals'];
+    if (!clocks.length && explicitEmpty?.events?.length === 0 && explicitEmpty.expiresAt > now
+      && Number.isFinite(explicitEmpty.observedAt) && explicitEmpty.observedAt <= now) clocks.push(explicitEmpty.observedAt);
+    const prior = [record.lastBoardObservedAt, Date.parse(record.activityStartedAt || ''),
+      Date.parse(record.createdAt || ''), Date.parse(record.tokenUpdatedAt || '')]
+      .find(value => Number.isFinite(value) && value <= now);
+    // A worker tick with no source observation must not create a new Updated time.
+    return swift(clocks.length ? Math.max(...clocks) : (prior ?? now));
+  };
   let state = { contentStateContract: STATION_BOARD_CONTRACT, stationName: STATION_BOARD_STATIONS.get(record.stationID)?.stationName || record.stationID, lineName: record.lineID === 'dlr' ? 'DLR' : record.lineID === 'elizabeth' ? 'Elizabeth' : record.lineID === 'hammersmith-city' ? 'Hammersmith & City' : record.lineID === 'waterloo-city' ? 'Waterloo & City' : record.lineID.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' '), platform: record.selectionMode === 'platform' || record.platformID ? record.platformHeading || record.platformLabel || record.platformID : 'All platforms',
     arrivals: rows.map(wireRow),
-    status: status?.label || 'Status unavailable', statusReason: status?.reason || null, isDisrupted: status?.isDisrupted || false, updatedAt: swift(now),
+    status: status?.label || 'Status unavailable', statusReason: status?.reason || null, isDisrupted: status?.isDisrupted || false, updatedAt: observedAt(),
     ...(capable && proofs.length ? { plannedAvailability: { stationID: record.stationID, lineID: record.lineID, proofs: wireAvailability(proofs, swift) } } : {}) };
   const staleAt = () => {
     const deadlines = rows.flatMap((e) => ['outgoingDeparture', 'incomingArrival', 'throughArrival'].includes(e.kind) && Number.isFinite(e.time) ? [e.expiresAt, e.time + 1] : [e.expiresAt]);
     if (rows.some(planned)) deadlines.push(...availabilityBoundaries(proofs, now));
-    return swift(deadlines.length ? Math.min(...deadlines) : now);
+    return deadlines.length ? swift(Math.min(...deadlines)) : state.updatedAt;
   };
   state.staleAt = staleAt();
   state.nextBoardBoundaryAt = nextBoundary(cache, record, now);
   if (Buffer.byteLength(JSON.stringify(state)) > 3500) {
     rows = originalRows.filter((e) => !planned(e)).slice(0, 3);
     state.arrivals = rows.map(wireRow); delete state.plannedAvailability;
+    state.updatedAt = observedAt();
     state.staleAt = staleAt();
   }
   // APNs must never receive an oversized typed update, including provider text.
   const encoded = () => Buffer.byteLength(JSON.stringify({ aps: { timestamp: Math.floor(now / 1000), event: 'update', 'content-state': Object.fromEntries(Object.entries(state).filter(([k]) => k !== 'nextBoardBoundaryAt')), 'stale-date': Math.floor((state.staleAt * 1000 + APPLE_EPOCH) / 1000) } }));
   if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) { state.statusReason = null; state.status = 'Status unavailable'; }
-  if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) { state.arrivals = []; delete state.plannedAvailability; state.status = 'Status unavailable'; state.statusReason = null; state.staleAt = swift(now); }
+  if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) {
+    rows = [];
+    state.arrivals = []; delete state.plannedAvailability;
+    state.status = 'Status unavailable'; state.statusReason = null;
+    state.updatedAt = observedAt();
+    state.staleAt = staleAt();
+  }
   return state;
 }
 
@@ -537,6 +638,38 @@ function immutable(value) {
   return value;
 }
 
+function datedWithdrawal(response, record, departAt, now) {
+  const body = response.value;
+  const localRequestTime = londonLocal(departAt).slice(0, 16) + ':00';
+  if (!response.ok || body?.searchCriteria?.dateTimeType !== 'Departing'
+    || body.searchCriteria.dateTime !== localRequestTime || !Array.isArray(body.journeys)
+    || !Number.isInteger(body.recommendedMaxAgeMinutes) || body.recommendedMaxAgeMinutes <= 0
+    || typeof response.headers?.age !== 'string' || !/^\d+$/.test(response.headers.age.trim())) return null;
+  const observation = httpObservation(response.headers, response.completedAt,
+    Math.min(body.recommendedMaxAgeMinutes, 2) * 60000, { cacheRequired: true });
+  if (!observation || observation.expiresAt <= now) return null;
+  const cutoff = midnight(departAt);
+  const cancelled = body.journeys.flatMap(item => {
+    const leg = Array.isArray(item?.legs) ? item.legs.find(leg => leg?.mode?.id !== 'walking') : null;
+    if (leg?.departurePoint?.naptanId !== record.stationID || leg.routeOptions?.length !== 1
+      || leg.routeOptions[0]?.lineIdentifier?.id !== record.lineID
+      || !(['isCancelled', 'isCanceled', 'cancelled', 'canceled'].some(field => leg[field] === true)
+        || ['status', 'serviceStatus'].some(field => ['cancelled', 'canceled', 'withdrawn'].includes(String(leg[field] || '').toLowerCase())))) return [];
+    const clock = londonClock(leg.scheduledDepartureTime);
+    if (!Number.isFinite(clock)) return [Math.min(observation.expiresAt, cutoff)];
+    return clock > now && clock < cutoff ? [clock] : [];
+  });
+  const regularWithdrawalUntil = Math.max(...cancelled);
+  return regularWithdrawalUntil > now ? { ...observation, regularWithdrawalUntil } : null;
+}
+
+export function regularReplacementAuthorized(cache, record, now) {
+  const proof = retainAvailability(cache, {}, record, now).some(p =>
+    p.scheduledClockOnly !== true && (activeClosure(p, now) || p.plannedUnavailable === true && p.observedAt <= now && p.expiresAt > now));
+  return proof || (cache.rejections || []).some(r => r.reason === 'regularSourceWithdrawn'
+    && retainedRejection(r, record, now) && (r.regularWithdrawalUntil ?? r.expiresAt) >= now);
+}
+
 export async function refreshStationBoard(record, previous, config, fetchImpl, now, signal, clock = () => now, publicResponses = new Map(), publicationAuthorityStore = null, arrivalReader = null) {
   signal?.throwIfAborted();
   if (previous.nextRefreshAt > now) return mergeContexts(previous, {}, record, now);
@@ -544,7 +677,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   // Legacy per-record corroboration must inspect its original context even when
   // persistent HEAD authority removes that context before other source awaits.
   const legacyPublicationContext = record.timetablePublicationAuthorityVersion === 1 ? null : previous.sources?.timetable;
-  const request = (inputURL, method = 'GET', boundedTT = false, lineStatusReadback = false) => {
+  const request = (inputURL, method = 'GET', boundedTT = false, lineStatusReadback = false, ordinary = false) => {
     const url = new URL(inputURL);
     if (config.tflAppKey && url.hostname === 'api.tfl.gov.uk') url.searchParams.set('app_key', config.tflAppKey);
     const requestKey = `${method}:${url.href}`;
@@ -555,10 +688,10 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
         try {
           // Match the APP's official publication/TT/Status readback: one UUID belongs
           // to this canonical shared request, not to each consumer or retry.
-          if (boundedTT || lineStatusReadback || method === 'HEAD' && url.href === 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip') url.searchParams.set('tb085', crypto.randomUUID());
+          if (boundedTT && !ordinary || lineStatusReadback || method === 'HEAD' && url.href === 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip') url.searchParams.set('tb085', crypto.randomUUID());
           const options = { signal, includeHeaders: true, method, ...(boundedTT ? { bodyLimitBytes: 2000000, decodeJSON: bytes => parseBoundedJSON(bytes) } : {}) };
           let response = await fetchJsonResponse(url, fetchImpl, options);
-          if (response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, fetchImpl, options);
+          if (!ordinary && response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, fetchImpl, options);
           const completedAt = clock();
           if (response.ok && Buffer.byteLength(JSON.stringify(response.value)) > 2000000) return immutable({ ok: false, completedAt });
           return immutable(structuredClone({ ...response, completedAt }));
@@ -610,7 +743,8 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   const arrivalsURL = new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`);
   if (config.tflAppKey) arrivalsURL.searchParams.set('app_key', config.tflAppKey);
   const arrivalTask = arrivalReader
-    ? arrivalReader.read(arrivalsURL, { fetchImpl, signal, clock, publicResponses, notBefore: previous.arrivalsNotBefore })
+    ? arrivalReader.read(arrivalsURL, { fetchImpl, signal, clock, publicResponses,
+      notBefore: previous.arrivalsNotBefore, rateLimitedUntil: previous.arrivalsRateLimitedUntil })
     : request(arrivalsURL).catch(() => ({ ok: false }));
   const railTask = rail ? request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/ArrivalDepartures?lineIds=${record.lineID}`)).catch(() => ({ ok: false })) : Promise.resolve({ ok: false });
   const [service, station] = await Promise.all([
@@ -618,7 +752,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Disruption?getFamily=true&includeRouteBlockedStops=true&flattenResponse=true`))
   ]);
   const authority = { mode: STATION_BOARD_LINES.get(record.lineID)?.mode, stationName: (id) => validBoard(id, record.lineID) ? STATION_BOARD_STATIONS.get(id)?.stationName : null, stationLines: id => STATION_BOARD_STATIONS.get(id)?.lineIDs || [], lineMode: line => STATION_BOARD_LINES.get(line)?.mode, isRailLine: line => STATION_BOARD_LINES.get(line)?.qualifiedRailDepartureSource === true };
-  const is20 = service.ok && containsServiceClosed(service.value);
+  const is20 = service.ok && containsServiceClosed(service.value, record.lineID);
   const serviceObservation = service.ok && (!is20 || typeof service.headers?.age === 'string' && service.headers.age.trim().length > 0) ? httpObservation(service.headers, service.completedAt, 120000, { futureSkew: is20 ? 0 : 5000 }) : null;
   const serviceProofs = service.ok ? qualifyAvailability(service.value, record, 'lineStatus', serviceObservation, service.completedAt, londonClock, authority) : [];
   const stationProofs = station.ok ? qualifyAvailability(station.value, record, 'stationDisruptions', httpObservation(station.headers, station.completedAt, 120000), station.completedAt, londonClock) : [];
@@ -676,6 +810,84 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
       }
     }
   }
+  const originRule = regularOriginRule(record);
+  const ordinaryBoard = supportsRegularOrigin(record);
+  const withdrawal = ordinaryBoard ? datedWithdrawal(journey, record, journeyDepartAt, applicabilityAt) : null;
+  const currentProofs = retainAvailability(previous, { availabilityProofs }, record, applicabilityAt);
+  // A station-family response can describe closures on other modes and name
+  // this line as a diversion. Only qualified controls for the selected board
+  // can block its ordinary timetable.
+  const explicitlyClosed = unknown20 && serviceObservation?.expiresAt > applicabilityAt;
+  const hasDatedWithdrawal = (previous.rejections || []).some(r => r.reason === 'regularSourceWithdrawn'
+    && Number.isFinite(r.regularWithdrawalUntil) && retainedRejection(r, record, applicabilityAt));
+  const blockedOrdinary = Boolean(withdrawal) || hasDatedWithdrawal || explicitlyClosed
+    || currentProofs.some(p => blocksScheduled(p, applicabilityAt, applicabilityAt));
+  const rateLimited = [service, station, journey, arrivals].filter(response => response.status === 429);
+  let ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, previous.arrivalsRateLimitedUntil || 0,
+    arrivals.rateLimitedUntil || 0, ordinaryBoard ? (publicationAuthorityStore?.ordinaryTimetableAdmissionFloor?.(record.stationID, record.lineID) || 0) : 0,
+    ...rateLimited.map(response => response.completedAt + Math.max(300000, retryAfterDelay(response.retryAfter, response.completedAt))));
+  if (withdrawal) rejections.push({
+    stationID: record.stationID, lineID: record.lineID, ...withdrawal, reason: 'regularSourceWithdrawn'
+  });
+  let needsOrdinary = false;
+  if (ordinaryBoard && !blockedOrdinary && ordinaryNotBefore <= applicabilityAt) {
+    const board = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity }, record, applicabilityAt);
+    const eligible = selectEvents(board, record, applicabilityAt);
+    const upcoming = eligible.filter(e => Number.isFinite(e.time) && e.time >= applicabilityAt && e.time <= applicabilityAt + 3600000);
+    // Retain an already-qualified regular context even when today's dated
+    // answer masks it. An alternate must use its own original expiry.
+    const retainedRegular = board.sources['regular-timetable']?.events.some(e =>
+      e.time <= applicabilityAt + 3600000 && !currentProofs.some(p => blocksScheduled(p, e.time, applicabilityAt)));
+    const hasIncoming = terminalEvidence || upcoming.some(e => e.kind === 'incomingArrival');
+    needsOrdinary = !retainedRegular && !upcoming.some(e => {
+      if (e.kind === 'throughArrival') return originRule.physicalEnd && !hasIncoming;
+      if (e.kind !== 'outgoingDeparture') return false;
+      // A short-lived Journey can still benefit from retained regular
+      // coverage through the next admitted full-source refresh.
+      return e.sourceID !== 'journey-planner'
+        || e.expiresAt >= applicabilityAt + config.workerIntervalMs
+        || e.expiresAt === midnight(applicabilityAt);
+    });
+  }
+  if (needsOrdinary) {
+    const direct = await request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Timetable/${record.stationID}`), 'GET', true, false, true);
+    ordinaryNotBefore = direct.completedAt + (direct.status === 429
+      ? Math.max(300000, retryAfterDelay(direct.retryAfter, direct.completedAt)) : config.workerIntervalMs);
+    if (direct.ok && direct.status === 200) {
+      try {
+        const calendar = validatedPublicationProof(await readPublicationAsset('788955e868b7ae85219db15b4e05c2f187bdf3be1767f16b1c369b60dea08ad7'));
+        const at = clock(), day = londonLocal(at).slice(0, 10);
+        const age = direct.headers?.age, maxAge = /(?:^|,)\s*max-age=(\d+)/i.exec(direct.headers?.['cache-control'] || '');
+        const source = typeof age === 'string' && /^\d+$/.test(age.trim()) && maxAge && Number(maxAge[1]) <= 43200
+          ? httpObservation(direct.headers, direct.completedAt, 43200000, { cacheRequired: true }) : null;
+        if (source && day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd && !calendar.bankHolidayDates.includes(day)) {
+          source.expiresAt = Math.min(source.expiresAt, direct.completedAt + 600000, midnight(at));
+          const yesterday = new Date(Date.parse(day + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10);
+          const previousDay = yesterday >= calendar.holidayCoverageStart && !calendar.bankHolidayDates.includes(yesterday);
+          const rowsToday = regularTimetableJourneys(direct.value, record, originRule, day)
+            .filter(row => row.minute < 1440);
+          const carriedRows = previousDay ? regularTimetableJourneys(direct.value, record, originRule, yesterday, { previousDay: true })
+            .filter(row => row.minute >= 1440).map(row => ({ ...row, minute: row.minute - 1440 })) : [];
+          const events = [...carriedRows, ...rowsToday].flatMap(row => {
+            const destinationStationID = row.path.at(-1);
+            const hhmm = [Math.floor(row.minute / 60), row.minute % 60].map(x => String(x).padStart(2, '0')).join(':');
+            const time = londonClock(day + 'T' + hhmm + ':00');
+            if (!(time >= at && time <= at + 3600000 && source.expiresAt > at)) return [];
+            const bank = record.lineID === 'northern' && row.path.includes('940GZZLUBNK');
+            const cross = record.lineID === 'northern' && row.path.includes('940GZZLUCHX');
+            if (bank && cross) return [];
+            const firstCall = row.path.find(stop => stop !== record.stationID);
+            const loopVia = record.lineID === 'circle' && destinationStationID === record.stationID
+              ? STATION_BOARD_STATIONS.get(firstCall)?.stationName : null;
+            return [event(record, 'regular-timetable', { id: 'regular:' + hash([day, row.key]), destinationStationID,
+              destination: STATION_BOARD_STATIONS.get(destinationStationID).stationName, kind: 'outgoingDeparture',
+              time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, via: bank ? 'Bank' : cross ? 'Charing Cross' : loopVia }, source)];
+          });
+          add('regular-timetable', events);
+        }
+      } catch { /* The next normal worker cycle can recheck; the source does not become live. */ }
+    }
+  }
   let status = null;
   if (service.ok) {
     const observed = httpObservation(service.headers, service.completedAt, 120000);
@@ -687,6 +899,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   // Availability masks presentation. It never destroys the original source
   // context or creates a permanent publication-style closure rejection.
   let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
+  if (ordinaryBoard && ordinaryNotBefore > applicabilityAt) merged.ordinaryNotBefore = ordinaryNotBefore;
   if (arrivalReader) merged = mergeStationArrivalRead(record, merged, arrivals, applicabilityAt, config.workerIntervalMs);
   return publicationAuthorityStore ? applyPublicationAuthority(merged, publicationAuthorityStore.publicationAuthority()) : merged;
 }

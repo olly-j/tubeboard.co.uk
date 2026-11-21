@@ -75,7 +75,7 @@ export function knownNonClosure(detail) {
 }
 export function qualifyAvailability(values, record, scope, observation, now, clock, authority = {}) {
   if (!observation || observation.expiresAt <= now || !Array.isArray(values)) return [];
-  if (scope === 'lineStatus' && containsServiceClosed(values)) return serviceClosedProof(values, record, observation, clock, authority);
+  if (scope === 'lineStatus' && containsServiceClosed(values, record.lineID)) return serviceClosedProof(values, record, observation, clock, authority);
   let periods = [], open = false;
   if (scope === 'lineStatus') {
     if (values.length !== 1 || values[0]?.id !== record.lineID || !Array.isArray(values[0].lineStatuses) || !values[0].lineStatuses.length) return [];
@@ -102,7 +102,9 @@ export function qualifyAvailability(values, record, scope, observation, now, clo
 }
 export const wireAvailability = (proofs, toSwift) => proofs.map((p) => ({ stationID: p.stationID, lineID: p.lineID, sourceScope: p.sourceScope, closed: p.closed, observedAt: toSwift(p.observedAt), expiresAt: toSwift(p.expiresAt), ...(p.validFrom != null ? { validFrom: toSwift(p.validFrom), validUntil: toSwift(p.validUntil) } : {}), ...(p.closureWindows ? { closureWindows: p.closureWindows.map((w) => ({ validFrom: toSwift(w.validFrom), validUntil: toSwift(w.validUntil) })) } : {}), ...(p.plannedUnavailable === true ? { plannedUnavailable: true } : {}), ...(p.scheduledClockOnly !== undefined ? { scheduledClockOnly: p.scheduledClockOnly } : {}) }));
 
-export const containsServiceClosed = (values) => Array.isArray(values) && values.some((v) => v?.lineStatuses?.some((d) => d?.statusSeverity === 20));
+export const containsServiceClosed = (values, lineID) => Array.isArray(values) && values.some(v =>
+  v?.id === lineID && Array.isArray(v.lineStatuses) && v.lineStatuses.some(d =>
+    d?.statusSeverity === 20 && (d.lineId === undefined || d.lineId === lineID)));
 function serviceClosedProof(values, record, observation, clock, { mode, stationName } = {}) {
   const base = { stationID: record.stationID, lineID: record.lineID, sourceScope: 'lineStatus', ...observation, closed: false, qualificationOrigin: 'server' };
   const unavailable = () => [{ ...base, plannedUnavailable: true }];
