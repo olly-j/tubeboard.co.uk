@@ -1,0 +1,195 @@
+{
+  "lines": {
+    "bakerloo": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUEAC",
+        "940GZZLUHAW"
+      ]
+    },
+    "central": {
+      "exclusiveFirstCalls": {
+        "940GZZLUEBY": [
+          "940GZZLUWTA"
+        ],
+        "940GZZLUHLT": [
+          "940GZZLUGGH"
+        ]
+      },
+      "physicalEnds": [
+        "940GZZLUEPG",
+        "940GZZLUWRP"
+      ]
+    },
+    "circle": {
+      "exclusiveFirstCalls": {
+        "940GZZLUERC": [
+          "940GZZLUPAC"
+        ]
+      },
+      "physicalEnds": [
+        "940GZZLUHSC"
+      ]
+    },
+    "district": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUEBY",
+        "940GZZLUERC",
+        "940GZZLUKOY",
+        "940GZZLURMD",
+        "940GZZLUUPM",
+        "940GZZLUWIM"
+      ]
+    },
+    "dlr": {
+      "exclusiveFirstCalls": {
+        "940GZZDLSTD": [
+          "940GZZDLPUD"
+        ]
+      },
+      "physicalEnds": [
+        "940GZZDLBEC",
+        "940GZZDLBNK",
+        "940GZZDLLEW",
+        "940GZZDLSIT",
+        "940GZZDLTWG",
+        "940GZZDLWLA"
+      ]
+    },
+    "elizabeth": {
+      "exclusiveFirstCalls": {
+        "910GPADTLL": []
+      },
+      "physicalEnds": [
+        "910GABWDXR",
+        "910GHTRWTM4",
+        "910GHTRWTM5",
+        "910GLIVST",
+        "910GPADTON",
+        "910GRDNGSTN",
+        "910GSHENFLD"
+      ]
+    },
+    "hammersmith-city": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUBKG",
+        "940GZZLUHSC"
+      ]
+    },
+    "jubilee": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUSTD",
+        "940GZZLUSTM"
+      ]
+    },
+    "liberty": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GROMFORD",
+        "910GUPMNSTR"
+      ]
+    },
+    "lioness": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GEUSTON",
+        "910GWATFJDC"
+      ]
+    },
+    "metropolitan": {
+      "exclusiveFirstCalls": {
+        "940GZZLUALD": [
+          "940GZZLULVT"
+        ],
+        "940GZZLUAMS": [
+          "940GZZLUCAL"
+        ],
+        "940GZZLUCSM": [
+          "940GZZLUCAL"
+        ],
+        "940GZZLUUXB": [
+          "940GZZLUHGD"
+        ],
+        "940GZZLUWAF": [
+          "940GZZLUCXY"
+        ]
+      },
+      "physicalEnds": []
+    },
+    "mildmay": {
+      "exclusiveFirstCalls": {
+        "910GCLPHMJ1": []
+      },
+      "physicalEnds": [
+        "910GRICHMND",
+        "910GSTFD"
+      ]
+    },
+    "northern": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZBPSUST",
+        "940GZZLUEGW",
+        "940GZZLUHBT",
+        "940GZZLUMDN",
+        "940GZZLUMHL"
+      ]
+    },
+    "piccadilly": {
+      "exclusiveFirstCalls": {
+        "940GZZLUHR4": []
+      },
+      "physicalEnds": [
+        "940GZZLUCKS",
+        "940GZZLUHR5",
+        "940GZZLUUXB"
+      ]
+    },
+    "suffragette": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GBARKRIV",
+        "910GGOSPLOK"
+      ]
+    },
+    "victoria": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUBXN",
+        "940GZZLUWWL"
+      ]
+    },
+    "waterloo-city": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUBNK",
+        "940GZZLUWLO"
+      ]
+    },
+    "weaver": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GCHESHNT",
+        "910GCHINGFD",
+        "910GENFLDTN",
+        "910GLIVST"
+      ]
+    },
+    "windrush": {
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GCLPHMJ1",
+        "910GCRYSTLP",
+        "910GHGHI",
+        "910GNWCRELL",
+        "910GWCROYDN"
+      ]
+    }
+  },
+  "publishedLineMapsSHA256": "a57b819cfe5485dedbdf761e179c3b3d7e3c4a3fef1f74684bf35d7402c40a27",
+  "serviceCatalogueSHA256": "1d9e7615be2e0cea9a7424952f1d6f99a66aadf5595d4249d9642698645b3a82",
+  "sourceAppHead": "1cff3f16d4c7a8e1a861475707ea24dcd43e3d07"
+}

@@ -318,21 +318,27 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
 
 // Ordinary profiles provide scheduled clocks only for a proved origin. The
 // selected stop and destination must be supported by the same response.
-export function regularStratfordJourneys(response, serviceDate) {
-  const origin = '940GZZLUSTD', line = 'jubilee';
+const ordinaryWeekdays = new Map([
+  ['Monday', [2]], ['Mondays', [2]], ['Tuesday', [3]], ['Tuesdays', [3]],
+  ['Wednesday', [4]], ['Wednesdays', [4]], ['Thursday', [5]], ['Thursdays', [5]],
+  ['Friday', [6]], ['Fridays', [6]], ['Saturday', [7]], ['Saturdays', [7]],
+  ['Sunday', [1]], ['Sundays', [1]], ['Monday - Thursday', [2, 3, 4, 5]],
+  ['Monday - Friday', [2, 3, 4, 5, 6]], ['Saturday (also Good Friday)', [7]],
+  ['Saturdays and Public Holidays', [7]],
+]);
+
+export function regularTimetableJourneys(response, record, originRule, serviceDate, { previousDay = false } = {}) {
+  const { stationID, lineID } = record;
   responseShape(response);
-  if (response.lineId !== line || response.timetable.departureStopId !== origin) fail('wrongBoard');
-  const profiles = new Map([
-    ['Monday - Thursday', [2, 3, 4, 5]],
-    ['Friday', [6]],
-    ['Saturday (also Good Friday)', [7]],
-    ['Sunday', [1]],
-  ]);
+  if (response.lineId.toLowerCase() !== lineID || response.timetable.departureStopId.toUpperCase() !== stationID) fail('wrongBoard');
   const names = new Set(response.timetable.routes.flatMap(route => route.schedules.map(schedule => schedule.name)));
-  if ([...names].some(name => !profiles.has(name))) fail('unsupportedCalendar');
-  const active = [...names].filter(name => profiles.get(name).includes(weekday(serviceDate)));
+  if (!names.size || [...names].some(name => !ordinaryWeekdays.has(name))) fail('unsupportedCalendar');
+  const active = [...names].filter(name => ordinaryWeekdays.get(name).includes(weekday(serviceDate)));
+  if (previousDay && active.length === 0) return [];
   if (active.length !== 1) fail('unsupportedCalendar');
-  return profileJourneys(response, active[0]).filter(row =>
-    row.path.find(stop => stop !== origin) === '940GZZLUWHM' &&
-    row.path.at(-1) !== origin && row.path.every(stop => validBoard(stop, line)));
+  return profileJourneys(response, active[0]).filter(row => {
+    const firstCall = row.path.find(stop => stop !== stationID);
+    return firstCall && (originRule.physicalEnd || originRule.exclusiveFirstCalls.includes(firstCall))
+      && row.path.at(-1) !== stationID && row.path.every(stop => validBoard(stop, lineID));
+  });
 }

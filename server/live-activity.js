@@ -280,9 +280,9 @@ export class LiveActivityStore extends TransactionalJsonStore {
     return this.snapshot(state => state.records.filter(record => record.active !== false && record.contentStateContract === STATION_BOARD_CONTRACT && Number.isFinite(record.stationBoardCache?.arrivalsNotBefore)).map(record => ({ stationID: record.stationID, notBefore: record.stationBoardCache.arrivalsNotBefore })));
   }
 
-  ordinaryStratfordAdmissionFloor() {
+  ordinaryTimetableAdmissionFloor(stationID, lineID) {
     return this.snapshot(state => Math.max(0, ...state.records.filter(record =>
-      record.active !== false && record.stationID === '940GZZLUSTD' && record.lineID === 'jubilee'
+      record.active !== false && record.stationID === stationID && record.lineID === lineID
         && record.supportsRegularTimetable === true).map(record => record.stationBoardCache?.ordinaryNotBefore || 0)));
   }
 

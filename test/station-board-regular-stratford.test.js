@@ -80,3 +80,25 @@ test('the regular capability is true-only on a qualified typed registration', ()
   assert.equal(validateTokenPayload({ ...registration, plannedPresentationVersion: undefined }, new Date(now)).ok, false);
   assert.equal(validateTokenPayload({ ...registration, supportsRegularTimetable: undefined }, new Date(now)).value.supportsRegularTimetable, undefined);
 });
+
+test('the generated origin map replays Epping, Edgware and the proved Edgware Road starting path', async () => {
+  const captures = JSON.parse(fs.readFileSync(new URL('./fixtures/regular-timetable-additional-origins.json', import.meta.url)));
+  const at = Date.parse('2026-11-21T19:47:00Z');
+  const expected = new Map([
+    ['central', { station: '940GZZLUEPG', count: 3, first: '940GZZLUWRP', minutes: 8 }],
+    ['circle', { station: '940GZZLUERC', count: 2, first: '940GZZLUHSC', minutes: 8 }],
+    ['northern', { station: '940GZZLUEGW', count: 8, first: '940GZZLUMDN', minutes: 1 }],
+  ]);
+  for (const { body } of captures) {
+    const answer = expected.get(body.lineId);
+    const selected = { ...record, lineID: body.lineId, stationID: answer.station };
+    const feed = async url => new URL(url).pathname === '/Line/' + selected.lineID + '/Timetable/' + selected.stationID
+      ? reply(body, { ...headers, Date: new Date(at).toUTCString(), Age: '60' }) : new Response(null, { status: 503 });
+    const cache = await refreshStationBoard(selected, {}, config, feed, at, null);
+    const rows = selectEvents(cache, selected, at);
+    assert.equal(rows.length, answer.count, body.lineId);
+    assert.equal(rows[0]?.destinationStationID, answer.first);
+    assert.equal(rows[0]?.time, at + answer.minutes * 60000);
+    if (body.lineId === 'northern') assert.deepEqual([...new Set(rows.map(row => row.via))].sort(), ['Bank', 'Charing Cross']);
+  }
+});

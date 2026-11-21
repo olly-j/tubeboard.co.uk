@@ -2,7 +2,7 @@ import { applyPublicationAuthority } from './station-board-publication.js';
 import { readPublicationAsset } from './timetable-publication-resource.js';
 import crypto from 'node:crypto';
 import { parseBoundedJSON } from './bounded-json.js';
-import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation, regularStratfordJourneys, validatedPublicationProof } from './station-board-timetable.js';
+import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation, regularTimetableJourneys, validatedPublicationProof } from './station-board-timetable.js';
 import fs from 'node:fs';
 import { retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability, containsServiceClosed, knownNonClosure, activeClosure, expiredBarrier, completePlannedApplicability } from './station-board-availability.js';
 import { fetchJsonResponse } from './notification-transport.js';
@@ -11,6 +11,7 @@ export const STATION_BOARD_CONTRACT = 'station-board-v2';
 const catalogue = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-catalogue-v2.json', import.meta.url)));
 export const STATION_BOARD_LINES = new Map(catalogue.lines.map((line) => [line.lineID, line]));
 export const STATION_BOARD_STATIONS = new Map(catalogue.stations.map((station) => [station.stationID, station]));
+const regularOrigins = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-regular-origins-v1.json', import.meta.url))).lines;
 const APPLE_EPOCH = 978307200000;
 const key = (value) => String(value || '').toLowerCase().replace(/ (underground|rail|dlr) station/g, '').replace(/\s*\([^)]*\)/g, '').replace(/\s+(station|terminus)$/, '').trim().replace(/\s+/g, ' ');
 const hash = (value) => crypto.createHash('sha256').update(canonical(value)).digest('hex');
@@ -442,7 +443,7 @@ export function selectEvents(cache, record, now, { retainingMaskedPlans = false,
   const regularAnswers = events.filter(e => e.sourceID !== 'regular-timetable' && ['outgoingDeparture', 'throughArrival'].includes(e.kind)
     && Number.isFinite(e.time) && e.time <= now + 3600000);
   events = events.filter(e => e.sourceID !== 'regular-timetable' || (record.supportsRegularTimetable === true
-    && !regularAnswers.some(other => !other.destinationStationID || other.destinationStationID === e.destinationStationID)));
+    && !regularAnswers.some(other => (!other.destinationStationID || other.destinationStationID === e.destinationStationID) && (!e.via || !other.via || key(e.via) === key(other.via)))));
   const rail = events.filter((e) => e.sourceID === 'rail-departures' && e.kind === 'outgoingDeparture' && e.timeEvidence === 'predictedDeparture');
   events = events.filter((event) => retainsThroughArrival(event, rail));
   const seen = new Set(); events = events.filter((e) => { const signature = canonical(e); if (seen.has(signature)) return false; seen.add(signature); return true; });
@@ -696,8 +697,11 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
       }
     }
   }
-  const ordinaryBoard = record.supportsRegularTimetable === true && record.lineID === 'jubilee'
-    && record.stationID === '940GZZLUSTD' && record.selectionMode === 'allPlatforms';
+  const lineOrigins = regularOrigins[record.lineID];
+  const originRule = { physicalEnd: lineOrigins?.physicalEnds.includes(record.stationID) === true,
+    exclusiveFirstCalls: lineOrigins?.exclusiveFirstCalls[record.stationID] || [] };
+  const ordinaryBoard = record.supportsRegularTimetable === true && record.selectionMode === 'allPlatforms'
+    && !record.platformID && (originRule.physicalEnd || originRule.exclusiveFirstCalls.length > 0);
   const closureText = /strike|industrial action|no service|not running|suspended|station closed/i;
   const withdrawn = journey.ok && Array.isArray(journey.value?.journeys) &&
     journey.value?.searchCriteria?.dateTime === londonLocal(journeyDepartAt).slice(0, 16) + ':00' &&
@@ -709,7 +713,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   const blockedOrdinary = blocked || withdrawn || [service, station].some(response => response.ok &&
     closureText.test(JSON.stringify(response.value || {})));
   const rateLimited = [service, station, journey].filter(response => response.status === 429);
-  let ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, ordinaryBoard ? (publicationAuthorityStore?.ordinaryStratfordAdmissionFloor?.() || 0) : 0, ...rateLimited.map(response =>
+  let ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, ordinaryBoard ? (publicationAuthorityStore?.ordinaryTimetableAdmissionFloor?.(record.stationID, record.lineID) || 0) : 0, ...rateLimited.map(response =>
     response.completedAt + Math.max(300000, retryAfterDelay(response.retryAfter, response.completedAt))));
   if (ordinaryBoard && blockedOrdinary) rejections.push({
     stationID: record.stationID, lineID: record.lineID, observedAt: applicabilityAt, reason: 'regularSourceWithdrawn'
@@ -717,7 +721,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   if (ordinaryBoard && !blockedOrdinary
     && !previous.sources?.['regular-timetable']?.events?.some(e => usable(e, record, applicabilityAt))
     && ordinaryNotBefore <= applicabilityAt) {
-    const direct = await request(new URL('https://api.tfl.gov.uk/Line/jubilee/Timetable/940GZZLUSTD'), 'GET', true, false, true);
+    const direct = await request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Timetable/${record.stationID}`), 'GET', true, false, true);
     if (direct.status === 429) ordinaryNotBefore = direct.completedAt + Math.max(300000, retryAfterDelay(direct.retryAfter, direct.completedAt));
     if (direct.ok && direct.status === 200) {
       try {
@@ -728,14 +732,23 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
           ? httpObservation(direct.headers, direct.completedAt, 43200000, { cacheRequired: true }) : null;
         if (source && day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd && !calendar.bankHolidayDates.includes(day)) {
           source.expiresAt = Math.min(source.expiresAt, direct.completedAt + 600000, midnight(at));
-          const events = regularStratfordJourneys(direct.value, day).filter(row => row.minute < 1440).flatMap(row => {
+          const yesterday = new Date(Date.parse(day + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10);
+          const previousDay = yesterday >= calendar.holidayCoverageStart && !calendar.bankHolidayDates.includes(yesterday);
+          const rowsToday = regularTimetableJourneys(direct.value, record, originRule, day)
+            .filter(row => row.minute < 1440);
+          const carriedRows = previousDay ? regularTimetableJourneys(direct.value, record, originRule, yesterday, { previousDay: true })
+            .filter(row => row.minute >= 1440).map(row => ({ ...row, minute: row.minute - 1440 })) : [];
+          const events = [...carriedRows, ...rowsToday].flatMap(row => {
             const destinationStationID = row.path.at(-1);
             const hhmm = [Math.floor(row.minute / 60), row.minute % 60].map(x => String(x).padStart(2, '0')).join(':');
             const time = londonClock(day + 'T' + hhmm + ':00');
             if (!(time >= at && time <= at + 3600000 && source.expiresAt > at)) return [];
+            const bank = record.lineID === 'northern' && row.path.includes('940GZZLUBNK');
+            const cross = record.lineID === 'northern' && row.path.includes('940GZZLUCHX');
+            if (bank && cross) return [];
             return [event(record, 'regular-timetable', { id: 'regular:' + hash([day, row.key]), destinationStationID,
               destination: STATION_BOARD_STATIONS.get(destinationStationID).stationName, kind: 'outgoingDeparture',
-              time, timeEvidence: 'scheduledDeparture', platform: null, direction: null }, source)];
+              time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, via: bank ? 'Bank' : cross ? 'Charing Cross' : null }, source)];
           });
           add('regular-timetable', events);
         }
