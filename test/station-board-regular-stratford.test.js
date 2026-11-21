@@ -291,3 +291,37 @@ test('a new regular HTTP observation cannot resurrect a dated cancellation befor
   assert.deepEqual(selectEvents(mergeContexts(negative, updated, record, scheduled), record, scheduled), []);
   assert.deepEqual(selectEvents(mergeContexts(negative, updated, record, scheduled + 1), record, scheduled + 1), source.events);
 });
+
+test('the real DLR family disruption does not suppress Stratford Jubilee regular departures', async () => {
+  const evidence = JSON.parse(fs.readFileSync(new URL('./fixtures/stratford-20261121-station-family-disruptions.json', import.meta.url)));
+  const at = Date.parse('2026-11-21T20:18:27Z');
+  const originalHeaders = { Date: new Date(at).toUTCString(), Age: '0', 'Cache-Control': 'public,max-age=120' };
+  const timetableHeaders = { ...headers, Age: '17014' };
+  for (const wholeStationClosed of [false, true]) {
+    let directReads = 0;
+    const disruptions = [...evidence.stationDisruption];
+    if (wholeStationClosed) disruptions.push({
+      stationAtcoCode: record.stationID, type: 'StationClosure',
+      fromDate: '2026-11-21T20:00:00Z', toDate: '2026-11-21T21:00:00Z',
+    });
+    const fetch = async url => {
+      const name = new URL(url).pathname;
+      if (name === direct) { directReads++; return reply(timetable, timetableHeaders); }
+      if (name.includes('/Status')) return reply(evidence.status, originalHeaders);
+      if (name.includes('/Disruption')) return reply(disruptions, originalHeaders);
+      return allOutage();
+    };
+    const cache = await refreshStationBoard(record, {}, config, fetch, at, null);
+    const departures = selectEvents(cache, record, at);
+    if (wholeStationClosed) {
+      assert.equal(directReads, 0);
+      assert.deepEqual(departures, []);
+    } else {
+      assert.equal(directReads, 1);
+      assert.deepEqual(departures.slice(0, 2).map(row => [row.destination, new Date(row.time).toISOString()]), [
+        ['Stanmore', '2026-11-21T20:20:00.000Z'], ['Wembley Park', '2026-11-21T20:23:00.000Z']
+      ]);
+      assert.ok(departures.every(row => row.sourceID === 'regular-timetable' && row.time > at));
+    }
+  }
+});

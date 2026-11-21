@@ -770,11 +770,12 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   const ordinaryBoard = supportsRegularOrigin(record);
   const withdrawal = ordinaryBoard ? datedWithdrawal(journey, record, journeyDepartAt, applicabilityAt) : null;
   const currentProofs = retainAvailability(previous, { availabilityProofs }, record, applicabilityAt);
-  const activeUnknown = [service, station].some(response => response.ok && /strike|industrial action|no service|not running|suspended|station closed/i.test(JSON.stringify(response.value || {})));
-  // Ambiguous text may postpone an upstream read. Only the independently
-  // qualified scoped controls may authorize replacing a passenger's rows.
-  const blockedOrdinary = blocked || Boolean(withdrawal) || activeUnknown || currentProofs.some(p =>
-    activeClosure(p, applicabilityAt) || p.plannedUnavailable === true && p.expiresAt > applicabilityAt);
+  // A station-family response can describe closures on other modes and name
+  // this line as a diversion. Only qualified controls for the selected board
+  // can block its ordinary timetable.
+  const blockedOrdinary = Boolean(withdrawal) || currentProofs.some(p => p.scheduledClockOnly !== true
+    && (activeClosure(p, applicabilityAt) || expiredBarrier(p, applicabilityAt)
+      || p.plannedUnavailable === true && p.expiresAt > applicabilityAt));
   const rateLimited = [service, station, journey].filter(response => response.status === 429);
   let ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, ordinaryBoard ? (publicationAuthorityStore?.ordinaryTimetableAdmissionFloor?.(record.stationID, record.lineID) || 0) : 0, ...rateLimited.map(response =>
     response.completedAt + Math.max(300000, retryAfterDelay(response.retryAfter, response.completedAt))));

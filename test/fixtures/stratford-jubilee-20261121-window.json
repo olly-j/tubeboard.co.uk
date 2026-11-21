@@ -356,6 +356,42 @@
                 "hour": "18",
                 "minute": "40",
                 "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "18",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "20",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "23",
+                "intervalId": 1
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "25",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "28",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "30",
+                "intervalId": 0
               }
             ]
           },
