@@ -600,33 +600,57 @@ export function buildStationBoardState(record, cache, now) {
     // A worker tick with no source observation must not create a new Updated time.
     return swift(clocks.length ? Math.max(...clocks) : (prior ?? now));
   };
-  let state = { contentStateContract: STATION_BOARD_CONTRACT, stationName: STATION_BOARD_STATIONS.get(record.stationID)?.stationName || record.stationID, lineName: record.lineID === 'dlr' ? 'DLR' : record.lineID === 'elizabeth' ? 'Elizabeth' : record.lineID === 'hammersmith-city' ? 'Hammersmith & City' : record.lineID === 'waterloo-city' ? 'Waterloo & City' : record.lineID.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' '), platform: record.selectionMode === 'platform' || record.platformID ? record.platformHeading || record.platformLabel || record.platformID : 'All platforms',
-    arrivals: rows.map(wireRow),
-    status: status?.label || 'Status unavailable', statusReason: status?.reason || null, isDisrupted: status?.isDisrupted || false, updatedAt: observedAt(),
+  const state = { contentStateContract: STATION_BOARD_CONTRACT, stationName: STATION_BOARD_STATIONS.get(record.stationID)?.stationName || record.stationID, lineName: record.lineID === 'dlr' ? 'DLR' : record.lineID === 'elizabeth' ? 'Elizabeth' : record.lineID === 'hammersmith-city' ? 'Hammersmith & City' : record.lineID === 'waterloo-city' ? 'Waterloo & City' : record.lineID.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' '), platform: record.selectionMode === 'platform' || record.platformID ? record.platformHeading || record.platformLabel || record.platformID : 'All platforms',
+    arrivals: [], status: status?.label || 'Status unavailable', statusReason: status?.reason || null,
+    isDisrupted: status?.isDisrupted || false, updatedAt: null,
     ...(capable && proofs.length ? { plannedAvailability: { stationID: record.stationID, lineID: record.lineID, proofs: wireAvailability(proofs, swift) } } : {}) };
   const staleAt = () => {
     const deadlines = rows.flatMap((e) => ['outgoingDeparture', 'incomingArrival', 'throughArrival'].includes(e.kind) && Number.isFinite(e.time) ? [e.expiresAt, e.time + 1] : [e.expiresAt]);
     if (rows.some(planned)) deadlines.push(...availabilityBoundaries(proofs, now));
     return deadlines.length ? swift(Math.min(...deadlines)) : state.updatedAt;
   };
-  state.staleAt = staleAt();
+  const updateRows = (selection) => {
+    rows = selection;
+    state.arrivals = rows.map(wireRow);
+    state.updatedAt = observedAt();
+    state.staleAt = staleAt();
+  };
+  updateRows(rows);
   state.nextBoardBoundaryAt = nextBoundary(cache, record, now);
-  if (Buffer.byteLength(JSON.stringify(state)) > 3500) {
-    rows = originalRows.filter((e) => !planned(e)).slice(0, 3);
-    state.arrivals = rows.map(wireRow); delete state.plannedAvailability;
-    state.updatedAt = observedAt();
-    state.staleAt = staleAt();
+  const fits = () => Buffer.byteLength(JSON.stringify(state)) <= 3500
+    && Buffer.byteLength(JSON.stringify({ aps: { timestamp: Math.floor(now / 1000), event: 'update', 'content-state': Object.fromEntries(Object.entries(state).filter(([k]) => k !== 'nextBoardBoundaryAt')), 'stale-date': Math.floor((state.staleAt * 1000 + APPLE_EPOCH) / 1000) } })) <= 4096;
+  if (fits()) return state;
+  state.statusReason = null;
+  if (fits()) return state;
+
+  const selectedRows = rows;
+  const outgoing = selectedRows.filter(e => planned(e) || ['outgoingDeparture', 'outgoingDestinationOnly'].includes(e.kind)
+    || e.kind === 'throughArrival' && Number.isFinite(e.time));
+  const pack = (required, ordered) => {
+    const selected = new Set(required);
+    for (const e of ordered) {
+      if (selected.has(e)) continue;
+      selected.add(e);
+      updateRows(ordered.filter(row => selected.has(row)));
+      if (!fits()) selected.delete(e);
+    }
+    updateRows(ordered.filter(row => selected.has(row)));
+  };
+  const availability = state.plannedAvailability;
+  delete state.plannedAvailability;
+  updateRows([]);
+  if (!fits()) state.status = 'Status unavailable';
+  if (!fits()) state.platform = 'Selected platform';
+  if (availability) state.plannedAvailability = availability;
+  // The renderer elects schedules from overlapping sources and live clocks.
+  // Keep that evidence together so a missing row can't promote its alternate.
+  updateRows(outgoing);
+  if (fits()) {
+    pack(outgoing, selectedRows);
+    return state;
   }
-  // APNs must never receive an oversized typed update, including provider text.
-  const encoded = () => Buffer.byteLength(JSON.stringify({ aps: { timestamp: Math.floor(now / 1000), event: 'update', 'content-state': Object.fromEntries(Object.entries(state).filter(([k]) => k !== 'nextBoardBoundaryAt')), 'stale-date': Math.floor((state.staleAt * 1000 + APPLE_EPOCH) / 1000) } }));
-  if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) { state.statusReason = null; state.status = 'Status unavailable'; }
-  if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) {
-    rows = [];
-    state.arrivals = []; delete state.plannedAvailability;
-    state.status = 'Status unavailable'; state.statusReason = null;
-    state.updatedAt = observedAt();
-    state.staleAt = staleAt();
-  }
+  delete state.plannedAvailability;
+  pack([], originalRows.filter(e => !planned(e)).slice(0, 3));
   return state;
 }
 
