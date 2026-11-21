@@ -325,3 +325,34 @@ test('the real DLR family disruption does not suppress Stratford Jubilee regular
     }
   }
 });
+
+test('the real Circle PAH journey cannot hide the independent PAC starter', async () => {
+  // Same trimmed originals used by the handset integration replay at 1d6f957c.
+  const journey = JSON.parse(fs.readFileSync(new URL('./fixtures/circle-edgware-road-journey-2032.json', import.meta.url)));
+  const directSource = JSON.parse(fs.readFileSync(new URL('./fixtures/circle-edgware-road-direct-2032.json', import.meta.url)));
+  const at = Date.parse('2026-11-21T20:32:54Z');
+  const selected = { ...record, lineID: 'circle', stationID: '940GZZLUERC' };
+  const original = { Date: new Date(at).toUTCString(), Age: '0', 'Cache-Control': 'public,max-age=150' };
+  const timetableHeaders = { ...original, Date: 'Sat, 21 Nov 2026 19:44:42 GMT', 'Cache-Control': 'public,max-age=43200' };
+  for (const directAvailable of [true, false]) {
+    const fetch = async url => {
+      const path = new URL(url).pathname;
+      if (path.includes('/Journey/')) return reply(journey, original);
+      if (path === '/Line/circle/Timetable/940GZZLUERC' && directAvailable) return reply(directSource, timetableHeaders);
+      return allOutage();
+    };
+    const cache = await refreshStationBoard(selected, {}, config, fetch, at, null);
+    const [through] = cache.sources['journey-planner'].events;
+    assert.equal(through.time, Date.parse('2026-11-21T20:38:00Z'));
+    assert.equal(through.nextScheduledStopID, '940GZZLUPAH');
+    assert.equal(through.expiresAt, at + 60000);
+    const visible = selectEvents(cache, selected, at);
+    assert.deepEqual(visible.map(row => row.time), directAvailable
+      ? ['2026-11-21T20:35:00Z', '2026-11-21T20:45:00Z'].map(Date.parse) : []);
+    assert.ok(visible.every(row => row.sourceID === 'regular-timetable' && row.platform === null));
+    const state = buildStationBoardState(selected, cache, at);
+    assert.ok(state.arrivals.every(row => row.plannedSourceID === 'regular-timetable' && row.originQualified));
+    const legacy = selectEvents(cache, { ...selected, supportsRegularTimetable: undefined }, at);
+    assert.deepEqual(legacy.map(row => row.id), [through.id]);
+  }
+});

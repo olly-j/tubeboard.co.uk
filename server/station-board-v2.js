@@ -358,7 +358,7 @@ export function parseJourney(root, record, headers, requestedAt, now, actualRequ
     const prior = seen.get(service) || [];
     if (prior.some((previous) => previous.slice(0, Math.min(previous.length, calls.length)).every((id, index) => id === calls[index]))) continue;
     seen.set(service, [...prior, calls]);
-    events.push(event(record, 'journey-planner', { id: `journey:${hash([service, calls])}`, kind: 'outgoingDeparture', destination: destination.stationName, destinationStationID: destination.stationID, time: departure, timeEvidence: 'scheduledDeparture', platform: null, via: viaStation?.stationName || null, direction: null, providerDirection: text(option.direction) }, observation));
+    events.push(event(record, 'journey-planner', { id: `journey:${hash([service, calls])}`, kind: 'outgoingDeparture', destination: destination.stationName, destinationStationID: destination.stationID, time: departure, timeEvidence: 'scheduledDeparture', platform: null, via: viaStation?.stationName || null, direction: null, providerDirection: text(option.direction), nextScheduledStopID: calls.find(call => call !== record.stationID) || null }, observation));
   }
   return events;
 }
@@ -473,6 +473,16 @@ export function selectEvents(cache, record, now, { retainingMaskedPlans = false,
   const proofs = retainAvailability(cache, {}, record, now);
   let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && proofs.some((p) => (!retainingMaskedPlans || p.plannedUnavailable === true && p.scheduledClockOnly !== true) && blocksScheduled(p, e.time, now))) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
   if (!retainingPlannedAlternatives && events.some((e) => plannedSource(e) === 'timetable')) events = events.filter((e) => plannedSource(e) !== 'journey-planner');
+  if (supportsRegularOrigin(record)) {
+    const rule = regularOriginRule(record);
+    if (!rule.physicalEnd) {
+      // A dated itinerary can board a through train at a mixed station.
+      // Keep its original source context, but it cannot replace the proved
+      // starting path on origin-aware displays.
+      events = events.filter(e => e.sourceID !== 'journey-planner' ||
+        rule.exclusiveFirstCalls.includes(e.nextScheduledStopID));
+    }
+  }
   const regularAnswers = events.filter(e => e.sourceID !== 'regular-timetable' && ['outgoingDeparture', 'throughArrival'].includes(e.kind)
     && Number.isFinite(e.time) && e.time <= now + 3600000);
   events = events.filter(e => e.sourceID !== 'regular-timetable' || (record.supportsRegularTimetable === true
