@@ -129,7 +129,7 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
   assert.match(html, /Opt-in disruption alerts/i);
   assert.match(html, /selected supported lines/i);
   assert.match(html, /London Overground/i);
-  assert.match(html, /cached or offline data clear/i);
+  assert.match(html, /indicates when data is cached or offline/i);
   assert.match(html, /severity, resumed-service and quiet-hour controls/i);
   assert.doesNotMatch(html, /refresh (?:their|its) Tube data throughout the day/i);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
@@ -140,7 +140,7 @@ test('staged v1.2 website preserves compatibility and asset provenance', async (
   assert.match(mobileApplication.operatingSystem, /visionOS 26\.0 or later/);
   assert.ok(mobileApplication.featureList.includes('Elizabeth line stations, arrivals and status'));
   assert.ok(mobileApplication.featureList.some((feature) => /London Overground/i.test(feature)));
-  assert.ok(mobileApplication.featureList.some((feature) => /Premium Follow a Train/i.test(feature)));
+  assert.ok(mobileApplication.featureList.includes('Premium routes and known stops, with sharing for identifiable live Underground trains'));
   assert.ok(mobileApplication.featureList.some((feature) => /By destination/i.test(feature)));
   assert.match(html, /Next departures within each direction/);
 

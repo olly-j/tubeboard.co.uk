@@ -47,7 +47,8 @@ test('launch schema and visible links identify the same existing app without cha
   for (const match of home.matchAll(/href="(https:\/\/apps.apple.com[^\"]+)"/g)) {
     assert.equal(match[1], appStoreURL);
   }
-  assert.ok(app.featureList.some((feature) => /Premium Follow a Train/.test(feature)));
+  assert.ok(app.featureList.includes('Premium routes and known stops, with sharing for identifiable live Underground trains'));
+  assert.ok(app.featureList.includes('Countdowns for available live predictions'));
   assert.ok(app.featureList.some((feature) => /London Overground/.test(feature)));
   assert.ok(app.featureList.some((feature) => /By destination/.test(feature)));
   assert.ok(app.featureList.some((feature) => /Apple Watch.*widgets/.test(feature)));
