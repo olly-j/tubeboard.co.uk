@@ -356,3 +356,27 @@ test('the real Circle PAH journey cannot hide the independent PAC starter', asyn
     assert.deepEqual(legacy.map(row => row.id), [through.id]);
   }
 });
+
+test('unqualified selected Service Closed blocks ordinary requests without affecting foreign or expired controls', async () => {
+  for (const [lineID, statusLine, age, blocked] of [
+    ['jubilee', 'jubilee', '10', true],
+    ['jubilee', 'jubilee', '130', false],
+    ['dlr', 'dlr', '10', false],
+    ['jubilee', 'dlr', '10', false],
+  ]) {
+    let directReads = 0;
+    const fetch = async url => {
+      const pathname = new URL(url).pathname;
+      if (pathname === direct) { directReads++; return reply(timetable); }
+      if (pathname.includes('/Status')) return reply([{ id: lineID, modeName: lineID === 'dlr' ? 'dlr' : 'tube',
+        lineStatuses: [{ lineId: statusLine, statusSeverity: 20, statusSeverityDescription: 'Service Closed' }]
+      }], { Date: new Date(now).toUTCString(), Age: age, 'Cache-Control': 'public,max-age=120' });
+      return allOutage();
+    };
+    const result = await refreshStationBoard(record, {}, config, fetch, now, null);
+    assert.equal(directReads, blocked ? 0 : 1, [lineID, statusLine, age].join('/'));
+    assert.equal(selectEvents(result, record, now).length > 0, !blocked);
+    assert.equal(result.rejections.some(item => item.reason === 'regularSourceWithdrawn'), false);
+    if (blocked) assert.equal(result.availabilityProofs[0].observedAt, now - 10000);
+  }
+});

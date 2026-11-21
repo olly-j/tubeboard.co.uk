@@ -718,7 +718,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Disruption?getFamily=true&includeRouteBlockedStops=true&flattenResponse=true`))
   ]);
   const authority = { mode: STATION_BOARD_LINES.get(record.lineID)?.mode, stationName: (id) => validBoard(id, record.lineID) ? STATION_BOARD_STATIONS.get(id)?.stationName : null, stationLines: id => STATION_BOARD_STATIONS.get(id)?.lineIDs || [], lineMode: line => STATION_BOARD_LINES.get(line)?.mode, isRailLine: line => STATION_BOARD_LINES.get(line)?.qualifiedRailDepartureSource === true };
-  const is20 = service.ok && containsServiceClosed(service.value);
+  const is20 = service.ok && containsServiceClosed(service.value, record.lineID);
   const serviceObservation = service.ok && (!is20 || typeof service.headers?.age === 'string' && service.headers.age.trim().length > 0) ? httpObservation(service.headers, service.completedAt, 120000, { futureSkew: is20 ? 0 : 5000 }) : null;
   const serviceProofs = service.ok ? qualifyAvailability(service.value, record, 'lineStatus', serviceObservation, service.completedAt, londonClock, authority) : [];
   const stationProofs = station.ok ? qualifyAvailability(station.value, record, 'stationDisruptions', httpObservation(station.headers, station.completedAt, 120000), station.completedAt, londonClock) : [];
@@ -783,9 +783,9 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   // A station-family response can describe closures on other modes and name
   // this line as a diversion. Only qualified controls for the selected board
   // can block its ordinary timetable.
-  const blockedOrdinary = Boolean(withdrawal) || currentProofs.some(p => p.scheduledClockOnly !== true
-    && (activeClosure(p, applicabilityAt) || expiredBarrier(p, applicabilityAt)
-      || p.plannedUnavailable === true && p.expiresAt > applicabilityAt));
+  const explicitlyClosed = unknown20 && serviceObservation?.expiresAt > applicabilityAt;
+  const blockedOrdinary = Boolean(withdrawal) || explicitlyClosed || currentProofs.some(p =>
+    blocksScheduled(p, applicabilityAt, applicabilityAt));
   const rateLimited = [service, station, journey].filter(response => response.status === 429);
   let ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, ordinaryBoard ? (publicationAuthorityStore?.ordinaryTimetableAdmissionFloor?.(record.stationID, record.lineID) || 0) : 0, ...rateLimited.map(response =>
     response.completedAt + Math.max(300000, retryAfterDelay(response.retryAfter, response.completedAt))));
