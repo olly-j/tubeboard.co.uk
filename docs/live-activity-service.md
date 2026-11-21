@@ -108,6 +108,16 @@ stop the status monitor, and allow HTTP handlers and persistence to drain for
 up to five seconds. A graceful drain exits successfully; an exceeded deadline
 closes remaining HTTP connections and exits with failure. An unfinished push
 is not acknowledged or charged a retry merely because shutdown cancelled it.
+During drain, each finished response closes currently idle HTTP connections
+with the standard server API. `server.close()` alone only retires connections
+already idle when shutdown begins; a previously active request can otherwise
+finish and leave an idle keep-alive socket consuming the remaining budget.
+Active bodies and persistence retain the full existing five seconds. Normal
+keep-alive behavior outside shutdown is unchanged. Local Node22/26 probes cover
+late body completion, concurrent registrations and opt-outs, while a stalled
+body still reaches the original deadline. This addresses TB-115/#436 and
+TB-114/#435 in source; deployed/owned acceptance remains separate.
+
 Transport deadlines retain the existing retry/backoff and permanent-error
 rules. TB-114's recoverable durable writes are included; registration formats,
 encryption, retention and APNs environment selection are unchanged. This is
