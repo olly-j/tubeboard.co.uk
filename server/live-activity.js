@@ -906,6 +906,11 @@ export async function pushLiveActivityUpdate(record, payload, config, { priority
   const jwt = await createApnsJwt(config.apns);
   const host = record.environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
   const topicBundleId = record.appBundleID || config.apns.bundleId;
+  const state = payload.aps?.['content-state'];
+  const staleDate = payload.aps?.['stale-date'];
+  const expiresWithRows = payload.aps?.event === 'update'
+    && state?.contentStateContract === STATION_BOARD_CONTRACT
+    && state.arrivals?.length > 0 && Number.isSafeInteger(staleDate);
   const { status, body } = await send(host, {
     ':method': 'POST',
     ':path': `/3/device/${record.pushTokenHex}`,
@@ -913,6 +918,9 @@ export async function pushLiveActivityUpdate(record, payload, config, { priority
     'apns-push-type': 'liveactivity',
     'apns-topic': `${topicBundleId}.push-type.liveactivity`,
     'apns-priority': priority === '5' ? '5' : '10',
+    // A queued snapshot must not remain eligible for storage after any of
+    // its original train facts expire. Zero keeps same-second updates immediate-only.
+    ...(expiresWithRows ? { 'apns-expiration': String(staleDate > payload.aps.timestamp ? staleDate : 0) } : {}),
     'content-type': 'application/json'
   }, payload, options);
   if (status === 200) return { status };
@@ -934,6 +942,8 @@ function boardDeliveryObservation(state, authoritativeClosure) {
     && boardingClockEvidence.includes(row.timeEvidence));
   return {
     nextAt: first ? (first.expectedArrival + APPLE_REFERENCE_UNIX_SECONDS) * 1000 : null,
+    staleAt: state.arrivals.length > 0
+      ? Math.round((state.staleAt + APPLE_REFERENCE_UNIX_SECONDS) * 1000) : null,
     // Provider row IDs can vary even for unchanged data. Persist only an
     // opaque digest of the visible boarding context, never another text copy.
     context: first ? crypto.createHash('sha256').update(JSON.stringify([
@@ -946,6 +956,7 @@ function boardDeliveryObservation(state, authoritativeClosure) {
 function boardDeliveryPriority(before, after, now) {
   if (!before || before.closed !== after.closed
     || (before.nextAt === null) !== (after.nextAt === null)
+    || (Number.isFinite(before.staleAt) && before.staleAt <= now)
     || (Number.isFinite(before.nextAt) && before.nextAt < now)) return '10';
   const imminent = Math.min(before.nextAt ?? Infinity, after.nextAt ?? Infinity) <= now + 180000;
   const boardingChanged = before.context !== after.context
@@ -1150,8 +1161,11 @@ export function getStationArrivalsRefreshDelayMs(cache, now = new Date(), worker
 
 export function getRolloverDelayMs(contentState, now = new Date(), workerIntervalMs = 90_000) {
   if (contentState.contentStateContract === STATION_BOARD_CONTRACT) {
-    const delay = contentState.nextBoardBoundaryAt - now.getTime();
-    return Number.isFinite(contentState.nextBoardBoundaryAt) && delay > 0 && delay < workerIntervalMs ? delay : null;
+    if (!Number.isFinite(contentState.nextBoardBoundaryAt)) return null;
+    // A push can take us past this boundary between building the snapshot
+    // and arming its rollover. Recompute immediately from the retained source.
+    const delay = Math.max(1, contentState.nextBoardBoundaryAt - now.getTime());
+    return delay < workerIntervalMs ? delay : null;
   }
   const firstExpectedArrival = contentState.arrivals?.[0]?.expectedArrival;
   if (typeof firstExpectedArrival !== 'number') {

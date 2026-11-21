@@ -162,6 +162,39 @@ test('worker cache-only minute/Due/elapsed/source-expiry updates make zero reads
   const count = pushes.length; await cycle(restarted); assert.equal(pushes.length, count);
 });
 
+test('a send crossing an incoming train boundary schedules immediate cache-only turnover', async (t) => {
+  const store = await temporaryStore(t);
+  const incoming = row({ id: 'incoming', sourceID: 'station-arrivals', kind: 'incomingArrival',
+    timeEvidence: 'arrivalPrediction', time: now + 5_000 });
+  const departure = row({ id: 'departure', time: now + 75_000 });
+  await store.retainStationBoard(record.activityID, record.environment, cacheOf(departure, incoming), new Date(now));
+  let tick = now;
+  let reads = 0;
+  const pushes = [];
+  const schedules = [];
+  const cycle = () => runLiveActivityWorkerCycle({
+    store, config: loadConfig({}), cacheOnly: true, now: new Date(tick), clock: () => tick, logger,
+    fetchImpl: async () => { reads++; throw new Error('boundary ran a source read'); },
+    pushImpl: async (_, payload, _config, { priority }) => {
+      pushes.push({ payload, priority });
+      if (pushes.length === 1) tick = incoming.time + 5;
+    },
+    scheduleRolloverPush: (_, state, current, interval) => schedules.push(getRolloverDelayMs(state, current, interval)),
+  });
+  const rowsOf = push => push.payload.aps['content-state'].arrivals;
+
+  await cycle();
+  assert.deepEqual(rowsOf(pushes[0]).map(row => row.id), ['departure', 'incoming']);
+  assert.equal(schedules[0], 1, 'The rollover remains armed when the APNs send crosses its deadline');
+  tick += schedules[0];
+  await cycle();
+  assert.deepEqual(rowsOf(pushes[1]), [rowsOf(pushes[0])[0]], 'The useful scheduled train keeps its source and original clock');
+  assert.equal(pushes[1].priority, '10', 'The incoming row has elapsed even though the primary train stays upcoming');
+  assert.equal(pushes[1].payload.aps['content-state'].updatedAt, pushes[0].payload.aps['content-state'].updatedAt);
+  assert.ok(schedules[1] > 1, 'After catching up, the worker waits for the next real boundary');
+  assert.equal(reads, 0);
+});
+
 test('selected board observation survives rollover and advances only with new selected evidence', () => {
   const scoped = { ...record, selectionMode: 'platform', platformLabel: 'Platform 2' };
   const first = row({ id: 'first', platform: 'Platform 2', time: now + 90_000 });
@@ -795,6 +828,41 @@ test('APNs transport uses the selected precedence header and keeps the payload',
   await pushLiveActivityUpdate(record, payload, config, { priority: '5', send });
   await pushLiveActivityUpdate(record, payload, config, { send });
   assert.deepEqual(actual, ['5', '10']);
+});
+
+test('queued typed Activity snapshots expire at their original cutoff and can be replaced by current rows', async () => {
+  const { privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const config = { apns: { teamId: 'synthetic-team', keyId: 'synthetic-test-key',
+    authKey: privateKey.export({ format: 'pem', type: 'pkcs8' }) } };
+  const early = row({ id: 'early', time: now + 30_000 });
+  const next = row({ id: 'next', time: now + 90_000, expiresAt: now + 75_000 });
+  const queue = [];
+  const send = async (_, headers, payload) => {
+    queue.push({ expiration: headers['apns-expiration'], payload });
+    return { status: 200 };
+  };
+  const sendBoard = async (tick, ...rows) => {
+    const state = buildStationBoardState(record, cacheOf(...rows), tick);
+    await pushLiveActivityUpdate(record, buildApnsPayload(state, new Date(tick)), config, { send });
+  };
+
+  await sendBoard(now, early, next);
+  await sendBoard(early.time + 1, early, next);
+  const [initial, replacement] = queue;
+  assert.equal(initial.expiration, String(early.time / 1000));
+  assert.equal(replacement.expiration, String(next.expiresAt / 1000));
+
+  // Model APNs's documented storage policy, without asserting device delivery.
+  const reconnectedAt = early.time + 2_000;
+  const stillEligible = queue.filter(update => Number(update.expiration) * 1000 > reconnectedAt);
+  assert.deepEqual(stillEligible.flatMap(update => update.payload.aps['content-state'].arrivals.map(row => row.id)), ['next']);
+
+  const sameWireSecond = { ...next, expiresAt: next.expiresAt + 500 };
+  await sendBoard(sameWireSecond.expiresAt - 1, sameWireSecond);
+  assert.equal(queue.at(-1).expiration, '0', 'A cutoff in the dispatch second makes the update immediate-only');
+  await sendBoard(next.expiresAt, next);
+  assert.deepEqual(queue.at(-1).payload.aps['content-state'].arrivals, []);
+  assert.equal(queue.at(-1).expiration, undefined, 'Allow the waiting state to reach a reconnecting phone');
 });
 
 test('a fresh scoped closure prompts a priority-10 update even with the same boarding clock', async t => {

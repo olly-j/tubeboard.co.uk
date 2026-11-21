@@ -105,15 +105,21 @@ physical-device delivery or remove stale handling for late provider data.
 
 For typed Live Activities, the worker preserves the last observed selected-board
 time during an outage. A cache-only scan with no new observation does not
-generate another unavailable replacement. The first replacement, elapsed first
-boarding clock, availability or closure transition, and material changes within
-three minutes use APNs priority 10. Routine typed renewals use priority 5.
-Material near-term changes include a different boarding context or a clock
-movement of one minute or more. The worker persists only an opaque context
-digest and its clock/closure state for this priority choice. Lifecycle and
-legacy delivery are unchanged. Capable countdown clients do not need pushes
-for the passage of a scheduled minute. Original source expiry and elapsed-row
-boundaries remain authoritative.
+generate another unavailable replacement. The first replacement, expiry of
+already sent train evidence, availability or closure transition, and material
+changes within three minutes use APNs priority 10. Routine typed renewals use
+priority 5. Material near-term changes include a different boarding context
+or a clock movement of one minute or more. The worker persists an opaque
+context digest, clock and closure state, and the sent evidence deadline for
+this priority choice. If a send crosses a clock or evidence boundary, the
+worker immediately recomputes the affected board from retained source data.
+
+Typed snapshots containing rows carry an APNs expiration bounded by their
+original evidence deadline. A deadline in the dispatch second makes the
+snapshot immediate-only. Empty waiting states can still reach a reconnecting
+phone. APNs applies these limits on a best-effort basis. Lifecycle, legacy
+delivery, and widget pushes retain their existing policies. Capable countdown
+clients do not need pushes for the passage of a scheduled minute.
 
 The station-board-v2 contract optionally accepts true-only
 `supportsRegularTimetable` and an `initialRegularDisplayUntil` UTC deadline
