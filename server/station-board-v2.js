@@ -515,6 +515,8 @@ export function nextBoundary(cache, record, now) {
     boundaries.push(event.expiresAt);
     if (Number.isFinite(event.time)) {
       boundaries.push(event.time + 1);
+      // Capable clients render the original countdown clock directly.
+      if (record.supportsRegularTimetable === true && planned(event)) continue;
       const seconds = Math.ceil((event.time - now) / 1000);
       if (seconds >= 60) boundaries.push(event.time - Math.floor(seconds / 60) * 60000 + 1000);
     }
@@ -570,8 +572,14 @@ export function buildStationBoardState(record, cache, now) {
     const clocks = compactEvents(rows.filter(eligible)).slice(0, 3)
       .filter((row) => row.kind !== 'unverifiedArrival')
       .map((row) => row.receivedAt).filter(Number.isFinite);
-    // No qualified selected row retains the legacy unavailable-state clock.
-    return swift(clocks.length ? Math.max(...clocks) : now);
+    const explicitEmpty = cache.sources?.['station-arrivals'];
+    if (!clocks.length && explicitEmpty?.events?.length === 0 && explicitEmpty.expiresAt > now
+      && Number.isFinite(explicitEmpty.observedAt) && explicitEmpty.observedAt <= now) clocks.push(explicitEmpty.observedAt);
+    const prior = [record.lastBoardObservedAt, Date.parse(record.activityStartedAt || ''),
+      Date.parse(record.createdAt || ''), Date.parse(record.tokenUpdatedAt || '')]
+      .find(value => Number.isFinite(value) && value <= now);
+    // A worker tick with no source observation must not create a new Updated time.
+    return swift(clocks.length ? Math.max(...clocks) : (prior ?? now));
   };
   let state = { contentStateContract: STATION_BOARD_CONTRACT, stationName: STATION_BOARD_STATIONS.get(record.stationID)?.stationName || record.stationID, lineName: record.lineID === 'dlr' ? 'DLR' : record.lineID === 'elizabeth' ? 'Elizabeth' : record.lineID === 'hammersmith-city' ? 'Hammersmith & City' : record.lineID === 'waterloo-city' ? 'Waterloo & City' : record.lineID.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' '), platform: record.selectionMode === 'platform' || record.platformID ? record.platformHeading || record.platformLabel || record.platformID : 'All platforms',
     arrivals: rows.map(wireRow),
@@ -580,7 +588,7 @@ export function buildStationBoardState(record, cache, now) {
   const staleAt = () => {
     const deadlines = rows.flatMap((e) => ['outgoingDeparture', 'incomingArrival', 'throughArrival'].includes(e.kind) && Number.isFinite(e.time) ? [e.expiresAt, e.time + 1] : [e.expiresAt]);
     if (rows.some(planned)) deadlines.push(...availabilityBoundaries(proofs, now));
-    return swift(deadlines.length ? Math.min(...deadlines) : now);
+    return deadlines.length ? swift(Math.min(...deadlines)) : state.updatedAt;
   };
   state.staleAt = staleAt();
   state.nextBoardBoundaryAt = nextBoundary(cache, record, now);
@@ -593,7 +601,13 @@ export function buildStationBoardState(record, cache, now) {
   // APNs must never receive an oversized typed update, including provider text.
   const encoded = () => Buffer.byteLength(JSON.stringify({ aps: { timestamp: Math.floor(now / 1000), event: 'update', 'content-state': Object.fromEntries(Object.entries(state).filter(([k]) => k !== 'nextBoardBoundaryAt')), 'stale-date': Math.floor((state.staleAt * 1000 + APPLE_EPOCH) / 1000) } }));
   if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) { state.statusReason = null; state.status = 'Status unavailable'; }
-  if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) { state.arrivals = []; delete state.plannedAvailability; state.status = 'Status unavailable'; state.statusReason = null; state.staleAt = swift(now); }
+  if (Buffer.byteLength(JSON.stringify(state)) > 3500 || encoded() > 4096) {
+    rows = [];
+    state.arrivals = []; delete state.plannedAvailability;
+    state.status = 'Status unavailable'; state.statusReason = null;
+    state.updatedAt = observedAt();
+    state.staleAt = staleAt();
+  }
   return state;
 }
 

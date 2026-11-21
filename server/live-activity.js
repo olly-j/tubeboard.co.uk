@@ -215,6 +215,11 @@ export class LiveActivityStore extends TransactionalJsonStore {
         }
         if (isSameActivity && registrationTuple(previous) !== registrationTuple(record)) delete record.lastBoardContentDigest;
         if (previous.stationID !== payload.stationID || previous.lineID !== payload.lineID) delete record.stationBoardCache;
+        if (['stationID', 'lineID', 'selectionMode', 'platformID', 'platformHeading', 'platformLabel', 'platformDirection']
+          .some(key => previous[key] !== record[key])) {
+          delete record.lastBoardObservedAt;
+          delete record.lastBoardDelivery;
+        }
         const seed = admitPlannedSeed(payload.plannedContextSeed, record, now.getTime());
         if (!seed.errors.length && (Object.keys(seed.sources).length || Object.keys(seed.closureSources).length || seed.availabilityProofs?.length)) record.stationBoardCache = applyPublicationAuthority(mergeContexts(applyPublicationAuthority(record.stationBoardCache, state.publicationAuthority), { sources: Object.fromEntries(Object.entries(seed.sources).filter(([source]) => source !== 'timetable' || payload.plannedContextSeed.contexts.filter(c => ['timetable','unified-timetable'].includes(c.sourceID)).every(c => scopedSeedMatchesAsset(c, assets.get(c.publication.sha256), record)))), closureSources: seed.closureSources, availabilityProofs: seed.availabilityProofs }, record, now.getTime()), state.publicationAuthority);
       }
@@ -322,6 +327,8 @@ export class LiveActivityStore extends TransactionalJsonStore {
         record.lastPlatform = info.contentState.platform;
         if (record.contentStateContract === STATION_BOARD_CONTRACT) {
           record.lastBoardContentDigest = info.contentDigest;
+          record.lastBoardObservedAt = (info.contentState.updatedAt + APPLE_REFERENCE_UNIX_SECONDS) * 1000;
+          record.lastBoardDelivery = info.boardDelivery;
           record.nextBoardBoundaryAt = info.contentState.nextBoardBoundaryAt;
         }
       }
@@ -816,7 +823,7 @@ export function buildContentState(record, arrivals, statuses, now = new Date()) 
   };
 }
 
-export function stationBoardContentDigest(contentState) {
+export function stationBoardContentDigest(contentState, { dynamicScheduledCountdown = false } = {}) {
   const input = { ...contentState };
   delete input.updatedAt;
   delete input.nextBoardBoundaryAt;
@@ -825,7 +832,8 @@ export function stationBoardContentDigest(contentState) {
       // These typed clients derive the visible timer from the original ETA.
       // Normalize only the comparison copy; preserve fallback text on wire.
       if (row.isCached === false && Number.isFinite(row.expectedArrival) && Number.isFinite(row.expiresAt)
-        && ['throughArrivalPrediction', 'reportedIncomingArrival', 'estimatedDeparture'].includes(row.timeEvidence)) {
+        && (['throughArrivalPrediction', 'reportedIncomingArrival', 'estimatedDeparture'].includes(row.timeEvidence)
+          || dynamicScheduledCountdown && row.timeEvidence === 'scheduledDeparture')) {
         const { countdownText, ...semantic } = row;
         return semantic;
       }
@@ -887,7 +895,7 @@ export function buildEndApnsPayload(record, now = new Date()) {
   };
 }
 
-export async function pushLiveActivityUpdate(record, payload, config, options = {}) {
+export async function pushLiveActivityUpdate(record, payload, config, { priority = '10', send = sendApnsRequest, ...options } = {}) {
   if (!config.apns.teamId || !config.apns.keyId || (!config.apns.authKey && !config.apns.authKeyPath)) {
     const error = new Error('APNs is not configured');
     error.retryable = true;
@@ -898,13 +906,13 @@ export async function pushLiveActivityUpdate(record, payload, config, options = 
   const jwt = await createApnsJwt(config.apns);
   const host = record.environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com';
   const topicBundleId = record.appBundleID || config.apns.bundleId;
-  const { status, body } = await sendApnsRequest(host, {
+  const { status, body } = await send(host, {
     ':method': 'POST',
     ':path': `/3/device/${record.pushTokenHex}`,
     authorization: `bearer ${jwt}`,
     'apns-push-type': 'liveactivity',
     'apns-topic': `${topicBundleId}.push-type.liveactivity`,
-    'apns-priority': '10',
+    'apns-priority': priority === '5' ? '5' : '10',
     'content-type': 'application/json'
   }, payload, options);
   if (status === 200) return { status };
@@ -917,6 +925,32 @@ export async function pushLiveActivityUpdate(record, payload, config, options = 
   error.retryable = status === 429 || status >= 500;
   error.backoffMs = status === 429 ? 5 * 60 * 1000 : 2 * 60 * 1000;
   throw error;
+}
+
+const boardingClockEvidence = ['estimatedDeparture', 'scheduledDeparture', 'throughArrivalPrediction'];
+
+function boardDeliveryObservation(state, authoritativeClosure) {
+  const first = state.arrivals.find(row => Number.isFinite(row.expectedArrival)
+    && boardingClockEvidence.includes(row.timeEvidence));
+  return {
+    nextAt: first ? (first.expectedArrival + APPLE_REFERENCE_UNIX_SECONDS) * 1000 : null,
+    // Provider row IDs can vary even for unchanged data. Persist only an
+    // opaque digest of the visible boarding context, never another text copy.
+    context: first ? crypto.createHash('sha256').update(JSON.stringify([
+      first.destination, first.via, first.reportedPlatform, first.boardingContext?.direction,
+    ])).digest('hex') : null,
+    closed: authoritativeClosure,
+  };
+}
+
+function boardDeliveryPriority(before, after, now) {
+  if (!before || before.closed !== after.closed
+    || (before.nextAt === null) !== (after.nextAt === null)
+    || (Number.isFinite(before.nextAt) && before.nextAt < now)) return '10';
+  const imminent = Math.min(before.nextAt ?? Infinity, after.nextAt ?? Infinity) <= now + 180000;
+  const boardingChanged = before.context !== after.context
+    || Math.abs(before.nextAt - after.nextAt) >= 60000;
+  return imminent && boardingChanged ? '10' : '5';
 }
 
 const stationArrivalReaders = new WeakMap();
@@ -1011,18 +1045,20 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       cache = applyPublicationAuthority(cache, publicationAuthority);
       expectedPublicationGeneration = publicationGeneration(publicationAuthority);
       const contentState = buildStationBoardState(record, cache, effectiveNow.getTime());
-      const contentDigest = stationBoardContentDigest(contentState);
+      const contentDigest = stationBoardContentDigest(contentState, { dynamicScheduledCountdown: record.supportsRegularTimetable === true });
       const displayUntil = Date.parse(record.initialRegularDisplayUntil || '');
-      const hasInitialBoard = contentState.arrivals.some(row => row.expectedArrival != null &&
-        ['estimatedDeparture', 'scheduledDeparture', 'throughArrivalPrediction'].includes(row.timeEvidence));
-      const holdInitial = !record.lastSuccessAt && displayUntil > effectiveNow.getTime() && !hasInitialBoard
-        && !regularReplacementAuthorized(cache, record, effectiveNow.getTime());
+      const authoritativeClosure = regularReplacementAuthorized(cache, record, effectiveNow.getTime());
+      const delivery = boardDeliveryObservation(contentState, authoritativeClosure);
+      const holdInitial = !record.lastSuccessAt && displayUntil > effectiveNow.getTime() && delivery.nextAt === null
+        && !authoritativeClosure;
       if (holdInitial) contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, displayUntil);
       if (!holdInitial && contentDigest !== record.lastBoardContentDigest) {
         const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
         if (!current || registrationTuple(current) !== expectedTuple || publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;
-        await pushImpl(current, buildApnsPayload(contentState, effectiveNow), config, { signal });
-        await store.markPushed(record.activityID, record.environment, { emptyArrivals: contentState.arrivals.length === 0, contentState, contentDigest, expectedTuple, expectedPublicationGeneration }, effectiveNow);
+        const priority = boardDeliveryPriority(current.lastBoardDelivery, delivery, effectiveNow.getTime());
+        await pushImpl(current, buildApnsPayload(contentState, effectiveNow), config, { signal, priority });
+        await store.markPushed(record.activityID, record.environment, { emptyArrivals: contentState.arrivals.length === 0, contentState,
+          contentDigest, boardDelivery: delivery, expectedTuple, expectedPublicationGeneration }, effectiveNow);
         logger.info(`Live Activity station-board update pushed, arrivals ${contentState.arrivals.length}`);
       }
       const retainedRecord = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);

@@ -103,6 +103,18 @@ registration contracts and the 90-second cadence are unchanged. This is source
 behavior until the exact revision is deployed and read back; it does not claim
 physical-device delivery or remove stale handling for late provider data.
 
+For typed Live Activities, the worker preserves the last observed selected-board
+time during an outage. A cache-only scan with no new observation does not
+generate another unavailable replacement. The first replacement, elapsed first
+boarding clock, availability or closure transition, and material changes within
+three minutes use APNs priority 10. Routine typed renewals use priority 5.
+Material near-term changes include a different boarding context or a clock
+movement of one minute or more. The worker persists only an opaque context
+digest and its clock/closure state for this priority choice. Lifecycle and
+legacy delivery are unchanged. Capable countdown clients do not need pushes
+for the passage of a scheduled minute. Original source expiry and elapsed-row
+boundaries remain authoritative.
+
 The station-board-v2 contract optionally accepts true-only
 `supportsRegularTimetable` and an `initialRegularDisplayUntil` UTC deadline
 for an already visible, eligible all-platform regular departure. Older
