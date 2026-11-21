@@ -32,7 +32,6 @@ const homepageProductAssets = [
   'follow-train-1-2-6-20261118001152',
   'live-board-woodford-1-2-6-20261118110726-ed2e82e4',
   'by-destination-v1-2-20260905103957',
-  'lock-screen-woodford-1-2-6-20261118001152',
   'add-station-1-2-6-20261117225101',
   'disruption-widget-v1-2-20260905103957',
   'next-departures-v1-2-20260905103957'
