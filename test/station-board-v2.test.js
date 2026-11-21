@@ -16,7 +16,7 @@ const arrival = (overrides = {}) => ({ lineId: 'northern', naptanId: record.stat
 function journey(overrides = {}, stationID = record.stationID, lineID = record.lineID) {
   return { searchCriteria: { dateTimeType: 'Departing', dateTime: '2026-10-01T14:00:00' }, recommendedMaxAgeMinutes: 5, stopMessages: [], journeys: [{ legs: [{ id: 'legA', mode: { id: STATION_BOARD_LINES.get(lineID).mode }, departurePoint: { naptanId: stationID, individualStopId: `${stationID}1` }, arrivalPoint: { naptanId: '940GZZLUMDN' }, scheduledDepartureTime: '2026-10-01T14:02:00', isDisrupted: false, disruptions: [], plannedWorks: [], routeOptions: [{ id: 'routeA', lineIdentifier: { id: lineID }, direction: 'Outbound', directions: ['Morden'] }], path: { stopPoints: [{ id: stationID }, { id: '940GZZLUMDN' }] }, ...overrides }] }] };
 }
-async function temporaryStore(t) { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-v2-')); t.after(() => fs.rm(dir, { recursive: true, force: true })); const store = new LiveActivityStore(path.join(dir, 'records.json')); await store.upsertToken(record, new Date(now)); return store; }
+async function temporaryStore(t, registration = record, registeredAt = now) { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-v2-')); t.after(() => fs.rm(dir, { recursive: true, force: true })); const store = new LiveActivityStore(path.join(dir, 'records.json')); await store.upsertToken(registration, new Date(registeredAt)); return store; }
 const logger = { info() {}, warn() {}, error() {} };
 
 test('all19 exact catalogue boards negotiate v2 while v1 allowlist remains17', () => {
@@ -64,6 +64,62 @@ test('scheduled minute Due/zero/strict expiry never claims Here and boundaries p
   const services = [row({ id: 'incoming', kind: 'incomingArrival', timeEvidence: 'arrivalPrediction', platform: 'Platform 1', time: now + 1000 }), row({ id: 'same-A', platform: 'Platform 2' }), row({ id: 'same-B', platform: 'Platform 2', time: now + 95000 }), row({ id: 'via', via: 'Bank', time: now + 100000 })];
   assert.deepEqual(buildStationBoardState(record, cacheOf(...services), now).arrivals.map((r) => r.id), ['same-A', 'same-B', 'via']);
   assert.equal(selectEvents(cacheOf(...services), record, now).at(-1).id, 'incoming');
+});
+
+test('an Edgware update keeps booked departures and complete availability ahead of clockless incoming rows', async (t) => {
+  const at = Date.parse('2026-11-21T23:30:00Z');
+  const scoped = { ...record, supportsRegularTimetable: true, tokenUpdatedAt: new Date(at).toISOString() };
+  const fixtureID = (source, i) => `${source}:${crypto.createHash('sha256').update(String(i)).digest('hex')}`;
+  const regular = [2, 7, 11, 16, 21, 27].map((minutes, i) => row({
+    id: fixtureID('regular', i), sourceID: 'regular-timetable', time: at + minutes * 60000,
+    via: i % 2 ? 'Bank' : 'Charing Cross', direction: 'southbound', receivedAt: at - 45000, expiresAt: at + 540000,
+  }));
+  const dated = row({ id: fixtureID('journey', 0), destination: 'Kennington', destinationStationID: '940GZZLUKNG',
+    time: at + 660000, via: 'Charing Cross', receivedAt: at - 20000, expiresAt: at + 100000 });
+  const incoming = parseStationArrivals([0, 1, 2].flatMap(i => [2, 3].map(platform => arrival({
+    id: `service-${i}`, vehicleId: String(i + 1), destinationNaptanId: scoped.stationID, destinationName: 'Edgware',
+    currentLocation: 'Approaching Edgware', platformName: `Northbound - Platform ${platform}`,
+    expectedArrival: new Date(at + (i + platform) * 1000).toISOString(), timestamp: new Date(at).toISOString(),
+    timing: { read: new Date(at).toISOString() },
+  }))), scoped, headers(at), at);
+  assert.equal(incoming.length, 3);
+  assert.ok(incoming.every(event => event.kind === 'incomingArrival' && event.time === null));
+  const availabilityProofs = [0, 1].map(i => ({
+    stationID: scoped.stationID, lineID: scoped.lineID, sourceScope: 'lineStatus', closed: false,
+    observedAt: at - 10000, expiresAt: at + 90000, scheduledClockOnly: true,
+    closureWindows: [{ validFrom: at + (450 + i * 10) * 1000, validUntil: at + (455 + i * 10) * 1000 }],
+  }));
+  const cache = { ...cacheOf(...regular, dated, ...incoming), availabilityProofs };
+  const plansOnly = buildStationBoardState(scoped, { ...cacheOf(...regular, dated), availabilityProofs }, at);
+  const state = buildStationBoardState(scoped, cache, at);
+  assert.deepEqual(state.arrivals.filter(r => r.plannedSourceID), plansOnly.arrivals);
+  assert.equal(plansOnly.arrivals.length, 4);
+  assert.ok(state.arrivals.length < 7, 'this fixture must exercise overflow with ordinary production-sized rows');
+  assert.deepEqual(state.plannedAvailability, plansOnly.plannedAvailability);
+  assert.ok(state.arrivals.some(r => r.originQualified === true && r.boardingContext.via === 'Bank'));
+  assert.ok(state.arrivals.some(r => r.originQualified === true && r.boardingContext.via === 'Charing Cross'));
+  assert.equal(state.staleAt, plansOnly.staleAt);
+  assert.equal(state.nextBoardBoundaryAt, nextBoundary(cache, scoped, at));
+  assert.ok(Buffer.byteLength(JSON.stringify(state)) <= 3500);
+  assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(state, new Date(at)))) <= 4096);
+  const recovered = buildStationBoardState(scoped, cache, regular[0].time + 1);
+  assert.ok(!recovered.arrivals.some(r => r.id === regular[0].id || r.id === dated.id));
+  assert.ok(recovered.arrivals.some(r => r.id === regular[1].id));
+
+  const store = await temporaryStore(t, scoped, at);
+  await store.retainStationBoard(scoped.activityID, scoped.environment, cache, new Date(at));
+  let reads = 0;
+  const pushes = [];
+  const cycle = (tick) => runLiveActivityWorkerCycle({ store, config: loadConfig({}), cacheOnly: true,
+    now: new Date(tick), clock: () => tick, logger,
+    fetchImpl: async () => { reads++; throw Error('Cache-only rollover used the provider'); },
+    pushImpl: async (_, payload) => { pushes.push(payload); return { status: 200 }; },
+  });
+  await cycle(at);
+  await cycle(regular[0].time + 1);
+  assert.deepEqual(pushes[0], buildApnsPayload(state, new Date(at)));
+  assert.deepEqual(pushes[1], buildApnsPayload(recovered, new Date(regular[0].time + 1)));
+  assert.equal(reads, 0);
 });
 
 test('selection precedes publication/planner preference and physical platforms never guess schedules', () => {

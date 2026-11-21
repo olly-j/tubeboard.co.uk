@@ -71,8 +71,12 @@ test('eight original proofs and overflow disposition preserve scoped clocks and 
 
 test('maximum original proof payload fallback preserves three live rows and full APNs stays bounded', () => {
   const p = Array.from({ length: 8 }, (_, i) => ({ ...proof(i, i + 30), closureWindows: Array.from({ length: 32 }, (_, j) => ({ validFrom: at(100 + j * 3), validUntil: at(101 + j * 3) })) }));
-  const rows = [event('A', 400, 20, 620), event('B', 401, 20, 620), event('C', 402, 20, 620), live('live-A'), live('live-B'), live('live-C')];
-  const state = buildStationBoardState(record, cache(rows, p), at(50)); assert.equal(state.plannedAvailability, undefined); assert.deepEqual(state.arrivals.map((e) => e.id), ['live-A', 'live-B', 'live-C']);
+  const rows = [event('inside-closure', 100, 20, 620), event('clear-plan-A', 400, 20, 620), event('clear-plan-B', 401, 20, 620), live('live-A'), live('live-B'), live('live-C')];
+  const original = cache(rows, p);
+  assert.equal(retainAvailability(original, {}, record, at(50)).length, 8);
+  assert.deepEqual(selectEvents(original, record, at(50)).filter(e => e.sourceID === 'timetable').map(e => e.id), ['clear-plan-A', 'clear-plan-B']);
+  const state = buildStationBoardState(record, original, at(50)); assert.equal(state.plannedAvailability, undefined); assert.deepEqual(state.arrivals.map((e) => e.id), ['live-A', 'live-B', 'live-C']);
+  assert.equal(state.nextBoardBoundaryAt, at(100));
   const payload = buildApnsPayload(state, new Date(at(50))); assert.ok(Buffer.byteLength(JSON.stringify(payload)) <= 4096); assert.ok(state.arrivals.every((r) => r.expiresAt * 1000 + 978307200000 === at(620)));
   const huge = buildStationBoardState(record, { ...cache([live()], []), status: { label: 'Minor Delays', reason: 'x'.repeat(6000), expiresAt: at(120) } }, at(50)); assert.equal(huge.statusReason, null); assert.equal(huge.arrivals.length, 1); assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(huge, new Date(at(50))))) <= 4096);
 });
@@ -191,6 +195,11 @@ test('independent raw group prioritizes useful live rows before masked rail sche
   const rail = [100, 110, 120].map((t, i) => event(`rail-${i}`, t, 20, 620, { sourceID: 'rail-departures' }));
   const original = cache([...rail, live('live-A'), live('live-B'), live('live-C')], [proof()]);
   const state = buildStationBoardState(record, original, at(50)); assert.deepEqual(state.arrivals.map((r) => r.id), ['rail-0', 'rail-1', 'rail-2', 'live-A', 'live-B', 'live-C']); assert.deepEqual(renderedIDs(state, at(50)), ['live-A', 'live-B', 'live-C']);
-  const long = context(event('TT', 250, 0, 600, { destination: 'x'.repeat(3000) }), event('JP', 260, 20, 140, { sourceID: 'journey-planner' }), ...rail, live('live-A'), live('live-B'), live('live-C'));
-  const fallback = buildStationBoardState(record, long, at(50)); assert.deepEqual(fallback.arrivals.map((r) => r.id), ['live-A', 'live-B', 'live-C']); assert.ok(fallback.arrivals.every((r) => r.timeEvidence === 'estimatedDeparture')); assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(fallback, new Date(at(50))))) <= 4096);
+  const long = cache([event('TT', 250, 0, 600, { destination: 'x'.repeat(3000) }), event('JP', 260, 20, 140, { sourceID: 'journey-planner' }), ...rail, live('live-A'), live('live-B'), live('live-C')], [proof()]);
+  const fallback = buildStationBoardState(record, long, at(50));
+  assert.ok(!fallback.arrivals.some(r => r.id === 'TT'));
+  assert.deepEqual(fallback.plannedAvailability, state.plannedAvailability);
+  assert.deepEqual(renderedIDs(fallback, at(50)), ['JP', 'live-A', 'live-B']);
+  assert.deepEqual(fallback.arrivals.filter(r => r.timeEvidence === 'estimatedDeparture').map(r => r.id), ['live-A', 'live-B', 'live-C']);
+  assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(fallback, new Date(at(50))))) <= 4096);
 });
