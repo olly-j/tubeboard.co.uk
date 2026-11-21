@@ -339,6 +339,6 @@ export function regularTimetableJourneys(response, record, originRule, serviceDa
   return profileJourneys(response, active[0]).filter(row => {
     const firstCall = row.path.find(stop => stop !== stationID);
     return firstCall && (originRule.physicalEnd || originRule.exclusiveFirstCalls.includes(firstCall))
-      && row.path.at(-1) !== stationID && row.path.every(stop => validBoard(stop, lineID));
+      && (row.path.at(-1) !== stationID || lineID === 'circle') && row.path.every(stop => validBoard(stop, lineID));
   });
 }

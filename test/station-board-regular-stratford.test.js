@@ -250,3 +250,44 @@ test('a fresh through prediction can take over while a terminal arrival cannot',
     else assert.equal(f.push[0]?.arrivals[0]?.timeEvidence, 'throughArrivalPrediction');
   }
 });
+
+test('the real Saturday 24:05 Circle loop shows Edgware Road via Paddington as a departure', async () => {
+  const captures = JSON.parse(fs.readFileSync(new URL('./fixtures/regular-timetable-additional-origins.json', import.meta.url)));
+  const circle = captures.find(({ body }) => body.lineId === 'circle').body;
+  const selected = { ...record, lineID: 'circle', stationID: '940GZZLUERC' };
+  const at = Date.parse('2026-11-22T00:04:00Z');
+  const fetch = async url => new URL(url).pathname === '/Line/circle/Timetable/940GZZLUERC'
+    ? reply(circle, { ...headers, Date: 'Sat, 21 Nov 2026 19:44:42 GMT', Age: '15558' }) : allOutage();
+  const cache = await refreshStationBoard(selected, {}, config, fetch, at, null);
+  const [loop] = selectEvents(cache, selected, at);
+  assert.equal(loop.kind, 'outgoingDeparture');
+  assert.equal(loop.destination, 'Edgware Road (Circle Line)');
+  assert.equal(loop.via, 'Paddington');
+  assert.equal(loop.time, at + 60000);
+  assert.equal(buildStationBoardState(selected, cache, at).arrivals[0].via, 'Paddington');
+});
+
+test('a new regular HTTP observation cannot resurrect a dated cancellation before its departure', async () => {
+  const scheduled = now + 28 * 60000;
+  const cancelled = {
+    recommendedMaxAgeMinutes: 2, searchCriteria: { dateTimeType: 'Departing', dateTime: '2026-11-21T18:31:00' },
+    journeys: [{ legs: [{ departurePoint: { naptanId: record.stationID }, isCancelled: true,
+      scheduledDepartureTime: new Date(scheduled).toISOString(), routeOptions: [{ lineIdentifier: { id: 'jubilee' } }] }] }],
+  };
+  const fetch = async url => new URL(url).pathname.includes('/Journey/')
+    ? reply(cancelled, { ...headers, Age: '0', 'Cache-Control': 'public,max-age=120' }) : allOutage();
+  const negative = await refreshStationBoard(record, {}, config, fetch, now, null);
+  const marker = negative.rejections.find(item => item.reason === 'regularSourceWithdrawn');
+  assert.equal(marker.regularWithdrawalUntil, scheduled);
+  const at = now + 15 * 60000;
+  const source = { observedAt: at, events: [{
+    id: 'new-http-observation', stationID: record.stationID, lineID: record.lineID,
+    sourceID: 'regular-timetable', kind: 'outgoingDeparture', timeEvidence: 'scheduledDeparture',
+    destination: 'Stanmore', destinationStationID: '940GZZLUSTM', time: scheduled + 30000,
+    receivedAt: at, expiresAt: scheduled + 120000,
+  }] };
+  const updated = { sources: { 'regular-timetable': source } };
+  assert.deepEqual(selectEvents(mergeContexts(negative, updated, record, at), record, at), []);
+  assert.deepEqual(selectEvents(mergeContexts(negative, updated, record, scheduled), record, scheduled), []);
+  assert.deepEqual(selectEvents(mergeContexts(negative, updated, record, scheduled + 1), record, scheduled + 1), source.events);
+});

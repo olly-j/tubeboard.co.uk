@@ -370,10 +370,24 @@ export function usable(event, record, now) {
   return event.stationID === record.stationID && event.lineID === record.lineID && Number.isFinite(event.receivedAt) && event.receivedAt <= now && Number.isFinite(event.expiresAt) && event.expiresAt > now && typeof event.destination === 'string'
     && (event.kind === 'outgoingDestinationOnly' ? event.time == null && event.timeEvidence == null : ['incomingArrival', 'throughArrival'].includes(event.kind) && event.time == null ? event.timeEvidence == null : Number.isFinite(event.time) && event.time >= now && ['arrivalPrediction', 'scheduledDeparture', 'predictedDeparture'].includes(event.timeEvidence));
 }
+function retainedRejection(rejection, record, now) {
+  if (!rejection || rejection.stationID !== record.stationID || rejection.lineID !== record.lineID
+    || !Number.isFinite(rejection.observedAt) || rejection.observedAt > now) return false;
+  if (rejection.reason === 'regularSourceWithdrawn' && rejection.regularWithdrawalUntil !== undefined) {
+    const until = rejection.regularWithdrawalUntil;
+    return Number.isFinite(until) && until > rejection.observedAt
+      && until - rejection.observedAt <= 26 * 3600000 && now <= until;
+  }
+  return rejection.observedAt + 600000 > now;
+}
 function rejectionInvalidates(rejection, event, record, now) {
-  return rejection.stationID === record.stationID && rejection.lineID === record.lineID && rejection.observedAt <= now && rejection.observedAt + 600000 > now && event.receivedAt <= rejection.observedAt
-    && (rejection.reason === 'regularSourceWithdrawn' ? event.sourceID === 'regular-timetable'
-      : ['serviceUnavailable', 'stationDisrupted'].includes(rejection.reason) ? planned(event) : sourceKey(event.sourceID) === 'timetable');
+  if (!retainedRejection(rejection, record, now)) return false;
+  if (rejection.reason === 'regularSourceWithdrawn') {
+    return event.sourceID === 'regular-timetable'
+      && (Number.isFinite(rejection.regularWithdrawalUntil) || event.receivedAt <= rejection.observedAt);
+  }
+  return event.receivedAt <= rejection.observedAt
+    && (['serviceUnavailable', 'stationDisrupted'].includes(rejection.reason) ? planned(event) : sourceKey(event.sourceID) === 'timetable');
 }
 function mergeStationArrivalSchedule(previous, incoming, sources) {
   if (!Number.isFinite(incoming.arrivalsNotBefore ?? previous.arrivalsNotBefore)) return {};
@@ -389,9 +403,16 @@ function mergeStationArrivalSchedule(previous, incoming, sources) {
 }
 
 export function mergeContexts(previous = {}, incoming = {}, record, now) {
-  const rejections = [...(previous.rejections || []), ...(incoming.rejections || [])].filter((r) => r && ['publicationChanged', 'timetableChanged', 'unsupportedCalendar', 'serviceUnavailable', 'stationDisrupted', 'regularSourceWithdrawn'].includes(r.reason) && r.stationID === record.stationID && r.lineID === record.lineID && Number.isFinite(r.observedAt) && r.observedAt <= now && r.observedAt + 600000 > now);
+  const rejections = [...(previous.rejections || []), ...(incoming.rejections || [])].filter(r =>
+    retainedRejection(r, record, now) && ['publicationChanged', 'timetableChanged', 'unsupportedCalendar',
+      'serviceUnavailable', 'stationDisrupted', 'regularSourceWithdrawn'].includes(r.reason));
   const markerMap = new Map();
-  for (const marker of rejections) { const scope = marker.reason === 'regularSourceWithdrawn' ? 'regular' : ['stationDisrupted', 'serviceUnavailable'].includes(marker.reason) ? 'planned-service' : 'publication'; if ((markerMap.get(scope)?.observedAt ?? -Infinity) < marker.observedAt) markerMap.set(scope, marker); }
+  for (const marker of rejections) {
+    const scope = marker.reason === 'regularSourceWithdrawn' ? 'regular'
+      : ['stationDisrupted', 'serviceUnavailable'].includes(marker.reason) ? 'planned-service' : 'publication';
+    const rank = candidate => candidate?.regularWithdrawalUntil ?? candidate?.observedAt ?? -Infinity;
+    if (rank(markerMap.get(scope)) < rank(marker)) markerMap.set(scope, marker);
+  }
   const markers = [...markerMap.values()], sources = {};
   const availabilityProofs = retainAvailability(previous, incoming, record, now);
   const closureSources = legacyClosureSources(availabilityProofs);
@@ -475,6 +496,10 @@ export function countdown(event, now) {
 }
 export function nextBoundary(cache, record, now) {
   const boundaries = availabilityBoundaries(retainAvailability(cache, {}, record, now), now);
+  for (const marker of cache.rejections || []) {
+    if (marker.reason === 'regularSourceWithdrawn' && retainedRejection(marker, record, now)
+      && Number.isFinite(marker.regularWithdrawalUntil)) boundaries.push(marker.regularWithdrawalUntil + 1);
+  }
   if (cache.status?.expiresAt > now) boundaries.push(cache.status.expiresAt);
   for (const event of Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now))) {
     boundaries.push(event.expiresAt);
@@ -580,19 +605,26 @@ function datedWithdrawal(response, record, departAt, now) {
   const observation = httpObservation(response.headers, response.completedAt,
     Math.min(body.recommendedMaxAgeMinutes, 2) * 60000, { cacheRequired: true });
   if (!observation || observation.expiresAt <= now) return null;
-  const matched = body.journeys.some(item => Array.isArray(item?.legs) && item.legs.some(leg =>
-    leg?.departurePoint?.naptanId === record.stationID && Array.isArray(leg.routeOptions)
-    && leg.routeOptions.some(option => option?.lineIdentifier?.id === record.lineID)
-    && (['isCancelled', 'isCanceled', 'cancelled', 'canceled'].some(field => leg[field] === true)
-      || ['status', 'serviceStatus'].some(field => ['cancelled', 'canceled', 'withdrawn'].includes(String(leg[field] || '').toLowerCase())))));
-  return matched ? observation : null;
+  const cutoff = midnight(departAt);
+  const cancelled = body.journeys.flatMap(item => {
+    const leg = Array.isArray(item?.legs) ? item.legs.find(leg => leg?.mode?.id !== 'walking') : null;
+    if (leg?.departurePoint?.naptanId !== record.stationID || leg.routeOptions?.length !== 1
+      || leg.routeOptions[0]?.lineIdentifier?.id !== record.lineID
+      || !(['isCancelled', 'isCanceled', 'cancelled', 'canceled'].some(field => leg[field] === true)
+        || ['status', 'serviceStatus'].some(field => ['cancelled', 'canceled', 'withdrawn'].includes(String(leg[field] || '').toLowerCase())))) return [];
+    const clock = londonClock(leg.scheduledDepartureTime);
+    if (!Number.isFinite(clock)) return [Math.min(observation.expiresAt, cutoff)];
+    return clock > now && clock < cutoff ? [clock] : [];
+  });
+  const regularWithdrawalUntil = Math.max(...cancelled);
+  return regularWithdrawalUntil > now ? { ...observation, regularWithdrawalUntil } : null;
 }
 
 export function regularReplacementAuthorized(cache, record, now) {
   const proof = retainAvailability(cache, {}, record, now).some(p =>
     p.scheduledClockOnly !== true && (activeClosure(p, now) || p.plannedUnavailable === true && p.observedAt <= now && p.expiresAt > now));
   return proof || (cache.rejections || []).some(r => r.reason === 'regularSourceWithdrawn'
-    && r.stationID === record.stationID && r.lineID === record.lineID && r.observedAt <= now && r.expiresAt > now);
+    && retainedRejection(r, record, now) && (r.regularWithdrawalUntil ?? r.expiresAt) >= now);
 }
 
 export async function refreshStationBoard(record, previous, config, fetchImpl, now, signal, clock = () => now, publicResponses = new Map(), publicationAuthorityStore = null, arrivalReader = null) {
@@ -777,9 +809,12 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
             const bank = record.lineID === 'northern' && row.path.includes('940GZZLUBNK');
             const cross = record.lineID === 'northern' && row.path.includes('940GZZLUCHX');
             if (bank && cross) return [];
+            const firstCall = row.path.find(stop => stop !== record.stationID);
+            const loopVia = record.lineID === 'circle' && destinationStationID === record.stationID
+              ? STATION_BOARD_STATIONS.get(firstCall)?.stationName : null;
             return [event(record, 'regular-timetable', { id: 'regular:' + hash([day, row.key]), destinationStationID,
               destination: STATION_BOARD_STATIONS.get(destinationStationID).stationName, kind: 'outgoingDeparture',
-              time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, via: bank ? 'Bank' : cross ? 'Charing Cross' : null }, source)];
+              time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, via: bank ? 'Bank' : cross ? 'Charing Cross' : loopVia }, source)];
           });
           add('regular-timetable', events);
         }
