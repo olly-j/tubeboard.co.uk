@@ -17,10 +17,37 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   const health = await (await fetch(`${origin}/healthz`)).json(); assert.equal(health.ok, true); assert.equal(health.contractVersion, 1); assert.deepEqual(health.contentStateContracts, ['station-board-v2']); assert.equal(health.plannedPresentationVersion, 2);
   const post = async (body) => fetch(`${origin}/api/live-activities/tokens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const legacyResponse = await post(fixture); assert.equal(legacyResponse.status, 200); assert.deepEqual(await legacyResponse.json(), { ok: true });
-  const schemaResponse = await fetch(`${origin}/contracts/live-activity-registration-v2.schema.json`); assert.equal(schemaResponse.status, 200); const schema = await schemaResponse.json(); assert.equal(schema.properties.lineID.enum.length, 19); assert.equal(schema.properties.contentStateContract.const, 'station-board-v2');
+  const schemaResponse = await fetch(`${origin}/contracts/live-activity-registration-v2.schema.json`);
+  assert.equal(schemaResponse.status, 200);
+  const schemaText = await schemaResponse.text();
+  assert.equal(schemaText, await fs.readFile(new URL('../contracts/live-activity-registration-v2.schema.json', import.meta.url), 'utf8'));
+  const schema = JSON.parse(schemaText);
+  assert.equal(schema.properties.lineID.enum.length, 19);
+  assert.equal(schema.properties.contentStateContract.const, 'station-board-v2');
+  assert.deepEqual(schema.properties.supportsRegularTimetable, { const: true });
+  assert.deepEqual(schema.properties.initialRegularDisplayUntil, { type: 'string', format: 'date-time' });
+  assert.ok(schema.allOf.some(rule => rule.if?.required?.includes('initialRegularDisplayUntil')
+    && rule.then?.required?.includes('supportsRegularTimetable')));
+  assert.ok(schema.allOf.some(rule => rule.if?.required?.includes('supportsRegularTimetable')
+    && ['contentStateContract', 'plannedPresentationVersion'].every(field => rule.then?.required?.includes(field))));
   for (const [lineID, line] of STATION_BOARD_LINES) { const response = await post({ ...fixture, installID: `synthetic-${lineID}`, activityID: `synthetic-${lineID}`, stationID: line.boundedOriginID, lineID, contentStateContract: 'station-board-v2' }); assert.equal(response.status, 200, lineID); }
   const capabilityBoard = { ...fixture, installID: 'synthetic-capability', activityID: 'synthetic-capability', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2, tokenUpdatedAt: new Date().toISOString() };
   const capResponse = await post(capabilityBoard); assert.equal(capResponse.status, 200); assert.deepEqual(await capResponse.json(), { ok: true, contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 });
+  const regular = { ...capabilityBoard, installID: 'synthetic-regular', activityID: 'synthetic-regular',
+    stationID: '940GZZLUSTD', lineID: 'jubilee', selectionMode: 'allPlatforms', platformID: null,
+    platformHeading: null, platformLabel: null, platformDirection: null,
+    activityStartedAt: new Date().toISOString(), activityEndsAt: new Date(Date.now() + 300000).toISOString(),
+    environment: 'sandbox', supportsRegularTimetable: true,
+    initialRegularDisplayUntil: new Date(Date.now() + 60000).toISOString() };
+  const regularResponse = await post(regular);
+  assert.equal(regularResponse.status, 200);
+  assert.deepEqual(await regularResponse.json(), { ok: true, contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 });
+  for (const invalid of [
+    { supportsRegularTimetable: undefined }, { supportsRegularTimetable: false }, { supportsRegularTimetable: 'true' },
+    { plannedPresentationVersion: undefined }, { contentStateContract: undefined },
+    { initialRegularDisplayUntil: 'tomorrow' }, { initialRegularDisplayUntil: null },
+    { selectionMode: 'platform', platformID: '2' },
+  ]) assert.equal((await post({ ...regular, ...invalid })).status, 400, JSON.stringify(invalid));
   const tiedOld = await post({ ...capabilityBoard, plannedPresentationVersion: undefined }); assert.deepEqual(await tiedOld.json(), { ok: true, contentStateContract: 'station-board-v2' });
   const tiedNew = await post(capabilityBoard); assert.deepEqual(await tiedNew.json(), { ok: false, contentStateContract: 'station-board-v2' });
   const restored = { ...capabilityBoard, tokenUpdatedAt: new Date(Date.parse(capabilityBoard.tokenUpdatedAt) + 1000).toISOString() };
@@ -67,5 +94,8 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   assert.equal(seededStore.state.records.find((r) => r.activityID === board.activityID).stationBoardCache.sources.timetable, undefined);
   const expiry = mergeContexts(partial, {}, board, Math.min(anchor + 600000, midnight)); assert.equal(expiry.sources.timetable, undefined);
   const bad = structuredClone(seed); bad.contexts[0].rows[0].platform = 'Platform 1'; assert.equal((await post({ ...board, plannedContextSeed: bad })).status, 400);
-  const saved = JSON.parse(await fs.readFile(path.join(directory, 'activities.json'))); assert.equal(saved.records.filter((r) => r.contentStateContract === 'station-board-v2').length, 21); assert.equal(saved.records.find((r) => r.activityID === fixture.activityID).contentStateContract, undefined);
+  const registeredRegular = seededStore.state.records.find(r => r.activityID === regular.activityID);
+  assert.equal(registeredRegular.supportsRegularTimetable, true);
+  assert.equal(registeredRegular.initialRegularDisplayUntil, regular.initialRegularDisplayUntil);
+  const saved = JSON.parse(await fs.readFile(path.join(directory, 'activities.json'))); assert.equal(saved.records.filter((r) => r.contentStateContract === 'station-board-v2').length, 22); assert.equal(saved.records.find((r) => r.activityID === fixture.activityID).contentStateContract, undefined);
 });

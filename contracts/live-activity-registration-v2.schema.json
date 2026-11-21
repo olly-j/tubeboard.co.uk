@@ -127,6 +127,13 @@
     "contentStateContract": {
       "const": "station-board-v2"
     },
+    "supportsRegularTimetable": {
+      "const": true
+    },
+    "initialRegularDisplayUntil": {
+      "type": "string",
+      "format": "date-time"
+    },
     "plannedPresentationVersion": {
       "type": "integer",
       "const": 2
@@ -610,6 +617,14 @@
           "platformID"
         ]
       }
+    },
+    {
+      "if": { "required": ["initialRegularDisplayUntil"] },
+      "then": { "required": ["supportsRegularTimetable"] }
+    },
+    {
+      "if": { "required": ["supportsRegularTimetable"] },
+      "then": { "required": ["contentStateContract", "plannedPresentationVersion"] }
     },
     {
       "if": {

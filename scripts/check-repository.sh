@@ -24,7 +24,9 @@ required=(
   .github/pull_request_template.md
   .github/workflows/service-quality.yml
   contracts/live-activity-registration-v1.schema.json
+  contracts/live-activity-registration-v2.schema.json
   contracts/fixtures/live-activity-registration-v1.json
+  contracts/fixtures/live-activity-registration-v2.json
   contracts/disruption-alert-registration-v1.schema.json
   contracts/fixtures/disruption-alert-registration-v1.json
   contracts/disruption-alert-registration-v2.schema.json
@@ -54,6 +56,8 @@ done
 
 python3 -m json.tool contracts/live-activity-registration-v1.schema.json >/dev/null
 python3 -m json.tool contracts/fixtures/live-activity-registration-v1.json >/dev/null
+python3 -m json.tool contracts/live-activity-registration-v2.schema.json >/dev/null
+python3 -m json.tool contracts/fixtures/live-activity-registration-v2.json >/dev/null
 python3 -m json.tool contracts/disruption-alert-registration-v1.schema.json >/dev/null
 python3 -m json.tool contracts/fixtures/disruption-alert-registration-v1.json >/dev/null
 python3 -m json.tool contracts/disruption-alert-registration-v2.schema.json >/dev/null

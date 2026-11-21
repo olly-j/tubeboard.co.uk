@@ -103,6 +103,14 @@ registration contracts and the 90-second cadence are unchanged. This is source
 behavior until the exact revision is deployed and read back; it does not claim
 physical-device delivery or remove stale handling for late provider data.
 
+The station-board-v2 contract optionally accepts true-only
+`supportsRegularTimetable` and an `initialRegularDisplayUntil` UTC deadline
+for an already visible, eligible all-platform regular departure. Older
+registrations omit both. The previously deployed 1.4.9 normalizer accepts
+the same requests and ignores those optional fields. Support for their
+behavior requires the corresponding worker revision. The wire acknowledgement
+retains its existing shape. See [ordinary timetable fallback](regular-timetable-activity.md).
+
 `SIGTERM` and `SIGINT` cancel notification requests and owned timers immediately,
 stop the status monitor, and allow HTTP handlers and persistence to drain for
 up to five seconds. A graceful drain exits successfully; an exceeded deadline
