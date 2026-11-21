@@ -506,9 +506,18 @@ export function buildStationBoardState(record, cache, now) {
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
   const wireRow = (e) => ({ id: e.id, destination: e.destination, expectedArrival: Number.isFinite(e.time) ? swift(e.time) : null, countdownText: countdown(e, now), timeEvidence: evidence[e.kind] || (e.timeEvidence === 'predictedDeparture' ? 'estimatedDeparture' : 'scheduledDeparture'), via: e.via || null, reportedPlatform: e.platform || null, expiresAt: swift(e.expiresAt), isCached: false, ...(plannedSource(e) && (capable || plannedSource(e) !== 'rail-departures') ? { plannedSourceID: plannedSource(e) } : {}) });
+  const observedAt = () => {
+    // Derive the visible board clock after selection and the compact limit.
+    // Masked alternatives, status and a cache-only dispatch cannot renew it.
+    const clocks = compactEvents(rows.filter(eligible)).slice(0, 3)
+      .filter((row) => row.kind !== 'unverifiedArrival')
+      .map((row) => row.receivedAt).filter(Number.isFinite);
+    // No qualified selected row retains the legacy unavailable-state clock.
+    return swift(clocks.length ? Math.max(...clocks) : now);
+  };
   let state = { contentStateContract: STATION_BOARD_CONTRACT, stationName: STATION_BOARD_STATIONS.get(record.stationID)?.stationName || record.stationID, lineName: record.lineID === 'dlr' ? 'DLR' : record.lineID === 'elizabeth' ? 'Elizabeth' : record.lineID === 'hammersmith-city' ? 'Hammersmith & City' : record.lineID === 'waterloo-city' ? 'Waterloo & City' : record.lineID.split('-').map((part) => part[0].toUpperCase() + part.slice(1)).join(' '), platform: record.selectionMode === 'platform' || record.platformID ? record.platformHeading || record.platformLabel || record.platformID : 'All platforms',
     arrivals: rows.map(wireRow),
-    status: status?.label || 'Status unavailable', statusReason: status?.reason || null, isDisrupted: status?.isDisrupted || false, updatedAt: swift(now),
+    status: status?.label || 'Status unavailable', statusReason: status?.reason || null, isDisrupted: status?.isDisrupted || false, updatedAt: observedAt(),
     ...(capable && proofs.length ? { plannedAvailability: { stationID: record.stationID, lineID: record.lineID, proofs: wireAvailability(proofs, swift) } } : {}) };
   const staleAt = () => {
     const deadlines = rows.flatMap((e) => ['outgoingDeparture', 'incomingArrival', 'throughArrival'].includes(e.kind) && Number.isFinite(e.time) ? [e.expiresAt, e.time + 1] : [e.expiresAt]);
@@ -520,6 +529,7 @@ export function buildStationBoardState(record, cache, now) {
   if (Buffer.byteLength(JSON.stringify(state)) > 3500) {
     rows = originalRows.filter((e) => !planned(e)).slice(0, 3);
     state.arrivals = rows.map(wireRow); delete state.plannedAvailability;
+    state.updatedAt = observedAt();
     state.staleAt = staleAt();
   }
   // APNs must never receive an oversized typed update, including provider text.

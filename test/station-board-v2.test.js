@@ -155,8 +155,28 @@ test('worker cache-only minute/Due/elapsed/source-expiry updates make zero reads
   await cycle(); assert.equal(pushes.at(-1).aps['content-state'].arrivals[0].countdownText, '1 min'); assert.equal(pushes.at(-1).aps['stale-date'], (now + 90000) / 1000);
   tick = now + 31000; await cycle(); assert.equal(pushes.at(-1).aps['content-state'].arrivals[0].countdownText, 'Due');
   tick = now + 90001; await cycle(); assert.equal(pushes.at(-1).aps['content-state'].arrivals[0].id, 'B');
+  assert.equal(pushes.at(-1).aps['content-state'].updatedAt, (now - 978307200000) / 1000);
+  assert.equal(pushes.at(-1).aps.timestamp, Math.floor(tick / 1000));
   const restarted = new LiveActivityStore(store.filePath); tick = now + 120000; await cycle(restarted); assert.deepEqual(pushes.at(-1).aps['content-state'].arrivals, []); assert.equal(fetches, 0); assert.ok(scheduled.some((delay) => delay > 0));
   const count = pushes.length; await cycle(restarted); assert.equal(pushes.length, count);
+});
+
+test('selected board observation survives rollover and advances only with new selected evidence', () => {
+  const scoped = { ...record, selectionMode: 'platform', platformLabel: 'Platform 2' };
+  const first = row({ id: 'first', platform: 'Platform 2', time: now + 90_000 });
+  const later = row({ id: 'later', platform: 'Platform 2', time: now + 150_000 });
+  const offBoard = row({ id: 'off-board', platform: 'Platform 1', receivedAt: now + 60_000 });
+  const at = now + 90_001;
+  const build = (events) => buildApnsPayload(buildStationBoardState(scoped, cacheOf(...events), at), new Date(at));
+  const rollover = build([first, later, offBoard]).aps;
+  const swift = (msec) => (msec - 978307200000) / 1000;
+  assert.equal(rollover.timestamp, Math.floor(at / 1000));
+  assert.deepEqual(rollover['content-state'].arrivals.map((row) => row.id), ['later']);
+  assert.equal(rollover['content-state'].updatedAt, swift(now));
+  assert.equal(rollover['content-state'].arrivals[0].expiresAt, swift(later.expiresAt));
+  const replacement = build([{ ...later, receivedAt: now + 70_000 }, offBoard]).aps;
+  assert.equal(replacement['content-state'].updatedAt, swift(now + 70_000));
+  assert.equal(replacement['content-state'].arrivals[0].expiresAt, swift(later.expiresAt));
 });
 
 test('APNs failure does not acknowledge cached transition; retry retains original source expiry', async (t) => {
