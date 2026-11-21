@@ -32,6 +32,18 @@ export function canonical(value) {
   if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(',')}}`;
   return JSON.stringify(value);
 }
+export function regularOriginRule(record) {
+  const line = regularOrigins[record.lineID];
+  return { physicalEnd: line?.physicalEnds.includes(record.stationID) === true,
+    exclusiveFirstCalls: line?.exclusiveFirstCalls[record.stationID] || [] };
+}
+
+export function supportsRegularOrigin(record) {
+  const rule = regularOriginRule(record);
+  return record.supportsRegularTimetable === true && record.selectionMode === 'allPlatforms'
+    && !record.platformID && (rule.physicalEnd || rule.exclusiveFirstCalls.length > 0);
+}
+
 export function validBoard(stationID, lineID) { return STATION_BOARD_STATIONS.get(stationID)?.lineIDs.includes(lineID) === true; }
 function lineStations(lineID) { return [...STATION_BOARD_STATIONS.values()].filter((station) => station.lineIDs.includes(lineID)); }
 function named(name, lineID) {
@@ -558,6 +570,31 @@ function immutable(value) {
   return value;
 }
 
+function datedWithdrawal(response, record, departAt, now) {
+  const body = response.value;
+  const localRequestTime = londonLocal(departAt).slice(0, 16) + ':00';
+  if (!response.ok || body?.searchCriteria?.dateTimeType !== 'Departing'
+    || body.searchCriteria.dateTime !== localRequestTime || !Array.isArray(body.journeys)
+    || !Number.isInteger(body.recommendedMaxAgeMinutes) || body.recommendedMaxAgeMinutes <= 0
+    || typeof response.headers?.age !== 'string' || !/^\d+$/.test(response.headers.age.trim())) return null;
+  const observation = httpObservation(response.headers, response.completedAt,
+    Math.min(body.recommendedMaxAgeMinutes, 2) * 60000, { cacheRequired: true });
+  if (!observation || observation.expiresAt <= now) return null;
+  const matched = body.journeys.some(item => Array.isArray(item?.legs) && item.legs.some(leg =>
+    leg?.departurePoint?.naptanId === record.stationID && Array.isArray(leg.routeOptions)
+    && leg.routeOptions.some(option => option?.lineIdentifier?.id === record.lineID)
+    && (['isCancelled', 'isCanceled', 'cancelled', 'canceled'].some(field => leg[field] === true)
+      || ['status', 'serviceStatus'].some(field => ['cancelled', 'canceled', 'withdrawn'].includes(String(leg[field] || '').toLowerCase())))));
+  return matched ? observation : null;
+}
+
+export function regularReplacementAuthorized(cache, record, now) {
+  const proof = retainAvailability(cache, {}, record, now).some(p =>
+    p.scheduledClockOnly !== true && (activeClosure(p, now) || p.plannedUnavailable === true && p.observedAt <= now && p.expiresAt > now));
+  return proof || (cache.rejections || []).some(r => r.reason === 'regularSourceWithdrawn'
+    && r.stationID === record.stationID && r.lineID === record.lineID && r.observedAt <= now && r.expiresAt > now);
+}
+
 export async function refreshStationBoard(record, previous, config, fetchImpl, now, signal, clock = () => now, publicResponses = new Map(), publicationAuthorityStore = null, arrivalReader = null) {
   signal?.throwIfAborted();
   if (previous.nextRefreshAt > now) return mergeContexts(previous, {}, record, now);
@@ -697,26 +734,20 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
       }
     }
   }
-  const lineOrigins = regularOrigins[record.lineID];
-  const originRule = { physicalEnd: lineOrigins?.physicalEnds.includes(record.stationID) === true,
-    exclusiveFirstCalls: lineOrigins?.exclusiveFirstCalls[record.stationID] || [] };
-  const ordinaryBoard = record.supportsRegularTimetable === true && record.selectionMode === 'allPlatforms'
-    && !record.platformID && (originRule.physicalEnd || originRule.exclusiveFirstCalls.length > 0);
-  const closureText = /strike|industrial action|no service|not running|suspended|station closed/i;
-  const withdrawn = journey.ok && Array.isArray(journey.value?.journeys) &&
-    journey.value?.searchCriteria?.dateTime === londonLocal(journeyDepartAt).slice(0, 16) + ':00' &&
-    journey.value?.searchCriteria?.dateTimeType === 'Departing' &&
-    journey.value.journeys.some(item => Array.isArray(item?.legs) && item.legs.some(leg =>
-      leg?.departurePoint?.naptanId === record.stationID && Array.isArray(leg.routeOptions) &&
-      leg.routeOptions.some(option => option?.lineIdentifier?.id === record.lineID) &&
-      /cancelled|canceled|withdrawn|no service/i.test(JSON.stringify([leg.serviceStatus, leg.disruptions, leg.plannedWorks]))));
-  const blockedOrdinary = blocked || withdrawn || [service, station].some(response => response.ok &&
-    closureText.test(JSON.stringify(response.value || {})));
+  const originRule = regularOriginRule(record);
+  const ordinaryBoard = supportsRegularOrigin(record);
+  const withdrawal = ordinaryBoard ? datedWithdrawal(journey, record, journeyDepartAt, applicabilityAt) : null;
+  const currentProofs = retainAvailability(previous, { availabilityProofs }, record, applicabilityAt);
+  const activeUnknown = [service, station].some(response => response.ok && /strike|industrial action|no service|not running|suspended|station closed/i.test(JSON.stringify(response.value || {})));
+  // Ambiguous text may postpone an upstream read. Only the independently
+  // qualified scoped controls may authorize replacing a passenger's rows.
+  const blockedOrdinary = blocked || Boolean(withdrawal) || activeUnknown || currentProofs.some(p =>
+    activeClosure(p, applicabilityAt) || p.plannedUnavailable === true && p.expiresAt > applicabilityAt);
   const rateLimited = [service, station, journey].filter(response => response.status === 429);
   let ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, ordinaryBoard ? (publicationAuthorityStore?.ordinaryTimetableAdmissionFloor?.(record.stationID, record.lineID) || 0) : 0, ...rateLimited.map(response =>
     response.completedAt + Math.max(300000, retryAfterDelay(response.retryAfter, response.completedAt))));
-  if (ordinaryBoard && blockedOrdinary) rejections.push({
-    stationID: record.stationID, lineID: record.lineID, observedAt: applicabilityAt, reason: 'regularSourceWithdrawn'
+  if (withdrawal) rejections.push({
+    stationID: record.stationID, lineID: record.lineID, ...withdrawal, reason: 'regularSourceWithdrawn'
   });
   if (ordinaryBoard && !blockedOrdinary
     && !previous.sources?.['regular-timetable']?.events?.some(e => usable(e, record, applicabilityAt))

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import os from "node:os";
+import path from "node:path";
 import { buildStationBoardState, mergeContexts, refreshStationBoard, selectEvents } from '../server/station-board-v2.js';
-import { loadConfig, validateTokenPayload } from '../server/live-activity.js';
+import { LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, validateTokenPayload } from '../server/live-activity.js';
 
 // Window of the exact TfL Saturday response from 2026-11-21 18:31:58 UTC.
 // Full response SHA256 c023fd0c18abdea7b26b7e2742667aba532050c90687aa6425d6614ab35bc514.
@@ -19,7 +21,10 @@ function fixture({ limited = false, closed = false } = {}) {
     const path = new URL(url).pathname;
     requests.push(path);
     if (path === direct) return limited ? new Response(null, { status: 429, headers: { 'Retry-After': '480' } }) : reply(timetable);
-    if (closed && path.includes('/Status')) return reply([{ id: 'jubilee', lineStatuses: [{ statusSeverity: 20, reason: 'No service' }] }]);
+    if (closed && path.includes('/Status')) return reply([{ id: 'jubilee', lineStatuses: [{
+      statusSeverity: 16, statusSeverityDescription: 'Suspended',
+      validityPeriods: [{ fromDate: '2026-11-21T18:30:00Z', toDate: '2026-11-21T18:40:00Z' }],
+    }] }], { ...headers, Date: new Date(now + 90000).toUTCString(), Age: '0' });
     return new Response(null, { status: 503 });
   };
   return { requests, fetch };
@@ -48,7 +53,8 @@ test('Stratford ordinary timetable withholds on closure and honors a shared 429 
   const cache = await refreshStationBoard(record, {}, config, first.fetch, now, null);
   const closed = fixture({ closed: true });
   const afterClosure = await refreshStationBoard(record, cache, config, closed.fetch, now + 90000, null);
-  assert.equal(afterClosure.sources['regular-timetable'], undefined);
+  assert.deepEqual(selectEvents(afterClosure, record, now + 90000), []);
+  assert.equal(afterClosure.rejections.some(marker => marker.reason === 'regularSourceWithdrawn'), false);
   assert.equal(closed.requests.includes(direct), false);
   const limited = fixture({ limited: true });
   const afterLimit = await refreshStationBoard(record, {}, config, limited.fetch, now, null);
@@ -100,5 +106,147 @@ test('the generated origin map replays Epping, Edgware and the proved Edgware Ro
     assert.equal(rows[0]?.destinationStationID, answer.first);
     assert.equal(rows[0]?.time, at + answer.minutes * 60000);
     if (body.lineId === 'northern') assert.deepEqual([...new Set(rows.map(row => row.via))].sort(), ['Bank', 'Charing Cross']);
+  }
+});
+
+test('unrelated, future and stale control text cannot revoke an already qualified regular board', async () => {
+  const cache = await refreshStationBoard(record, {}, config, fixture().fetch, now, null);
+  const at = now + 90000;
+  for (const [line, validFrom, age] of [
+    ['central', '2026-11-21T18:30:00Z', '0'],
+    ['jubilee', '2026-11-21T18:45:00Z', '0'],
+    ['jubilee', '2026-11-21T18:30:00Z', '150'],
+  ]) {
+    const fetch = async url => new URL(url).pathname.includes('/Status') ? reply([{ id: line, lineStatuses: [{
+      statusSeverity: 16, statusSeverityDescription: 'Suspended', reason: 'No service',
+      validityPeriods: [{ fromDate: validFrom, toDate: '2026-11-21T19:00:00Z' }],
+    }] }], { Date: new Date(at).toUTCString(), Age: age, 'Cache-Control': 'public,max-age=120' })
+      : new Response(null, { status: 503 });
+    const after = await refreshStationBoard(record, cache, config, fetch, at, null);
+    assert.ok(selectEvents(after, record, at).length, line + ' ' + validFrom + ' ' + age);
+    assert.equal(after.rejections.some(marker => marker.reason === 'regularSourceWithdrawn'), false);
+  }
+});
+
+test('a fresh explicit exact-board dated cancellation retains its original clock', async () => {
+  const cache = await refreshStationBoard(record, {}, config, fixture().fetch, now, null);
+  const at = now + 90000;
+  for (const caseName of ['wrong-line', 'old', 'fresh']) {
+    const cancelled = {
+      recommendedMaxAgeMinutes: 2, searchCriteria: { dateTimeType: 'Departing', dateTime: '2026-11-21T18:33:00' },
+      journeys: [{ legs: [{ departurePoint: { naptanId: record.stationID }, isCancelled: true,
+        routeOptions: [{ lineIdentifier: { id: caseName === 'wrong-line' ? 'central' : 'jubilee' } }] }] }],
+    };
+    const fetch = async url => new URL(url).pathname.includes('/Journey/') ? reply(cancelled, {
+      Date: new Date(at).toUTCString(), Age: caseName === 'old' ? '150' : '12', 'Cache-Control': 'public,max-age=120',
+    }) : new Response(null, { status: 503 });
+    const after = await refreshStationBoard(record, cache, config, fetch, at, null);
+    const marker = after.rejections.find(item => item.reason === 'regularSourceWithdrawn');
+    if (caseName === 'fresh') {
+      assert.equal(marker.observedAt, at - 12000);
+      assert.deepEqual(selectEvents(after, record, at), []);
+    } else assert.equal(marker, undefined);
+  }
+});
+
+async function initialDisplayFixture(t, { hold = 45000 } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-regular-handoff-'));
+  t.after(() => fs.rmSync(dir, { force: true, recursive: true }));
+  const filename = path.join(dir, 'activities.json');
+  const payload = { ...record, activityID: 'synthetic-stratford-handoff', installID: 'synthetic-lease-device',
+    pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(),
+    appBundleID: 'OllyJ.My-Train-Times', appVersion: '1.2.6', buildNumber: '1', environment: 'sandbox',
+    contentStateContract: 'station-board-v2', initialRegularDisplayUntil: new Date(now + hold).toISOString() };
+  let store = new LiveActivityStore(filename);
+  const push = [], deadlines = [];
+  const register = async (value = payload, at = now) => {
+    const parsed = validateTokenPayload(value, new Date(at));
+    assert.equal(parsed.ok, true, JSON.stringify(parsed.errors));
+    return store.upsertToken(parsed.value, new Date(at));
+  };
+  const cycle = (at, fetchImpl = fixture().fetch, cacheOnly = false) => runLiveActivityWorkerCycle({
+    store, config, now: new Date(at), clock: () => at, fetchImpl, cacheOnly, logger: { info() {}, warn() {} },
+    pushImpl: async (_, body) => { push.push(body.aps['content-state']); },
+    scheduleRolloverPush: (_, body) => { deadlines.push(body.nextBoardBoundaryAt); },
+  });
+  return { payload, register, cycle, push, deadlines, restart() { store = new LiveActivityStore(filename); } };
+}
+
+const allOutage = async () => new Response(null, { status: 503 });
+
+test('initial outage holds only to the first immutable local deadline, across replay and restart', async t => {
+  const f = await initialDisplayFixture(t);
+  const first = await f.register();
+  assert.equal(first.initialRegularDisplayUntil, new Date(now + 45000).toISOString());
+  await f.cycle(now + 1000, allOutage);
+  assert.equal(f.push.length, 0);
+  assert.equal(f.deadlines.at(-1), now + 45000);
+  const replay = { ...f.payload, initialRegularDisplayUntil: new Date(now + 240000).toISOString() };
+  assert.equal((await f.register(replay, now + 2000)).initialRegularDisplayUntil, first.initialRegularDisplayUntil);
+  f.restart();
+  const rotated = { ...replay, tokenUpdatedAt: new Date(now + 3000).toISOString(), pushTokenHex: 'dcba'.repeat(16) };
+  assert.equal((await f.register(rotated, now + 3000)).initialRegularDisplayUntil, first.initialRegularDisplayUntil);
+  await f.cycle(now + 44999, allOutage, true);
+  assert.equal(f.push.length, 0);
+  await f.cycle(now + 45000, allOutage, true);
+  assert.equal(f.push.length, 1);
+  assert.equal(f.push[0].arrivals.length, 0);
+});
+
+test('qualified same-board content and active controls bypass the initial hold', async t => {
+  for (const mode of ['regular', 'closure', 'cancelled']) {
+    const f = await initialDisplayFixture(t);
+    await f.register();
+    const fetch = async url => {
+      const p = new URL(url).pathname;
+      const h = { Date: new Date(now + 1000).toUTCString(), Age: '0', 'Cache-Control': 'public,max-age=120' };
+      if (mode === 'regular' && p === direct) return reply(timetable, h);
+      if (mode === 'closure' && p.includes('/Status')) return reply([{ id: 'jubilee', lineStatuses: [{
+        statusSeverity: 16, statusSeverityDescription: 'Suspended',
+        validityPeriods: [{ fromDate: '2026-11-21T18:30:00Z', toDate: '2026-11-21T18:40:00Z' }],
+      }] }], h);
+      if (mode === 'cancelled' && p.includes('/Journey/')) return reply({
+        recommendedMaxAgeMinutes: 2, searchCriteria: { dateTimeType: 'Departing', dateTime: '2026-11-21T18:31:00' },
+        journeys: [{ legs: [{ departurePoint: { naptanId: record.stationID }, isCancelled: true,
+          routeOptions: [{ lineIdentifier: { id: 'jubilee' } }] }] }],
+      }, h);
+      return allOutage();
+    };
+    await f.cycle(now + 1000, fetch);
+    assert.equal(f.push.length, 1, mode);
+    assert.equal(f.push[0].arrivals.length > 0, mode === 'regular', mode);
+    await f.cycle(now + 1000, allOutage, true);
+    assert.equal(f.push.length, 1, mode + ' exact cache duplicate');
+  }
+});
+
+test('legacy registrations still send outage and eligible requests are capped by server and Activity expiry', async t => {
+  const f = await initialDisplayFixture(t, { hold: 3600000 });
+  const old = { ...f.payload, supportsRegularTimetable: undefined, initialRegularDisplayUntil: undefined };
+  assert.equal(validateTokenPayload({ ...old, initialRegularDisplayUntil: f.payload.initialRegularDisplayUntil }, new Date(now)).ok, false);
+  await f.register(old);
+  await f.cycle(now + 1000, allOutage);
+  assert.equal(f.push.length, 1);
+  const capped = await f.register({ ...f.payload, activityID: 'synthetic-capped' });
+  assert.equal(capped.initialRegularDisplayUntil, new Date(now + 600000).toISOString());
+  const endsAt = new Date(now + 180000).toISOString();
+  const ended = await f.register({ ...f.payload, activityID: 'synthetic-short', activityEndsAt: endsAt });
+  assert.equal(ended.initialRegularDisplayUntil, endsAt);
+});
+
+test('a fresh through prediction can take over while a terminal arrival cannot', async t => {
+  for (const destination of ['940GZZLUSTD', '940GZZLUSTM']) {
+    const f = await initialDisplayFixture(t);
+    await f.register();
+    const at = now + 1000;
+    const fetch = async url => new URL(url).pathname === '/StopPoint/940GZZLUSTD/Arrivals'
+      ? reply([{ id: 'actual-shape', naptanId: record.stationID, lineId: record.lineID,
+        destinationNaptanId: destination, expectedArrival: new Date(at + 60000).toISOString(),
+        timestamp: new Date(at).toISOString(), platformName: 'Platform 2' }],
+      { Date: new Date(at).toUTCString(), Age: '0', 'Cache-Control': 'public,max-age=30' })
+      : allOutage();
+    await f.cycle(at, fetch);
+    if (destination === record.stationID) assert.equal(f.push.length, 0);
+    else assert.equal(f.push[0]?.arrivals[0]?.timeEvidence, 'throughArrivalPrediction');
   }
 });

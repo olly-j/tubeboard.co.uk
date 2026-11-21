@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
 import { TransactionalJsonStore } from './transactional-json-store.js';
 import { admitPlannedSeed } from './station-board-seed.js';
-import { STATION_ARRIVAL_ATTEMPT_FLOOR_MS, STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, refreshStationArrivals, StationArrivalReader, buildStationBoardState } from './station-board-v2.js';
+import { STATION_ARRIVAL_ATTEMPT_FLOOR_MS, STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, refreshStationArrivals, StationArrivalReader, buildStationBoardState, supportsRegularOrigin, regularReplacementAuthorized } from './station-board-v2.js';
 
 // Never log this tuple: it includes token custody and exact selected scope.
 export function registrationTuple(record) {
@@ -203,6 +203,16 @@ export class LiveActivityStore extends TransactionalJsonStore {
         else delete record.plannedPresentationVersion;
         if (payload.supportsRegularTimetable === true) record.supportsRegularTimetable = true;
         else delete record.supportsRegularTimetable;
+        // A client deadline protects a single initial presentation only. Token
+        // refresh and same-activity re-registration never create a new lease.
+        if (!isSameActivity && supportsRegularOrigin(record) && payload.initialRegularDisplayUntil) {
+          const until = Math.min(Date.parse(payload.initialRegularDisplayUntil), now.getTime() + 600000,
+            Date.parse(record.activityEndsAt || '') || Infinity);
+          if (until > now.getTime()) record.initialRegularDisplayUntil = new Date(until).toISOString();
+        } else if (!supportsRegularOrigin(record)
+            || ['stationID', 'lineID', 'selectionMode', 'platformID'].some(key => previous[key] !== record[key])) {
+          delete record.initialRegularDisplayUntil;
+        }
         if (isSameActivity && registrationTuple(previous) !== registrationTuple(record)) delete record.lastBoardContentDigest;
         if (previous.stationID !== payload.stationID || previous.lineID !== payload.lineID) delete record.stationBoardCache;
         const seed = admitPlannedSeed(payload.plannedContextSeed, record, now.getTime());
@@ -614,6 +624,14 @@ export function validateTokenPayload(input, now = new Date()) {
     errors.push('selectionMode must be platform or allPlatforms');
   }
 
+  if (payload.initialRegularDisplayUntil !== undefined &&
+      (!v2 || !supportsRegularOrigin({ ...payload, selectionMode })
+        || typeof payload.initialRegularDisplayUntil !== 'string'
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(payload.initialRegularDisplayUntil)
+        || !Number.isFinite(Date.parse(payload.initialRegularDisplayUntil)))) {
+    errors.push('initialRegularDisplayUntil is unsupported');
+  }
+
   if (selectionMode === 'platform' && !optionalString(payload.platformID)) {
     errors.push('platformID is required when selectionMode is platform');
   }
@@ -661,7 +679,7 @@ export function validateTokenPayload(input, now = new Date()) {
       appVersion: String(payload.appVersion || '').trim(),
       buildNumber: String(payload.buildNumber || '').trim(),
       environment: String(payload.environment || '').trim(),
-      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(payload.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}), ...(payload.supportsRegularTimetable === true ? { supportsRegularTimetable: true } : {}), ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
+      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(payload.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}), ...(payload.supportsRegularTimetable === true ? { supportsRegularTimetable: true } : {}), ...(payload.initialRegularDisplayUntil !== undefined ? { initialRegularDisplayUntil: payload.initialRegularDisplayUntil } : {}), ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
     }
   };
 }
@@ -994,7 +1012,13 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       expectedPublicationGeneration = publicationGeneration(publicationAuthority);
       const contentState = buildStationBoardState(record, cache, effectiveNow.getTime());
       const contentDigest = stationBoardContentDigest(contentState);
-      if (contentDigest !== record.lastBoardContentDigest) {
+      const displayUntil = Date.parse(record.initialRegularDisplayUntil || '');
+      const hasInitialBoard = contentState.arrivals.some(row => row.expectedArrival != null &&
+        ['estimatedDeparture', 'scheduledDeparture', 'throughArrivalPrediction'].includes(row.timeEvidence));
+      const holdInitial = !record.lastSuccessAt && displayUntil > effectiveNow.getTime() && !hasInitialBoard
+        && !regularReplacementAuthorized(cache, record, effectiveNow.getTime());
+      if (holdInitial) contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, displayUntil);
+      if (!holdInitial && contentDigest !== record.lastBoardContentDigest) {
         const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
         if (!current || registrationTuple(current) !== expectedTuple || publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;
         await pushImpl(current, buildApnsPayload(contentState, effectiveNow), config, { signal });
