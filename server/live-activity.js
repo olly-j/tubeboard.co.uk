@@ -10,7 +10,7 @@ import { STATION_ARRIVAL_ATTEMPT_FLOOR_MS, STATION_BOARD_CONTRACT, STATION_BOARD
 
 // Never log this tuple: it includes token custody and exact selected scope.
 export function registrationTuple(record) {
-  return JSON.stringify(['environment','activityID','tokenUpdatedAt','pushTokenHex','stationID','lineID','selectionMode','platformID','platformHeading','platformLabel','platformDirection','activityStartedAt','activityEndsAt','contentStateContract','plannedPresentationVersion','timetablePublicationAuthorityVersion'].map((k) => record[k] ?? null));
+  return JSON.stringify(['environment','activityID','tokenUpdatedAt','pushTokenHex','stationID','lineID','selectionMode','platformID','platformHeading','platformLabel','platformDirection','activityStartedAt','activityEndsAt','contentStateContract','plannedPresentationVersion','timetablePublicationAuthorityVersion','supportsRegularTimetable'].map((k) => record[k] ?? null));
 }
 // Use an initial worker opportunity unless the armed regular cycle is already
 // within the existing request floor. No new clock, budget or APNs bypass; SerialWorker and
@@ -136,7 +136,7 @@ export class LiveActivityStore extends TransactionalJsonStore {
       if (isSameActivity && previous.contentStateContract === STATION_BOARD_CONTRACT && Date.parse(payload.tokenUpdatedAt) === Date.parse(previous.tokenUpdatedAt)) {
         // Equal observations cannot establish a different board/token contract.
         let capabilityChanged = false;
-        const equalScope = registrationTuple({ ...payload, plannedPresentationVersion: previous.plannedPresentationVersion, timetablePublicationAuthorityVersion: previous.timetablePublicationAuthorityVersion }) === registrationTuple(previous);
+        const equalScope = registrationTuple({ ...payload, plannedPresentationVersion: previous.plannedPresentationVersion, timetablePublicationAuthorityVersion: previous.timetablePublicationAuthorityVersion, supportsRegularTimetable: previous.supportsRegularTimetable }) === registrationTuple(previous);
         if (!equalScope) return { changed: authorityChanged, value: { ...redactRecord(previous), registrationAccepted: false } };
         if (previous.timetablePublicationAuthorityVersion !== payload.timetablePublicationAuthorityVersion) {
           if (previous.timetablePublicationAuthorityVersion === undefined && payload.timetablePublicationAuthorityVersion === 1
@@ -147,8 +147,13 @@ export class LiveActivityStore extends TransactionalJsonStore {
           } else return { value: { ...redactRecord(previous), registrationAccepted: false } };
         }
         if (previous.plannedPresentationVersion !== payload.plannedPresentationVersion) {
-          if (payload.plannedPresentationVersion === undefined) { delete previous.plannedPresentationVersion; delete previous.lastBoardContentDigest; }
+          if (payload.plannedPresentationVersion === undefined) { delete previous.plannedPresentationVersion; delete previous.supportsRegularTimetable; delete previous.lastBoardContentDigest; }
           return { value: { ...redactRecord(previous), registrationAccepted: payload.plannedPresentationVersion === undefined } };
+        }
+        if (payload.supportsRegularTimetable === true && previous.supportsRegularTimetable !== true) {
+          previous.supportsRegularTimetable = true;
+          delete previous.lastBoardContentDigest;
+          capabilityChanged = true;
         }
         const seed = admitPlannedSeed(payload.plannedContextSeed, previous, now.getTime());
         if (!seed.errors.length && (Object.keys(seed.sources).length || seed.availabilityProofs?.length)) previous.stationBoardCache = applyPublicationAuthority(mergeContexts(applyPublicationAuthority(previous.stationBoardCache, state.publicationAuthority), { ...seed, sources: Object.fromEntries(Object.entries(seed.sources).filter(([source]) => source !== 'timetable' || (payload.plannedContextSeed.contexts.filter(c => ['timetable','unified-timetable'].includes(c.sourceID)).every(c => scopedSeedMatchesAsset(c, assets.get(c.publication.sha256), previous))))) }, previous, now.getTime()), state.publicationAuthority);
@@ -196,6 +201,8 @@ export class LiveActivityStore extends TransactionalJsonStore {
         else delete record.timetablePublicationAuthorityVersion;
         if (payload.plannedPresentationVersion === 2) record.plannedPresentationVersion = 2;
         else delete record.plannedPresentationVersion;
+        if (payload.supportsRegularTimetable === true) record.supportsRegularTimetable = true;
+        else delete record.supportsRegularTimetable;
         if (isSameActivity && registrationTuple(previous) !== registrationTuple(record)) delete record.lastBoardContentDigest;
         if (previous.stationID !== payload.stationID || previous.lineID !== payload.lineID) delete record.stationBoardCache;
         const seed = admitPlannedSeed(payload.plannedContextSeed, record, now.getTime());
@@ -271,6 +278,12 @@ export class LiveActivityStore extends TransactionalJsonStore {
 
   stationArrivalAdmissionFloors() {
     return this.snapshot(state => state.records.filter(record => record.active !== false && record.contentStateContract === STATION_BOARD_CONTRACT && Number.isFinite(record.stationBoardCache?.arrivalsNotBefore)).map(record => ({ stationID: record.stationID, notBefore: record.stationBoardCache.arrivalsNotBefore })));
+  }
+
+  ordinaryStratfordAdmissionFloor() {
+    return this.snapshot(state => Math.max(0, ...state.records.filter(record =>
+      record.active !== false && record.stationID === '940GZZLUSTD' && record.lineID === 'jubilee'
+        && record.supportsRegularTimetable === true).map(record => record.stationBoardCache?.ordinaryNotBefore || 0)));
   }
 
   async retainStationBoard(activityID, environment, incoming, now = new Date(), expectedTuple = null) {
@@ -585,6 +598,7 @@ export function validateTokenPayload(input, now = new Date()) {
 
   const v2 = payload.contentStateContract === STATION_BOARD_CONTRACT;
   if (payload.timetablePublicationAuthorityVersion !== undefined && (!v2 || payload.plannedPresentationVersion !== 2 || payload.timetablePublicationAuthorityVersion !== 1)) errors.push('timetablePublicationAuthorityVersion is unsupported');
+  if (payload.supportsRegularTimetable !== undefined && (!v2 || payload.plannedPresentationVersion !== 2 || payload.supportsRegularTimetable !== true)) errors.push('supportsRegularTimetable is unsupported');
   if (payload.plannedPresentationVersion !== undefined && (!v2 || payload.plannedPresentationVersion !== 2)) errors.push('plannedPresentationVersion is unsupported');
   if (payload.contentStateContract !== undefined && !v2) errors.push('contentStateContract is unsupported');
   if (v2 && !validBoard(payload.stationID, payload.lineID)) errors.push('stationID is not on the selected station-board line');
@@ -647,7 +661,7 @@ export function validateTokenPayload(input, now = new Date()) {
       appVersion: String(payload.appVersion || '').trim(),
       buildNumber: String(payload.buildNumber || '').trim(),
       environment: String(payload.environment || '').trim(),
-      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(payload.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}), ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
+      ...(v2 ? { contentStateContract: STATION_BOARD_CONTRACT, ...(payload.plannedPresentationVersion === 2 ? { plannedPresentationVersion: 2 } : {}), ...(payload.timetablePublicationAuthorityVersion === 1 ? { timetablePublicationAuthorityVersion: 1 } : {}), ...(payload.supportsRegularTimetable === true ? { supportsRegularTimetable: true } : {}), ...(payload.plannedContextSeed !== undefined ? { plannedContextSeed: payload.plannedContextSeed } : {}) } : {})
     }
   };
 }

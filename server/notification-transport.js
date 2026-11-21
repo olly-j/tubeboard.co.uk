@@ -47,7 +47,8 @@ export function fetchJsonResponse(url, fetchImpl = fetch, { includeHeaders = fal
     if (!response.ok) {
       // Non-success bodies are not used; release the connection promptly.
       if (response.body?.cancel) void response.body.cancel().catch(() => {});
-      return { ok: false, status: response.status, value: null };
+      const retryAfter = response.status === 429 ? response.headers?.get?.('retry-after') : null;
+      return { ok: false, status: response.status, value: null, ...(retryAfter == null ? {} : { retryAfter }) };
     }
     let value = null, bodySHA256;
     if (method !== 'HEAD' && bodyLimitBytes !== null) {

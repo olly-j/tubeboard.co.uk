@@ -315,3 +315,24 @@ export function qualifyTimetable(asset,responses,record,{head,serviceObservation
   for(const e of events){e.receivedAt=observedAt;e.expiresAt=expiresAt;}
   return {observedAt,expiresAt,events,qualificationOrigin:'server',evidence:{publication:{url:URL,sha256:proof.publication.sha256,timezone:'Europe/London',operatingStartDate:entry.operatingStartDate,operatingEndDate:entry.operatingEndDate,holidayCoverageStart:proof.holidayCoverageStart,holidayCoverageEnd:proof.holidayCoverageEnd,nonOperationBankHolidays:true},publicationProofIdentity:{...asset.identity},independentPublicationObservedAt:head.observedAt,...(entry.directionalDefinitions===undefined?{sourceSHA256:rawHashes[0].sha256}:{publicationDirections:sets.map(s=>s.direction)}),rawTimetableResponses:rawHashes,rows:rowEvidence,qualification}};
 }
+
+// Ordinary profiles provide scheduled clocks only for a proved origin. The
+// selected stop and destination must be supported by the same response.
+export function regularStratfordJourneys(response, serviceDate) {
+  const origin = '940GZZLUSTD', line = 'jubilee';
+  responseShape(response);
+  if (response.lineId !== line || response.timetable.departureStopId !== origin) fail('wrongBoard');
+  const profiles = new Map([
+    ['Monday - Thursday', [2, 3, 4, 5]],
+    ['Friday', [6]],
+    ['Saturday (also Good Friday)', [7]],
+    ['Sunday', [1]],
+  ]);
+  const names = new Set(response.timetable.routes.flatMap(route => route.schedules.map(schedule => schedule.name)));
+  if ([...names].some(name => !profiles.has(name))) fail('unsupportedCalendar');
+  const active = [...names].filter(name => profiles.get(name).includes(weekday(serviceDate)));
+  if (active.length !== 1) fail('unsupportedCalendar');
+  return profileJourneys(response, active[0]).filter(row =>
+    row.path.find(stop => stop !== origin) === '940GZZLUWHM' &&
+    row.path.at(-1) !== origin && row.path.every(stop => validBoard(stop, line)));
+}
