@@ -724,7 +724,7 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
   for (const advancing of [true, false]) {
     const store = await temporaryStore(t);
     await store.upsertToken({ ...record, activityID: 'timer-second', installID: 'timer-second-install', selectionMode: 'platform', platformID: 'southbound-platform-2', platformHeading: 'Southbound - Platform 2' }, new Date(now));
-    let at = now, sleeping = 0, active = 0, maximum = 0, initialTimestamp = null;
+    let at = now, sleeping = 0, active = 0, maximum = 0, initialTimestamp = null, currentCycle;
     const timers = new Map(), reads = [], supplements = [], delivered = [], cycles = [];
     const schedule = (callback, delay) => { const key = { at: at + delay, callback, unref() {} }; timers.set(key, key); return key; };
     const cancel = timer => timers.delete(timer);
@@ -735,7 +735,7 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
       signal?.addEventListener('abort', abort, { once: true });
     });
     const fetchImpl = async (url, { signal }) => {
-      const path = new URL(url).pathname, dispatch = at;
+      const path = new URL(url).pathname, dispatch = at, cycle = currentCycle;
       await latency(2000, signal);
       if (path.startsWith('/StopPoint/') && path.endsWith('/Arrivals')) {
         const timestamp = advancing || initialTimestamp === null ? at - 78480 : initialTimestamp;
@@ -743,19 +743,19 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
         reads.push({ dispatch, received: at, expiry: timestamp + 120000 });
         return new Response(JSON.stringify([arrival({ timestamp: new Date(timestamp).toISOString(), expectedArrival: new Date(at + 300000).toISOString() })]), { headers: headers(at, 51, 30) });
       }
-      supplements.push({ at: dispatch, path });
+      supplements.push({ path, cycle });
       return new Response(JSON.stringify(path.endsWith('/Status') ? [{ id: record.lineID, lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: 'Good Service' }] }] : []), { headers: headers(at, 0, 30) });
     };
     const worker = new SerialWorker({ schedule, cancel, initialDelayMs: 2000, intervalMs: 90000,
       onError: error => { throw error; },
       run: async (signal, mode) => {
-        maximum = Math.max(maximum, ++active); cycles.push({ at, ...mode });
+        maximum = Math.max(maximum, ++active); currentCycle = { at, ...mode }; cycles.push(currentCycle);
         try {
           await runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at, signal, ...mode, fetchImpl,
             pushImpl: async (_, payload) => { await latency(1000, signal); delivered.push({ at, payload }); return { status: 200 }; },
             scheduleSourceRefresh: (r, cache, current, interval) => worker.scheduleRerun(`${r.activityID}:source`, getStationArrivalsRefreshDelayMs(cache, current, interval), { sourceOnly: true }),
             scheduleRolloverPush: (r, state, current, interval) => worker.scheduleRerun(`${r.activityID}:cache`, getRolloverDelayMs(state, current, interval), { cacheOnly: true }), logger });
-        } finally { active--; }
+        } finally { active--; currentCycle = undefined; }
       }
     });
     t.after(() => worker.stop());
@@ -777,7 +777,11 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
     const full = cycles.filter(c => !c.cacheOnly && !c.sourceOnly);
     assert.equal(full[0].at, now + 2000);
     assert.ok(full.slice(1).every((c, i) => c.at >= now + (i + 1) * 90000 && c.at <= now + (i + 1) * 90000 + 8000), 'full90s triggers retain phase; only active serialized work may delay dispatch');
-    assert.ok(supplements.every(read => full.some(c => read.at >= c.at && read.at <= c.at + 4000)), 'only full cycles make supplemental requests');
+    assert.ok(supplements.every(read => full.includes(read.cycle)), 'only full cycles make supplemental requests');
+    for (const cycle of full) {
+      const journeys = supplements.filter(read => read.cycle === cycle && read.path.startsWith('/Journey/')).map(read => read.path);
+      assert.ok(journeys.length <= 2 && new Set(journeys).size === journeys.length, 'each full cycle shares one Journey per route scope');
+    }
     if (advancing) {
       assert.ok(reads.slice(1).every((r, i) => r.received < reads[i].expiry), 'new original source arrives before previous expiry');
       assert.ok(delivered.every(({ at: receipt, payload }) => payload.aps['content-state'].arrivals.some(r => r.timeEvidence === 'throughArrivalPrediction' && r.expiresAt * 1000 + 978307200000 > receipt)), 'every delivered healthy payload still has an original current live row');

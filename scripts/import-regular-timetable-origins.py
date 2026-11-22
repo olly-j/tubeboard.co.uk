@@ -30,7 +30,12 @@ def main():
         known_starts = {station: sorted(call for call in calls if known(call))
                         for station, calls in starts.items() if station not in ends and known(station)}
         if known_ends or known_starts:
-            rules[line_id] = {"physicalEnds": known_ends, "exclusiveFirstCalls": known_starts}
+            # Only the complete-atlas lookup certifies a common enquiry stop.
+            # The mobile partial-line hints are broader than this bounded scope.
+            common_targets = {station: target for station, target in generator.common_stops(line["editions"]).items()
+                              if station in known_ends and known(target)}
+            rules[line_id] = {"physicalEnds": known_ends, "exclusiveFirstCalls": known_starts,
+                              "commonJourneyTargets": common_targets}
     receipt = {
         "sourceAppHead": subprocess.check_output(["git", "-C", str(app), "rev-parse", "HEAD"], text=True).strip(),
         "publishedLineMapsSHA256": hashlib.sha256(atlas).hexdigest(),

@@ -338,16 +338,24 @@ export function parseRailDepartures(rows, record, headers, now) {
       timeEvidence: incoming ? 'arrivalPrediction' : Number.isFinite(estimated) ? 'predictedDeparture' : 'scheduledDeparture', platform: usablePlatform(row.platformName), direction: publicDirection(row.platformName), providerDirection: null, via: null, ...(incoming ? { scheduledArrival: Number.isFinite(isoClock(row.scheduledTimeOfArrival)) ? isoClock(row.scheduledTimeOfArrival) : null } : {}) }, observation)];
   });
 }
-export function journeyURL(record, now) {
+export function journeyURL(record, departAt, actualRequestAt = departAt) {
   const line = STATION_BOARD_LINES.get(record.lineID);
+  if (!line || !validBoard(record.stationID, record.lineID)) return null;
   const rule = catalogue.narrowQueryRules?.find((rule) => rule.stationID === record.stationID && rule.lineID === record.lineID);
-  const target = rule?.targetID || line.branchTargetIDs.find((id) => id !== record.stationID && validBoard(id, record.lineID));
-  if (!target || !validBoard(record.stationID, record.lineID)) return null;
-  const local = londonLocal(now), url = new URL(`https://api.tfl.gov.uk/Journey/JourneyResults/${record.stationID}/to/${target}`);
+  const common = !rule && record.selectionMode === 'allPlatforms' && !record.platformID && departAt <= actualRequestAt
+    ? regularOrigins[record.lineID]?.commonJourneyTargets?.[record.stationID] : null;
+  const validCommon = common && common !== record.stationID && validBoard(common, record.lineID) ? common : null;
+  const target = rule?.targetID || validCommon || line.branchTargetIDs.find((id) => id !== record.stationID && validBoard(id, record.lineID));
+  if (!target) return null;
+  const local = londonLocal(departAt), url = new URL(`https://api.tfl.gov.uk/Journey/JourneyResults/${record.stationID}/to/${target}`);
   for (const [name, value] of Object.entries({ date: local.slice(0, 10).replaceAll('-', ''), time: local.slice(11, 16).replace(':', ''), timeIs: 'Departing', mode: line.mode, useRealTimeLiveArrivals: 'false', calcOneDirection: 'true', includeAlternativeRoutes: rule ? 'false' : 'true' })) url.searchParams.set(name, value);
   if (rule) url.searchParams.set('journeyPreference', 'leastinterchange');
   if (rule?.via) { url.searchParams.set('via', rule.via); url.searchParams.set('maxWalkingMinutes', '0'); }
   return url;
+}
+function withdrawnJourneyLeg(leg) {
+  return ['isCancelled', 'isCanceled', 'cancelled', 'canceled'].some(field => leg[field] === true)
+    || ['status', 'serviceStatus'].some(field => ['cancelled', 'canceled', 'withdrawn'].includes(String(leg[field] || '').toLowerCase()));
 }
 export function parseJourney(root, record, headers, requestedAt, now, actualRequestAt = requestedAt) {
   const line = STATION_BOARD_LINES.get(record.lineID), local = `${londonLocal(requestedAt).slice(0, 16)}:00`;
@@ -358,7 +366,7 @@ export function parseJourney(root, record, headers, requestedAt, now, actualRequ
   const seen = new Map(), events = [];
   for (const journey of root.journeys) {
     const leg = Array.isArray(journey?.legs) ? journey.legs.find((leg) => objectRow(leg) && leg.mode?.id !== 'walking') : null, option = leg?.routeOptions?.[0];
-    if (!leg || leg.mode?.id !== line.mode || leg.departurePoint?.naptanId !== record.stationID || leg.isDisrupted !== false || !Array.isArray(leg.disruptions) || leg.disruptions.length || !Array.isArray(leg.plannedWorks) || leg.plannedWorks.length || leg.routeOptions?.length !== 1 || option.lineIdentifier?.id !== record.lineID || option.directions?.length !== 1 || typeof option.directions[0] !== 'string') continue;
+    if (!leg || leg.mode?.id !== line.mode || leg.departurePoint?.naptanId !== record.stationID || leg.isDisrupted !== false || withdrawnJourneyLeg(leg) || !Array.isArray(leg.disruptions) || leg.disruptions.length || !Array.isArray(leg.plannedWorks) || leg.plannedWorks.length || leg.routeOptions?.length !== 1 || option.lineIdentifier?.id !== record.lineID || option.directions?.length !== 1 || typeof option.directions[0] !== 'string') continue;
     const departure = londonClock(leg.scheduledDepartureTime), parts = option.directions[0].split(/ via /i), destination = named(parts[0], record.lineID);
     if (!Number.isFinite(departure) || departure < now || departure < requestedAt - (requestedAt > actualRequestAt ? 0 : 60000) || !destination || destination.stationID === record.stationID || parts.length > 2 || !Array.isArray(leg.path?.stopPoints) || !leg.path.stopPoints.length) continue;
     const viaStation = parts.length === 2 ? named(parts[1], record.lineID) : null;
@@ -676,9 +684,7 @@ function datedWithdrawal(response, record, departAt, now) {
   const cancelled = body.journeys.flatMap(item => {
     const leg = Array.isArray(item?.legs) ? item.legs.find(leg => leg?.mode?.id !== 'walking') : null;
     if (leg?.departurePoint?.naptanId !== record.stationID || leg.routeOptions?.length !== 1
-      || leg.routeOptions[0]?.lineIdentifier?.id !== record.lineID
-      || !(['isCancelled', 'isCanceled', 'cancelled', 'canceled'].some(field => leg[field] === true)
-        || ['status', 'serviceStatus'].some(field => ['cancelled', 'canceled', 'withdrawn'].includes(String(leg[field] || '').toLowerCase())))) return [];
+      || leg.routeOptions[0]?.lineIdentifier?.id !== record.lineID || !withdrawnJourneyLeg(leg)) return [];
     const clock = londonClock(leg.scheduledDepartureTime);
     if (!Number.isFinite(clock)) return [Math.min(observation.expiresAt, cutoff)];
     return clock > now && clock < cutoff ? [clock] : [];
@@ -785,7 +791,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   const unknown20 = is20 && !serviceProofs.some((p) => p.scheduledClockOnly === true && (p.observedAt + 600000 > actualRequestAt || p.expiresAt + 600000 > actualRequestAt));
   const blocked = unknown20 || admissionProofs.some((p) => p.scheduledClockOnly !== true && (activeClosure(p, actualRequestAt) || expiredBarrier(p, actualRequestAt) || p.plannedUnavailable === true && p.expiresAt > actualRequestAt));
   const journeyDepartAt = blocked ? actualRequestAt : shiftedJourneyTime(service.value, serviceProofs, admissionProofs, actualRequestAt);
-  const plannedURL = !blocked ? journeyURL(record, journeyDepartAt) : null;
+  const plannedURL = !blocked ? journeyURL(record, journeyDepartAt, actualRequestAt) : null;
   const journeyTask = plannedURL ? request(plannedURL) : Promise.resolve({ ok: false });
   const [arrivals, departures, journey, timetableResponses] = await Promise.all([arrivalTask, railTask, journeyTask, timetableTask]);
   const completedAt = clock(), sources = {};
