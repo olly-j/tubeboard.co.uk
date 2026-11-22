@@ -124,6 +124,30 @@ test('shifted Journey criteria and own-leg bounds never borrow actual dispatch a
  assert.equal(parseJourney(journey(record,shifted,shifted-1000),record,header(),shifted,now,now).length,0);
  const instant=londonClock('2026-10-02T23:59:30'),query=londonClock('2026-10-03T00:01:00');const midnightRows=parseJourney(journey(record,query,query+60000),record,header(instant,0,120),query,instant,instant);
  assert.equal(midnightRows.length,1);assert.equal(midnightRows[0].expiresAt,londonClock('2026-10-03T00:00:00'));
+ const delayed=londonClock('2026-10-03T00:00:01');assert.deepEqual(parseJourney(journey(record,query,query+60000),record,header(delayed,0,120),query,delayed,instant),[]);
+});
+
+test('a next-day shifted enquiry cannot withdraw ordinary service past the actual dispatch day', async () => {
+ const actual=londonClock('2026-10-02T23:59:30'), shift=londonClock('2026-10-03T00:01:00');
+ const selected={...record,supportsRegularTimetable:true};
+ const controls=synthetic20(selected,[[actual-1000,shift]]);
+ const cancelled=journey(selected,shift,shift+60000);cancelled.journeys[0].legs[0].isCancelled=true;
+ for(const delay of [1000,31000]) {
+   let clock=actual;
+   const requests=[];
+   const fetch=async url=>{
+     if(url.pathname.endsWith('/Status'))return new Response(JSON.stringify(controls),{headers:header(actual,0,120)});
+     if(url.pathname.includes('JourneyResults')) {
+       requests.push([url.searchParams.get('date'),url.searchParams.get('time')]);clock=actual+delay;
+       return new Response(JSON.stringify(cancelled),{headers:header(clock,0,120)});
+     }
+     return new Response(null,{status:503});
+   };
+   const cache=await refreshStationBoard(selected,{},loadConfig({}),fetch,actual,null,()=>clock);
+   assert.deepEqual(requests,[['20261003','0001']]);
+   assert.equal(cache.rejections.some(marker=>marker.reason==='regularSourceWithdrawn'),false);
+   assert.equal(cache.sources['journey-planner'],undefined);
+ }
 });
 
 test('late successful or failed APNs callback cannot acknowledge/backoff a newer registration tuple; cache-only retries add zero HTTP',async(t)=>{

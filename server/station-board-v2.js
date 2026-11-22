@@ -12,6 +12,7 @@ const catalogue = JSON.parse(fs.readFileSync(new URL('../contracts/station-board
 export const STATION_BOARD_LINES = new Map(catalogue.lines.map((line) => [line.lineID, line]));
 export const STATION_BOARD_STATIONS = new Map(catalogue.stations.map((station) => [station.stationID, station]));
 const regularOrigins = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-regular-origins-v1.json', import.meta.url))).lines;
+const journeyTargetEvidence = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-journey-target-evidence-v1.json', import.meta.url))).boards;
 const APPLE_EPOCH = 978307200000;
 const key = (value) => String(value || '').toLowerCase().replace(/ (underground|rail|dlr) station/g, '').replace(/\s*\([^)]*\)/g, '').replace(/\s+(station|terminus)$/, '').trim().replace(/\s+/g, ' ');
 const hash = (value) => crypto.createHash('sha256').update(canonical(value)).digest('hex');
@@ -338,27 +339,38 @@ export function parseRailDepartures(rows, record, headers, now) {
       timeEvidence: incoming ? 'arrivalPrediction' : Number.isFinite(estimated) ? 'predictedDeparture' : 'scheduledDeparture', platform: usablePlatform(row.platformName), direction: publicDirection(row.platformName), providerDirection: null, via: null, ...(incoming ? { scheduledArrival: Number.isFinite(isoClock(row.scheduledTimeOfArrival)) ? isoClock(row.scheduledTimeOfArrival) : null } : {}) }, observation)];
   });
 }
-export function journeyURL(record, now) {
+export function journeyURL(record, departAt, actualRequestAt = departAt) {
   const line = STATION_BOARD_LINES.get(record.lineID);
+  if (!line || !validBoard(record.stationID, record.lineID)) return null;
   const rule = catalogue.narrowQueryRules?.find((rule) => rule.stationID === record.stationID && rule.lineID === record.lineID);
-  const target = rule?.targetID || line.branchTargetIDs.find((id) => id !== record.stationID && validBoard(id, record.lineID));
-  if (!target || !validBoard(record.stationID, record.lineID)) return null;
-  const local = londonLocal(now), url = new URL(`https://api.tfl.gov.uk/Journey/JourneyResults/${record.stationID}/to/${target}`);
+  const branch = rule?.targetID || line.branchTargetIDs.find((id) => id !== record.stationID && validBoard(id, record.lineID));
+  const common = !rule && record.selectionMode === 'allPlatforms' && !record.platformID && departAt <= actualRequestAt
+    ? regularOrigins[record.lineID]?.commonJourneyTargets?.[record.stationID] : null;
+  const evidence = journeyTargetEvidence[record.lineID]?.[record.stationID];
+  const target = common && common !== record.stationID && validBoard(common, record.lineID)
+    && evidence?.targetID === common && evidence.previousTargetID === branch ? common : branch;
+  if (!target) return null;
+  const local = londonLocal(departAt), url = new URL(`https://api.tfl.gov.uk/Journey/JourneyResults/${record.stationID}/to/${target}`);
   for (const [name, value] of Object.entries({ date: local.slice(0, 10).replaceAll('-', ''), time: local.slice(11, 16).replace(':', ''), timeIs: 'Departing', mode: line.mode, useRealTimeLiveArrivals: 'false', calcOneDirection: 'true', includeAlternativeRoutes: rule ? 'false' : 'true' })) url.searchParams.set(name, value);
   if (rule) url.searchParams.set('journeyPreference', 'leastinterchange');
   if (rule?.via) { url.searchParams.set('via', rule.via); url.searchParams.set('maxWalkingMinutes', '0'); }
   return url;
+}
+function withdrawnJourneyLeg(leg) {
+  return ['isCancelled', 'isCanceled', 'cancelled', 'canceled'].some(field => leg[field] === true)
+    || ['status', 'serviceStatus'].some(field => ['cancelled', 'canceled', 'withdrawn'].includes(String(leg[field] || '').toLowerCase()));
 }
 export function parseJourney(root, record, headers, requestedAt, now, actualRequestAt = requestedAt) {
   const line = STATION_BOARD_LINES.get(record.lineID), local = `${londonLocal(requestedAt).slice(0, 16)}:00`;
   if (!line || !validBoard(record.stationID, record.lineID) || root?.searchCriteria?.dateTimeType !== 'Departing' || root.searchCriteria.dateTime !== local || !Number.isInteger(root.recommendedMaxAgeMinutes) || root.recommendedMaxAgeMinutes <= 0 || !Array.isArray(root.stopMessages) || root.stopMessages.some((message) => typeof message !== 'string') || !Array.isArray(root.journeys)) return [];
   const observation = httpObservation(headers, now, Math.min(root.recommendedMaxAgeMinutes, 2) * 60000, { futureSkew: 120000 });
   if (!observation) return [];
-  observation.expiresAt = Math.min(observation.expiresAt, midnight(now));
+  observation.expiresAt = Math.min(observation.expiresAt, midnight(actualRequestAt));
+  if (observation.expiresAt <= now) return [];
   const seen = new Map(), events = [];
   for (const journey of root.journeys) {
     const leg = Array.isArray(journey?.legs) ? journey.legs.find((leg) => objectRow(leg) && leg.mode?.id !== 'walking') : null, option = leg?.routeOptions?.[0];
-    if (!leg || leg.mode?.id !== line.mode || leg.departurePoint?.naptanId !== record.stationID || leg.isDisrupted !== false || !Array.isArray(leg.disruptions) || leg.disruptions.length || !Array.isArray(leg.plannedWorks) || leg.plannedWorks.length || leg.routeOptions?.length !== 1 || option.lineIdentifier?.id !== record.lineID || option.directions?.length !== 1 || typeof option.directions[0] !== 'string') continue;
+    if (!leg || leg.mode?.id !== line.mode || leg.departurePoint?.naptanId !== record.stationID || leg.isDisrupted !== false || withdrawnJourneyLeg(leg) || !Array.isArray(leg.disruptions) || leg.disruptions.length || !Array.isArray(leg.plannedWorks) || leg.plannedWorks.length || leg.routeOptions?.length !== 1 || option.lineIdentifier?.id !== record.lineID || option.directions?.length !== 1 || typeof option.directions[0] !== 'string') continue;
     const departure = londonClock(leg.scheduledDepartureTime), parts = option.directions[0].split(/ via /i), destination = named(parts[0], record.lineID);
     if (!Number.isFinite(departure) || departure < now || departure < requestedAt - (requestedAt > actualRequestAt ? 0 : 60000) || !destination || destination.stationID === record.stationID || parts.length > 2 || !Array.isArray(leg.path?.stopPoints) || !leg.path.stopPoints.length) continue;
     const viaStation = parts.length === 2 ? named(parts[1], record.lineID) : null;
@@ -662,7 +674,7 @@ function immutable(value) {
   return value;
 }
 
-function datedWithdrawal(response, record, departAt, now) {
+function datedWithdrawal(response, record, departAt, actualRequestAt, now) {
   const body = response.value;
   const localRequestTime = londonLocal(departAt).slice(0, 16) + ':00';
   if (!response.ok || body?.searchCriteria?.dateTimeType !== 'Departing'
@@ -671,16 +683,16 @@ function datedWithdrawal(response, record, departAt, now) {
     || typeof response.headers?.age !== 'string' || !/^\d+$/.test(response.headers.age.trim())) return null;
   const observation = httpObservation(response.headers, response.completedAt,
     Math.min(body.recommendedMaxAgeMinutes, 2) * 60000, { cacheRequired: true });
-  if (!observation || observation.expiresAt <= now) return null;
-  const cutoff = midnight(departAt);
+  if (!observation) return null;
+  const cutoff = midnight(actualRequestAt);
+  observation.expiresAt = Math.min(observation.expiresAt, cutoff);
+  if (observation.expiresAt <= now) return null;
   const cancelled = body.journeys.flatMap(item => {
     const leg = Array.isArray(item?.legs) ? item.legs.find(leg => leg?.mode?.id !== 'walking') : null;
     if (leg?.departurePoint?.naptanId !== record.stationID || leg.routeOptions?.length !== 1
-      || leg.routeOptions[0]?.lineIdentifier?.id !== record.lineID
-      || !(['isCancelled', 'isCanceled', 'cancelled', 'canceled'].some(field => leg[field] === true)
-        || ['status', 'serviceStatus'].some(field => ['cancelled', 'canceled', 'withdrawn'].includes(String(leg[field] || '').toLowerCase())))) return [];
+      || leg.routeOptions[0]?.lineIdentifier?.id !== record.lineID || !withdrawnJourneyLeg(leg)) return [];
     const clock = londonClock(leg.scheduledDepartureTime);
-    if (!Number.isFinite(clock)) return [Math.min(observation.expiresAt, cutoff)];
+    if (!Number.isFinite(clock)) return [observation.expiresAt];
     return clock > now && clock < cutoff ? [clock] : [];
   });
   const regularWithdrawalUntil = Math.max(...cancelled);
@@ -785,7 +797,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   const unknown20 = is20 && !serviceProofs.some((p) => p.scheduledClockOnly === true && (p.observedAt + 600000 > actualRequestAt || p.expiresAt + 600000 > actualRequestAt));
   const blocked = unknown20 || admissionProofs.some((p) => p.scheduledClockOnly !== true && (activeClosure(p, actualRequestAt) || expiredBarrier(p, actualRequestAt) || p.plannedUnavailable === true && p.expiresAt > actualRequestAt));
   const journeyDepartAt = blocked ? actualRequestAt : shiftedJourneyTime(service.value, serviceProofs, admissionProofs, actualRequestAt);
-  const plannedURL = !blocked ? journeyURL(record, journeyDepartAt) : null;
+  const plannedURL = !blocked ? journeyURL(record, journeyDepartAt, actualRequestAt) : null;
   const journeyTask = plannedURL ? request(plannedURL) : Promise.resolve({ ok: false });
   const [arrivals, departures, journey, timetableResponses] = await Promise.all([arrivalTask, railTask, journeyTask, timetableTask]);
   const completedAt = clock(), sources = {};
@@ -836,7 +848,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   }
   const originRule = regularOriginRule(record);
   const ordinaryBoard = supportsRegularOrigin(record);
-  const withdrawal = ordinaryBoard ? datedWithdrawal(journey, record, journeyDepartAt, applicabilityAt) : null;
+  const withdrawal = ordinaryBoard ? datedWithdrawal(journey, record, journeyDepartAt, actualRequestAt, applicabilityAt) : null;
   const currentProofs = retainAvailability(previous, { availabilityProofs }, record, applicabilityAt);
   // A station-family response can describe closures on other modes and name
   // this line as a diversion. Only qualified controls for the selected board

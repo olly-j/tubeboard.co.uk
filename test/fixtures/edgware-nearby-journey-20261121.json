@@ -1,0 +1,926 @@
+{
+  "original2348": {
+    "requestedAt": "2026-11-21T23:48:07.135024+00:00",
+    "source": "https://api.tfl.gov.uk/Journey/JourneyResults/940GZZLUEGW/to/940GZZLUBTK?date=20261121&time=2348&timeIs=Departing&mode=tube&useRealTimeLiveArrivals=false&calcOneDirection=true&includeAlternativeRoutes=true",
+    "responseSHA256": "006253ad366156d49c517e7ed0d973edf4a4715db6af50633bcf04fb4ddb0e35",
+    "originalHeaders": {
+      "Date": "Sat, 21 Nov 2026 23:48:07 GMT",
+      "Age": "0",
+      "Cache-Control": "public, must-revalidate, max-age=150, s-maxage=300"
+    },
+    "body": {
+      "recommendedMaxAgeMinutes": 1,
+      "stopMessages": [],
+      "searchCriteria": {
+        "dateTimeType": "Departing",
+        "dateTime": "2026-11-21T23:48:00"
+      },
+      "journeys": [
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-21T23:51:00",
+              "isDisrupted": false,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUEGW",
+                "individualStopId": "9400ZZLUEGW1"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUBTK",
+                "individualStopId": "9400ZZLUBTK2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Morden via Charing Cross"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUBTK",
+                    "name": "Burnt Oak Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [],
+              "plannedWorks": []
+            }
+          ]
+        },
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-21T23:56:00",
+              "isDisrupted": false,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUEGW",
+                "individualStopId": "9400ZZLUEGW1"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUBTK",
+                "individualStopId": "9400ZZLUBTK2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Morden via Bank"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUBTK",
+                    "name": "Burnt Oak Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [],
+              "plannedWorks": []
+            }
+          ]
+        },
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-22T00:01:00",
+              "isDisrupted": false,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUEGW",
+                "individualStopId": "9400ZZLUEGW1"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUBTK",
+                "individualStopId": "9400ZZLUBTK2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Morden via Charing Cross"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUBTK",
+                    "name": "Burnt Oak Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [],
+              "plannedWorks": []
+            }
+          ]
+        },
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-21T23:48:00",
+              "isDisrupted": false,
+              "mode": {
+                "id": "walking"
+              },
+              "departurePoint": {},
+              "arrivalPoint": {},
+              "routeOptions": [
+                {
+                  "direction": "",
+                  "directions": [
+                    ""
+                  ]
+                }
+              ],
+              "path": {
+                "stopPoints": []
+              },
+              "disruptions": [],
+              "plannedWorks": []
+            }
+          ]
+        }
+      ]
+    },
+    "receivedAt": "2026-11-21T23:48:07.854775+00:00"
+  },
+  "near2358": {
+    "requestedAt": "2026-11-21T23:58:34.453025+00:00",
+    "source": "https://api.tfl.gov.uk/Journey/JourneyResults/940GZZLUEGW/to/940GZZLUBTK?date=20261121&time=2358&timeIs=Departing&mode=tube&useRealTimeLiveArrivals=false&calcOneDirection=true&includeAlternativeRoutes=true",
+    "responseSHA256": "6977d78095cae66523d8c2b56f6da7a2dc897e9b91efdb66a73a7673b27ff3f2",
+    "originalHeaders": {
+      "Date": "Sat, 21 Nov 2026 23:58:34 GMT",
+      "Age": "22",
+      "Cache-Control": "public, must-revalidate, max-age=150, s-maxage=300"
+    },
+    "body": {
+      "recommendedMaxAgeMinutes": 1,
+      "stopMessages": [],
+      "searchCriteria": {
+        "dateTimeType": "Departing",
+        "dateTime": "2026-11-21T23:58:00"
+      },
+      "journeys": [
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-22T00:01:00",
+              "isDisrupted": false,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUEGW",
+                "individualStopId": "9400ZZLUEGW1"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUBTK",
+                "individualStopId": "9400ZZLUBTK2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Morden via Charing Cross"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUBTK",
+                    "name": "Burnt Oak Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [],
+              "plannedWorks": []
+            }
+          ]
+        },
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-22T00:06:00",
+              "isDisrupted": false,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUEGW",
+                "individualStopId": "9400ZZLUEGW1"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUBTK",
+                "individualStopId": "9400ZZLUBTK2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Golders Green Underground Station"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUBTK",
+                    "name": "Burnt Oak Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [],
+              "plannedWorks": []
+            }
+          ]
+        },
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-22T00:15:00",
+              "isDisrupted": false,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUEGW",
+                "individualStopId": "9400ZZLUEGW1"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUBTK",
+                "individualStopId": "9400ZZLUBTK2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Morden via Charing Cross"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUBTK",
+                    "name": "Burnt Oak Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [],
+              "plannedWorks": []
+            }
+          ]
+        },
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-21T23:58:00",
+              "isDisrupted": false,
+              "mode": {
+                "id": "walking"
+              },
+              "departurePoint": {},
+              "arrivalPoint": {},
+              "routeOptions": [
+                {
+                  "direction": "",
+                  "directions": [
+                    ""
+                  ]
+                }
+              ],
+              "path": {
+                "stopPoints": []
+              },
+              "disruptions": [],
+              "plannedWorks": []
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "far2358": {
+    "requestedAt": "2026-11-21T23:58:34.453025+00:00",
+    "source": "https://api.tfl.gov.uk/Journey/JourneyResults/940GZZLUEGW/to/940GZZLUMDN?date=20261121&time=2358&timeIs=Departing&mode=tube&useRealTimeLiveArrivals=false&calcOneDirection=true&includeAlternativeRoutes=true",
+    "responseSHA256": "c8bca5655ca19573579ed4d0dbbfe70a443c88047d1c74cdc19d01357c381922",
+    "originalHeaders": {
+      "Date": "Sat, 21 Nov 2026 23:58:34 GMT",
+      "Age": "10",
+      "Cache-Control": "public, must-revalidate, max-age=150, s-maxage=300"
+    },
+    "body": {
+      "recommendedMaxAgeMinutes": 4,
+      "stopMessages": [
+        "Morden: No Step Free Access - Step free exit to street level from platforms 4 and 5 is not available due to planned maintenance. Call us on 0343 222 1234 if you need help planning your journey."
+      ],
+      "searchCriteria": {
+        "dateTimeType": "Departing",
+        "dateTime": "2026-11-21T23:58:00"
+      },
+      "journeys": [
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-22T00:01:00",
+              "isDisrupted": true,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUEGW",
+                "individualStopId": "9400ZZLUEGW1"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUMDN",
+                "individualStopId": "9400ZZLUMDN2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Morden via Charing Cross"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUBTK",
+                    "name": "Burnt Oak Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCND",
+                    "name": "Colindale Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUHCL",
+                    "name": "Hendon Central Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUBTX",
+                    "name": "Brent Cross Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUGGN",
+                    "name": "Golders Green Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUHTD",
+                    "name": "Hampstead Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUBZP",
+                    "name": "Belsize Park Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCFM",
+                    "name": "Chalk Farm Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCTN",
+                    "name": "Camden Town Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUMTC",
+                    "name": "Mornington Crescent Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUEUS",
+                    "name": "Euston Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUWRR",
+                    "name": "Warren Street Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUGDG",
+                    "name": "Goodge Street Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUTCR",
+                    "name": "Tottenham Court Road Underground Station"
+                  },
+                  {
+                    "id": "940GZZLULSQ",
+                    "name": "Leicester Square Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCHX",
+                    "name": "Charing Cross Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUEMB",
+                    "name": "Embankment Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUWLO",
+                    "name": "Waterloo Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUKNG",
+                    "name": "Kennington Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUOVL",
+                    "name": "Oval Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUSKW",
+                    "name": "Stockwell Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCPN",
+                    "name": "Clapham North Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCPC",
+                    "name": "Clapham Common Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCPS",
+                    "name": "Clapham South Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUBLM",
+                    "name": "Balham Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUTBC",
+                    "name": "Tooting Bec Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUTBY",
+                    "name": "Tooting Broadway Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCSD",
+                    "name": "Colliers Wood Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUSWN",
+                    "name": "South Wimbledon Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUMDN",
+                    "name": "Morden Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [
+                {
+                  "$type": "Tfl.Api.Presentation.Entities.Disruption, Tfl.Api.Presentation.Entities",
+                  "category": "PlannedWork",
+                  "type": "routeBlocking",
+                  "categoryDescription": "PlannedWork",
+                  "description": "NORTHERN LINE: On the early mornings of Saturday 21 and Sunday 22 November, no Night Tube service between Kennington and Stockwell. Please use Night Bus Route N155 between Kennington, Oval and Stockwell. For travel between Central London and stations between Stockwell and Morden, use Victoria line connections via Stockwell.",
+                  "summary": "",
+                  "additionalInfo": "",
+                  "created": "2026-11-20T21:21:00",
+                  "lastUpdate": "2026-11-20T21:21:00"
+                },
+                {
+                  "$type": "Tfl.Api.Presentation.Entities.Disruption, Tfl.Api.Presentation.Entities",
+                  "category": "RealTime",
+                  "type": "stopInfo",
+                  "categoryDescription": "RealTime",
+                  "description": "Morden: No Step Free Access - Step free exit to street level from platforms 4 and 5 is not available due to planned maintenance. Call us on 0343 222 1234 if you need help planning your journey.",
+                  "summary": "",
+                  "additionalInfo": "",
+                  "created": "2026-11-21T00:06:00",
+                  "lastUpdate": "2026-11-21T00:06:00"
+                }
+              ],
+              "plannedWorks": []
+            }
+          ]
+        },
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-22T00:06:00",
+              "isDisrupted": false,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUEGW",
+                "individualStopId": "9400ZZLUEGW1"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUGGN",
+                "individualStopId": "9400ZZLUGGN2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Golders Green Underground Station"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUBTK",
+                    "name": "Burnt Oak Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCND",
+                    "name": "Colindale Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUHCL",
+                    "name": "Hendon Central Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUBTX",
+                    "name": "Brent Cross Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUGGN",
+                    "name": "Golders Green Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [],
+              "plannedWorks": []
+            },
+            {
+              "scheduledDepartureTime": "2026-11-22T00:28:00",
+              "isDisrupted": true,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUGGN",
+                "individualStopId": "9400ZZLUGGN2"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUMDN",
+                "individualStopId": "9400ZZLUMDN2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Morden via Charing Cross"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUHTD",
+                    "name": "Hampstead Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUBZP",
+                    "name": "Belsize Park Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCFM",
+                    "name": "Chalk Farm Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCTN",
+                    "name": "Camden Town Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUMTC",
+                    "name": "Mornington Crescent Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUEUS",
+                    "name": "Euston Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUWRR",
+                    "name": "Warren Street Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUGDG",
+                    "name": "Goodge Street Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUTCR",
+                    "name": "Tottenham Court Road Underground Station"
+                  },
+                  {
+                    "id": "940GZZLULSQ",
+                    "name": "Leicester Square Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCHX",
+                    "name": "Charing Cross Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUEMB",
+                    "name": "Embankment Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUWLO",
+                    "name": "Waterloo Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUKNG",
+                    "name": "Kennington Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUOVL",
+                    "name": "Oval Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUSKW",
+                    "name": "Stockwell Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCPN",
+                    "name": "Clapham North Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCPC",
+                    "name": "Clapham Common Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCPS",
+                    "name": "Clapham South Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUBLM",
+                    "name": "Balham Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUTBC",
+                    "name": "Tooting Bec Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUTBY",
+                    "name": "Tooting Broadway Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCSD",
+                    "name": "Colliers Wood Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUSWN",
+                    "name": "South Wimbledon Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUMDN",
+                    "name": "Morden Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [
+                {
+                  "$type": "Tfl.Api.Presentation.Entities.Disruption, Tfl.Api.Presentation.Entities",
+                  "category": "PlannedWork",
+                  "type": "routeBlocking",
+                  "categoryDescription": "PlannedWork",
+                  "description": "NORTHERN LINE: On the early mornings of Saturday 21 and Sunday 22 November, no Night Tube service between Kennington and Stockwell. Please use Night Bus Route N155 between Kennington, Oval and Stockwell. For travel between Central London and stations between Stockwell and Morden, use Victoria line connections via Stockwell.",
+                  "summary": "",
+                  "additionalInfo": "",
+                  "created": "2026-11-20T21:21:00",
+                  "lastUpdate": "2026-11-20T21:21:00"
+                },
+                {
+                  "$type": "Tfl.Api.Presentation.Entities.Disruption, Tfl.Api.Presentation.Entities",
+                  "category": "RealTime",
+                  "type": "stopInfo",
+                  "categoryDescription": "RealTime",
+                  "description": "Morden: No Step Free Access - Step free exit to street level from platforms 4 and 5 is not available due to planned maintenance. Call us on 0343 222 1234 if you need help planning your journey.",
+                  "summary": "",
+                  "additionalInfo": "",
+                  "created": "2026-11-21T00:06:00",
+                  "lastUpdate": "2026-11-21T00:06:00"
+                }
+              ],
+              "plannedWorks": []
+            }
+          ]
+        },
+        {
+          "legs": [
+            {
+              "scheduledDepartureTime": "2026-11-22T00:15:00",
+              "isDisrupted": true,
+              "mode": {
+                "id": "tube"
+              },
+              "departurePoint": {
+                "naptanId": "940GZZLUEGW",
+                "individualStopId": "9400ZZLUEGW1"
+              },
+              "arrivalPoint": {
+                "naptanId": "940GZZLUMDN",
+                "individualStopId": "9400ZZLUMDN2"
+              },
+              "routeOptions": [
+                {
+                  "direction": "Inbound",
+                  "directions": [
+                    "Morden via Charing Cross"
+                  ],
+                  "lineIdentifier": {
+                    "id": "northern"
+                  }
+                }
+              ],
+              "path": {
+                "stopPoints": [
+                  {
+                    "id": "940GZZLUBTK",
+                    "name": "Burnt Oak Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCND",
+                    "name": "Colindale Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUHCL",
+                    "name": "Hendon Central Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUBTX",
+                    "name": "Brent Cross Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUGGN",
+                    "name": "Golders Green Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUHTD",
+                    "name": "Hampstead Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUBZP",
+                    "name": "Belsize Park Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCFM",
+                    "name": "Chalk Farm Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCTN",
+                    "name": "Camden Town Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUMTC",
+                    "name": "Mornington Crescent Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUEUS",
+                    "name": "Euston Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUWRR",
+                    "name": "Warren Street Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUGDG",
+                    "name": "Goodge Street Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUTCR",
+                    "name": "Tottenham Court Road Underground Station"
+                  },
+                  {
+                    "id": "940GZZLULSQ",
+                    "name": "Leicester Square Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCHX",
+                    "name": "Charing Cross Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUEMB",
+                    "name": "Embankment Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUWLO",
+                    "name": "Waterloo Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUKNG",
+                    "name": "Kennington Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUOVL",
+                    "name": "Oval Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUSKW",
+                    "name": "Stockwell Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCPN",
+                    "name": "Clapham North Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCPC",
+                    "name": "Clapham Common Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCPS",
+                    "name": "Clapham South Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUBLM",
+                    "name": "Balham Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUTBC",
+                    "name": "Tooting Bec Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUTBY",
+                    "name": "Tooting Broadway Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUCSD",
+                    "name": "Colliers Wood Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUSWN",
+                    "name": "South Wimbledon Underground Station"
+                  },
+                  {
+                    "id": "940GZZLUMDN",
+                    "name": "Morden Underground Station"
+                  }
+                ]
+              },
+              "disruptions": [
+                {
+                  "$type": "Tfl.Api.Presentation.Entities.Disruption, Tfl.Api.Presentation.Entities",
+                  "category": "PlannedWork",
+                  "type": "routeBlocking",
+                  "categoryDescription": "PlannedWork",
+                  "description": "NORTHERN LINE: On the early mornings of Saturday 21 and Sunday 22 November, no Night Tube service between Kennington and Stockwell. Please use Night Bus Route N155 between Kennington, Oval and Stockwell. For travel between Central London and stations between Stockwell and Morden, use Victoria line connections via Stockwell.",
+                  "summary": "",
+                  "additionalInfo": "",
+                  "created": "2026-11-20T21:21:00",
+                  "lastUpdate": "2026-11-20T21:21:00"
+                },
+                {
+                  "$type": "Tfl.Api.Presentation.Entities.Disruption, Tfl.Api.Presentation.Entities",
+                  "category": "RealTime",
+                  "type": "stopInfo",
+                  "categoryDescription": "RealTime",
+                  "description": "Morden: No Step Free Access - Step free exit to street level from platforms 4 and 5 is not available due to planned maintenance. Call us on 0343 222 1234 if you need help planning your journey.",
+                  "summary": "",
+                  "additionalInfo": "",
+                  "created": "2026-11-21T00:06:00",
+                  "lastUpdate": "2026-11-21T00:06:00"
+                }
+              ],
+              "plannedWorks": []
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

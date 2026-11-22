@@ -1,0 +1,14 @@
+{
+  "boards": {
+    "northern": {
+      "940GZZLUEGW": {
+        "targetID": "940GZZLUBTK",
+        "previousTargetID": "940GZZLUMDN",
+        "pairedDispatchAt": "2026-11-21T23:58:34.453025Z",
+        "targetResponseSHA256": "6977d78095cae66523d8c2b56f6da7a2dc897e9b91efdb66a73a7673b27ff3f2",
+        "previousTargetResponseSHA256": "c8bca5655ca19573579ed4d0dbbfe70a443c88047d1c74cdc19d01357c381922",
+        "independentTargetResponseSHA256": "006253ad366156d49c517e7ed0d973edf4a4715db6af50633bcf04fb4ddb0e35"
+      }
+    }
+  }
+}
