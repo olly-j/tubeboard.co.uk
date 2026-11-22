@@ -571,9 +571,10 @@ expiry; an older delayed positive cannot revive trains. A strictly newer
 qualified source can recover. This bounded context has the existing activity
 record lifecycle and adds no client identity or wire field.
 
-The ordinary full worker stays at90 seconds. Source-only opportunities target
-15 seconds before original station-arrivals expiry, subject to a shared30-second
-logical-attempt floor per actual official URL. The same URL coalesces across
+The full worker runs every 90 seconds. For an active station-board registration,
+a station-arrivals read is due within 60 seconds of the last attempt, or sooner
+when the original source expires. The early read targets 15 seconds before expiry.
+All registrations for the same official URL share the 30-second attempt floor. The same URL coalesces across
 full/source-only cycles and multiple registrations; completed bodies are not
 cached between cycles. Normal operation permits at most2 logical requests/min;
 the existing one missing-Age retry permits at most4 HTTP requests/min. Source-only
