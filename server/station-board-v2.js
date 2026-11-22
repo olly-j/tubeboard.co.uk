@@ -272,12 +272,18 @@ export function parseStationArrivals(rows, record, headers, now) {
     const loop = Array.isArray(stops) && Number.isInteger(index) && index >= 0 && index < stops.length && stops[index] === record.stationID && stops.at(-1) === destination.stationID && index < stops.length - 1;
     const incoming = destination.stationID === record.stationID && !loop;
     return [event(record, 'station-arrivals', { id: `arrival:${hash(row)}`, kind: incoming ? 'incomingArrival' : 'throughArrival', destination: destination.stationName, destinationStationID: destination.stationID,
-      time: row.__unknownClock ? null : time, timeEvidence: row.__unknownClock ? null : 'arrivalPrediction', platform: row.__unknownPlatform ? null : usablePlatform(row.platformName), direction: row.__unknownPlatform ? null : publicDirection(row.platformName), providerDirection: text(row.direction), via: routeVia(row.towards, destination, record.lineID), receivedAt,
+      time: row.__unknownClock ? null : time, timeEvidence: row.__unknownClock ? null : 'arrivalPrediction', platform: row.__unknownPlatform ? null : usablePlatform(row.platformName), direction: row.__unknownPlatform ? null : publicDirection(row.platformName, row.direction), providerDirection: text(row.direction), via: routeVia(row.towards, destination, record.lineID), receivedAt,
       expiresAt: Math.min(observation.expiresAt, receivedAt + 120000) }, observation)];
   });
 }
 function usablePlatform(value) { const v = text(value); return v && !['unknown', 'platform unknown', 'tbc', '-'].includes(v.toLowerCase()) ? v : null; }
-function publicDirection(platform) { return /\b(northbound|southbound|eastbound|westbound)\b/i.exec(platform || '')?.[1] || null; }
+function publicDirection(...values) {
+  const labels = new Set([...values.join(' ').matchAll(/\b(?:(north|south|east|west)[\s-]*bound|(?:inner|outer)[\s-]+rail)\b/gi)]
+    .map(match => match[0].toLowerCase().replace(/[\s-]+/g, '').replace(/rail$/, ' rail')));
+  if (labels.size !== 1) return null;
+  const [label] = labels;
+  return label.replace(/\b\w/g, letter => letter.toUpperCase());
+}
 function routeVia(towards, destination, lineID) {
   if (!text(towards)) return null;
   const parts = towards.split(/ via /i);
@@ -511,6 +517,10 @@ export function retainsThroughArrival(through, candidates) {
     return through.timeEvidence === 'arrivalPrediction' && Number.isFinite(through.time) && Number.isFinite(departure.time) && through.time > departure.time;
   });
 }
+function atPlatformDestination(e) {
+  return e.kind === 'outgoingDestinationOnly' && e.time == null && e.timeEvidence == null
+    && /^(?:[0-9]+[a-z]?|[a-z])$/.test(text(e.platform)?.toLowerCase().replace(/^platform\s+/, '') || '');
+}
 export function selectEvents(cache, record, now, { retainingMaskedPlans = false, retainingPlannedAlternatives = false } = {}) {
   const proofs = retainAvailability(cache, {}, record, now);
   let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && proofs.some((p) => (!retainingMaskedPlans || p.plannedUnavailable === true && p.scheduledClockOnly !== true) && blocksScheduled(p, e.time, now))) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
@@ -538,8 +548,6 @@ export function selectEvents(cache, record, now, { retainingMaskedPlans = false,
   // Compact activities compare times across eligible outgoing platform groups.
   // Arrivals remain last; physical groups belong to the full app board.
   const category = (e) => ['incomingArrival', 'unverifiedArrival'].includes(e.kind) ? 1 : 0;
-  const atPlatformDestination = (e) => e.kind === 'outgoingDestinationOnly' && e.time == null && e.timeEvidence == null
-    && /^(?:[0-9]+[a-z]?|[a-z])$/.test(text(e.platform)?.toLowerCase().replace(/^platform\s+/, '') || '');
   return events.sort((a, b) => category(a) - category(b) || Number(atPlatformDestination(b)) - Number(atPlatformDestination(a)) || (a.time ?? Infinity) - (b.time ?? Infinity) || a.id.localeCompare(b.id));
 }
 export function countdown(event, now) {
@@ -580,6 +588,20 @@ export function compactEvents(events) {
   const source = compactPlanningSource(events);
   return events.filter((e) => !plannedSource(e) || plannedSource(e) === source);
 }
+function prioritizePublicDirections(rows, record) {
+  if (record.selectionMode === 'platform' || record.platformID || regularOriginRule(record).physicalEnd) return rows;
+  const firstByDirection = new Map();
+  for (const [index, row] of rows.entries()) {
+    const direction = publicDirection(row.direction, row.platform, row.providerDirection);
+    if (direction && Number.isFinite(row.time) && ['outgoingDeparture', 'throughArrival'].includes(row.kind)
+        && !firstByDirection.has(direction)) firstByDirection.set(direction, index);
+  }
+  if (firstByDirection.size < 2) return rows;
+  const first = new Set(firstByDirection.values());
+  const prefixLength = rows.findIndex(row => !atPlatformDestination(row));
+  return [...rows.slice(0, prefixLength), ...[...first].map(index => rows[index]),
+    ...rows.slice(prefixLength).filter((_, index) => !first.has(index + prefixLength))];
+}
 export function buildStationBoardState(record, cache, now) {
   const capable = record.plannedPresentationVersion === 2;
   const proofs = retainAvailability(cache, {}, record, now).filter((p) => p.closed || p.plannedUnavailable === true || p.scheduledClockOnly === true);
@@ -593,7 +615,7 @@ export function buildStationBoardState(record, cache, now) {
     const orderedSources = sources.sort((a,b) => Number(b === chosen) - Number(a === chosen) || a.localeCompare(b));
     const groups = [...orderedSources, null].map((source) => {
       const group = rows.filter((e) => plannedSource(e) === source);
-      const useful = group.filter(eligible).slice(0, 3);
+      const useful = prioritizePublicDirections(group.filter(eligible), record).slice(0, 3);
       return [...useful, ...group.filter((e) => !eligible(e)).slice(0, 3 - useful.length)];
     });
     let retained = groups.flat();
@@ -604,7 +626,7 @@ export function buildStationBoardState(record, cache, now) {
       retained = [...new Set(prioritized)].slice(0, 9);
     }
     const selected = new Set(retained); rows = rows.filter((e) => selected.has(e));
-  } else rows = compactEvents(rows.filter(eligible)).slice(0, 3);
+  } else rows = prioritizePublicDirections(compactEvents(rows.filter(eligible)), record).slice(0, 3);
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
   const origin = regularOriginRule(record);
@@ -618,7 +640,7 @@ export function buildStationBoardState(record, cache, now) {
   const observedAt = () => {
     // Derive the visible board clock after selection and the compact limit.
     // Masked alternatives, status and a cache-only dispatch cannot renew it.
-    const clocks = compactEvents(rows.filter(eligible)).slice(0, 3)
+    const clocks = prioritizePublicDirections(compactEvents(rows.filter(eligible)), record).slice(0, 3)
       .filter((row) => row.kind !== 'unverifiedArrival')
       .map((row) => row.receivedAt).filter(Number.isFinite);
     const explicitEmpty = cache.sources?.['station-arrivals'];
@@ -680,7 +702,7 @@ export function buildStationBoardState(record, cache, now) {
     return state;
   }
   delete state.plannedAvailability;
-  pack([], originalRows.filter(e => !planned(e)).slice(0, 3));
+  pack([], prioritizePublicDirections(originalRows.filter(e => !planned(e)), record).slice(0, 3));
   return state;
 }
 
