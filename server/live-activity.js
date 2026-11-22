@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fetchJsonResponse, sendApnsRequest } from './notification-transport.js';
 import { TransactionalJsonStore } from './transactional-json-store.js';
 import { admitPlannedSeed } from './station-board-seed.js';
-import { STATION_ARRIVAL_ATTEMPT_FLOOR_MS, STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, refreshStationArrivals, StationArrivalReader, buildStationBoardState, supportsRegularOrigin, regularReplacementAuthorized } from './station-board-v2.js';
+import { STATION_ARRIVAL_ATTEMPT_FLOOR_MS, STATION_BOARD_CONTRACT, STATION_BOARD_LINES, validBoard, mergeContexts, refreshStationBoard, refreshStationArrivals, refreshRailDepartures, activityRailDeparturesURL, StationArrivalReader, buildStationBoardState, supportsRegularOrigin, regularReplacementAuthorized } from './station-board-v2.js';
 
 // Never log this tuple: it includes token custody and exact selected scope.
 export function registrationTuple(record) {
@@ -300,6 +300,15 @@ export class LiveActivityStore extends TransactionalJsonStore {
         && (record.active !== false || record.stationBoardCache.arrivalsRateLimitedUntil > at))
       .map(record => ({ stationID: record.stationID, notBefore: record.stationBoardCache.arrivalsNotBefore,
         rateLimitedUntil: record.stationBoardCache.arrivalsRateLimitedUntil })));
+  }
+
+  railDepartureAdmissionFloors(at = Date.now()) {
+    return this.snapshot(state => state.records
+      .filter(record => record.contentStateContract === STATION_BOARD_CONTRACT
+        && Number.isFinite(record.stationBoardCache?.railDeparturesNotBefore)
+        && record.stationBoardCache.railDeparturesNotBefore > at)
+      .map(record => ({ stationID: record.stationID, lineID: record.lineID, notBefore: record.stationBoardCache.railDeparturesNotBefore,
+        rateLimitedUntil: record.stationBoardCache.railDeparturesRateLimitedUntil })));
   }
 
   ordinaryTimetableAdmissionFloor(stationID, lineID) {
@@ -1043,6 +1052,10 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
     if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
     arrivalReader.observeNotBefore(url, floor.notBefore, floor.rateLimitedUntil);
   }
+  for (const floor of typeof store.railDepartureAdmissionFloors === 'function' ? store.railDepartureAdmissionFloors(now.getTime()) : []) {
+    const url = activityRailDeparturesURL(floor.stationID, floor.lineID, config.tflAppKey);
+    arrivalReader.observeNotBefore(url, floor.notBefore, floor.rateLimitedUntil);
+  }
   for (const record of liveRecords.filter((record) => record.contentStateContract === STATION_BOARD_CONTRACT)) {
     signal?.throwIfAborted();
     const expectedTuple = registrationTuple(record);
@@ -1051,6 +1064,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       let cache = record.stationBoardCache || {};
       if (sourceOnly || (!cacheOnly && cache.nextRefreshAt > now.getTime())) {
         cache = await refreshStationArrivals(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, arrivalReader);
+        cache = await refreshRailDepartures(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, arrivalReader);
       } else if (!cacheOnly) {
         // Only public HTTP reads are shared. Each activity qualifies those
         // immutable receipts against its own selection and retained context.
@@ -1177,8 +1191,8 @@ function shouldBackoffEmptyArrivals(record, contentState) {
     && (record.consecutiveEmptyCycles || 0) >= 5;
 }
 
-export function getStationArrivalsRefreshDelayMs(cache, now = new Date(), workerIntervalMs = 90000) {
-  const at = cache?.arrivalsRefreshAt;
+export function getLiveSourceRefreshDelayMs(cache, now = new Date(), workerIntervalMs = 90000) {
+  const at = Math.min(cache?.arrivalsRefreshAt ?? Infinity, cache?.railDeparturesNotBefore ?? Infinity);
   if (!Number.isFinite(at)) return null;
   const delay = Math.max(1, at - now.getTime());
   return delay < workerIntervalMs ? delay : null;

@@ -521,8 +521,11 @@ Before production: complete exact-source independent/security review, injected t
 An active typed station board targets a station-arrivals read within 60 seconds
 of the previous read. An approaching original expiry can bring the next read
 forward. Serialization, the shared 30-second URL floor and failure cooldowns
-still govern admission. An idle or ended activity makes no station-arrivals
-requests. The full-board, legacy activity and supplemental source intervals
+still govern admission. Active Elizabeth and Overground boards also target
+one qualified rail-departures read per minute for their exact station and line.
+The two feeds share the serialized worker and maintain separate request
+cooldowns. An idle or ended activity makes no live-source requests. Full-board,
+legacy activity, timetable, status and other supplemental source intervals
 remain 90 seconds in production.
 
 A newly qualified observation of the displayed board can update its visible
@@ -538,8 +541,10 @@ The existing machine, volume and worker serve these opportunities. Before
 expiry or full-cycle effects, a healthy station can move from roughly one
 logical read per 90 seconds toward one per minute. The existing ceiling
 remains two logical reads per minute per station URL, with at most one
-additional request per read if the HTTP Age header is absent. Multiple
-registrations of that station share a read.
+additional request per read if the HTTP Age header is absent. The rail URL
+floor allows at most one logical read per minute per station and line, up to
+20 more per hour than the full-cycle cadence, with the same optional readback.
+Registrations of the same source URL share the read.
 
 ## UF276: Timestamped Live Activity Source Renewal (1.4.6)
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { STATION_BOARD_LINES, STATION_BOARD_STATIONS, validBoard, httpObservation, stationArrivalObservation, StationArrivalReader, refreshStationArrivals, londonClock, londonLocal, journeyURL, parseJourney, parseRailDepartures, parseStationArrivals, parseDestinationFacts, mergeContexts, selectEvents, countdown, nextBoundary, buildStationBoardState, refreshStationBoard } from '../server/station-board-v2.js';
-import { pushLiveActivityUpdate, stationBoardContentDigest, validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, getStationArrivalsRefreshDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
+import { pushLiveActivityUpdate, stationBoardContentDigest, validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, getLiveSourceRefreshDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
 import { SerialWorker } from '../server/worker-lifecycle.js';
 const now = Date.parse('2026-10-01T13:00:00Z');
 const record = { activityID: 'synthetic-v2', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1.0', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 };
@@ -562,7 +562,7 @@ test('UF276 durable retention shortens a source deadline without undoing its adm
   assert.equal(retained.arrivalsNotBefore, now + 30000);
   const loaded = new LiveActivityStore(store.filePath); await loaded.load();
   assert.equal(loaded.state.records[0].stationBoardCache.arrivalsRefreshAt, now + 45000);
-  assert.equal(getStationArrivalsRefreshDelayMs(retained, new Date(now + 1000)), 44000);
+  assert.equal(getLiveSourceRefreshDelayMs(retained, new Date(now + 1000)), 44000);
 });
 
 test('UF276 station complete-empty uses strict HTTP authority and failure cannot clear a live source', async (t) => {
@@ -618,7 +618,7 @@ test('active typed boards share minute reads and publish newer qualified observa
   assert.equal(pushes.length, 2);
   const supplementalCount = supplemental.length;
   for (const registration of store.state.records) {
-    assert.equal(getStationArrivalsRefreshDelayMs(registration.stationBoardCache, new Date(now)), 60000);
+    assert.equal(getLiveSourceRefreshDelayMs(registration.stationBoardCache, new Date(now)), 60000);
   }
 
   at = now + 59999;
@@ -864,6 +864,74 @@ test('a failed rail departure read keeps the delivered ETA hold across a service
   assert.deepEqual(pushes[1]['content-state'].arrivals, []);
 });
 
+test('active rail boards share minute reads independently of the supplemental cycle and survive durable backoff', async (t) => {
+  for (const failure of [429, 503]) {
+    const stationID = '910GSHENFLD';
+    const railBoard = { ...record, stationID, lineID: 'elizabeth' };
+    let store = await temporaryStore(t, railBoard);
+    await store.upsertToken({ ...railBoard, activityID: 'second-rail', installID: 'second-rail' }, new Date(now));
+    await store.upsertToken({ ...record, activityID: 'unrelated-tube', installID: 'unrelated-tube' }, new Date(now));
+
+    let at = now, railFailure = null;
+    const railReads = [], supplemental = [], pushes = [];
+    const fetchImpl = async url => {
+      const { pathname, searchParams } = new URL(url);
+      if (pathname.endsWith('/ArrivalDepartures')) {
+        railReads.push(at);
+        assert.equal(pathname, `/StopPoint/${stationID}/ArrivalDepartures`);
+        assert.equal(searchParams.get('lineIds'), 'elizabeth');
+        if (railFailure) return new Response(null, { status: railFailure, headers: { 'Retry-After': '420' } });
+        return new Response(JSON.stringify([{
+          id: 'stable-estimate', naptanId: stationID, destinationName: 'Liverpool Street', destinationNaptanId: '910GLIVSTLL',
+          departureStatus: 'OnTime', estimatedTimeOfDeparture: new Date(now + 900000).toISOString(), platformName: '2',
+        }]), { headers: headers(at) });
+      }
+      if (!pathname.startsWith('/StopPoint/') || !pathname.endsWith('/Arrivals')) supplemental.push(at);
+      return new Response(JSON.stringify([]), { headers: headers(at, 0, 120) });
+    };
+    const cycle = (offset, options) => {
+      at = now + offset;
+      return runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+        fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps['content-state']); }, logger, ...options });
+    };
+    await cycle(0);
+    assert.deepEqual(railReads, [now]);
+    const railState = pushes.find(state => state.arrivals.some(row => row.timeEvidence === 'estimatedDeparture'));
+    assert.ok(railState);
+    const stored = store.state.records.find(r => r.activityID === railBoard.activityID);
+    assert.equal(getLiveSourceRefreshDelayMs({ railDeparturesNotBefore: stored.stationBoardCache.railDeparturesNotBefore }, new Date(now)), 60000);
+    const firstSupplementCount = supplemental.length;
+    await cycle(60000, { sourceOnly: true });
+    assert.deepEqual(railReads, [now, now + 60000]);
+    assert.equal(supplemental.length, firstSupplementCount);
+    assert.ok(pushes.some(state => state.updatedAt === railState.updatedAt + 60
+      && state.arrivals.some(row => row.timeEvidence === 'estimatedDeparture')));
+    await cycle(90000);
+    assert.equal(railReads.length, 2, 'the earlier minute read also fences the full refresh');
+    assert.ok(supplemental.length > firstSupplementCount);
+    railFailure = failure;
+    await cycle(120000, { sourceOnly: true });
+    assert.equal(railReads.length, 3);
+    const retryOffset = 120000 + (failure === 429 ? 420000 : 120000);
+    await store.deactivate(railBoard.activityID, railBoard.environment, 'synthetic-stop', new Date(at));
+    await store.deactivate('second-rail', railBoard.environment, 'synthetic-stop', new Date(at));
+    store = new LiveActivityStore(store.filePath);
+    await store.load();
+    assert.equal(store.railDepartureAdmissionFloors(at)[0].notBefore, now + retryOffset);
+    await store.upsertToken({ ...railBoard, activityID: 'new-rail', installID: 'new-rail' }, new Date(at + 1));
+    await cycle(retryOffset - 1);
+    assert.equal(railReads.length, 3, 'a restart plus new registration cannot bypass the shared URL floor');
+    railFailure = null;
+    await cycle(retryOffset, { sourceOnly: true });
+    assert.equal(railReads.length, 4);
+    for (const registration of store.state.records) {
+      await store.deactivate(registration.activityID, registration.environment, 'synthetic-stop', new Date(at));
+    }
+    await cycle(retryOffset + 60000);
+    assert.equal(railReads.length, 4);
+  }
+});
+
 test('UF276 thirty-minute source renewals share requests across registrations without extra supplemental reads', async (t) => {
   const store = await temporaryStore(t); let at = now;
   const second = { ...record, activityID: 'synthetic-v2-second', installID: 'synthetic-install-second', selectionMode: 'platform', platformID: 'southbound-platform-2', platformHeading: 'Southbound - Platform 2' };
@@ -1027,7 +1095,7 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
         try {
           await runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at, signal, ...mode, fetchImpl,
             pushImpl: async (_, payload) => { await latency(1000, signal); delivered.push({ at, payload }); return { status: 200 }; },
-            scheduleSourceRefresh: (r, cache, current, interval) => worker.scheduleRerun(`${r.activityID}:source`, getStationArrivalsRefreshDelayMs(cache, current, interval), { sourceOnly: true }),
+            scheduleSourceRefresh: (r, cache, current, interval) => worker.scheduleRerun(`${r.activityID}:source`, getLiveSourceRefreshDelayMs(cache, current, interval), { sourceOnly: true }),
             scheduleRolloverPush: (r, state, current, interval) => worker.scheduleRerun(`${r.activityID}:cache`, getRolloverDelayMs(state, current, interval), { cacheOnly: true }), logger });
         } finally { active--; currentCycle = undefined; }
       }

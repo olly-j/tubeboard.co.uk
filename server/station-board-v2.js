@@ -116,16 +116,16 @@ export class StationArrivalReader {
 
   observeNotBefore(url, notBefore, rateLimitedUntil = 0) {
     if (!Number.isFinite(notBefore) || notBefore <= 0) return;
-    const key = `station-arrivals:${url.href}`;
+    const key = `activity-live-source:${url.href}`;
     const entry = this.#entries.get(key) || { nextAttemptAt: 0, rateLimitedUntil: 0, promise: null };
     entry.nextAttemptAt = Math.max(entry.nextAttemptAt, notBefore);
     if (Number.isFinite(rateLimitedUntil)) entry.rateLimitedUntil = Math.max(entry.rateLimitedUntil, rateLimitedUntil);
     this.#entries.set(key, entry);
   }
 
-  read(url, { fetchImpl = fetch, signal, clock = () => Date.now(), publicResponses = new Map(), notBefore = 0, rateLimitedUntil = 0 } = {}) {
+  read(url, { fetchImpl = fetch, signal, clock = () => Date.now(), publicResponses = new Map(), notBefore = 0, rateLimitedUntil = 0, attemptFloorMs = STATION_ARRIVAL_ATTEMPT_FLOOR_MS } = {}) {
     signal?.throwIfAborted();
-    const key = `station-arrivals:${url.href}`;
+    const key = `activity-live-source:${url.href}`;
     const now = clock();
     for (const [other, entry] of this.#entries) if (!entry.promise && entry.nextAttemptAt <= now) this.#entries.delete(other);
     // A persisted cooldown is source/URL authority, including on a deferred
@@ -153,7 +153,7 @@ export class StationArrivalReader {
       publicResponses.set(key, deferred);
       return deferred;
     }
-    entry.nextAttemptAt = now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS;
+    entry.nextAttemptAt = now + attemptFloorMs;
     entry.promise = (async () => {
       try {
         let response = await fetchJsonResponse(url, fetchImpl, { signal, includeHeaders: true });
@@ -196,6 +196,47 @@ export async function refreshStationArrivals(record, previous, config, fetchImpl
   const response = await arrivalReader.read(url, { fetchImpl, signal, clock, publicResponses,
     notBefore: previous.arrivalsNotBefore, rateLimitedUntil: previous.arrivalsRateLimitedUntil });
   return mergeStationArrivalRead(record, previous, response, clock(), config.workerIntervalMs);
+}
+
+export function activityRailDeparturesURL(stationID, lineID, tflAppKey) {
+  const url = new URL(`https://api.tfl.gov.uk/StopPoint/${stationID}/ArrivalDepartures`);
+  url.searchParams.set('lineIds', lineID);
+  if (tflAppKey) url.searchParams.set('app_key', tflAppKey);
+  return url;
+}
+
+function readRailDepartures(url, previous, arrivalReader, options) {
+  return arrivalReader.read(url, { ...options, attemptFloorMs: STATION_ARRIVAL_REFRESH_INTERVAL_MS,
+    notBefore: previous.railDeparturesNotBefore, rateLimitedUntil: previous.railDeparturesRateLimitedUntil });
+}
+
+function railDepartureSource(record, response, now) {
+  if (!response.ok) return undefined;
+  const events = parseRailDepartures(response.value, record, response.headers, response.completedAt);
+  if (events.length) return { observedAt: Math.max(...events.map(event => event.receivedAt)), events };
+  if (Array.isArray(response.value) && response.value.length === 0) {
+    const observation = httpObservation(response.headers, response.completedAt, 90000, { cacheRequired: true });
+    if (observation?.expiresAt > now) return { ...observation, events };
+  }
+}
+
+function railDepartureReceipt(record, previous, response, source, now) {
+  return {
+    railDepartureAttempt: boardSourceAttempt(response, source, previous.sources?.['rail-departures'],
+      previous.railDepartureAttempt, record, now),
+    railDeparturesNotBefore: response.nextAttemptAt,
+    railDeparturesRateLimitedUntil: response.rateLimitedUntil,
+  };
+}
+
+export async function refreshRailDepartures(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader) {
+  if (!STATION_BOARD_LINES.get(record.lineID)?.qualifiedRailDepartureSource || previous.railDeparturesNotBefore > now) return previous;
+  const url = activityRailDeparturesURL(record.stationID, record.lineID, config.tflAppKey);
+  const response = await readRailDepartures(url, previous, arrivalReader, { fetchImpl, signal, clock, publicResponses });
+  const completedAt = clock();
+  const source = railDepartureSource(record, response, completedAt);
+  return mergeContexts(previous, { sources: source ? { 'rail-departures': source } : {},
+    ...railDepartureReceipt(record, previous, response, source, completedAt) }, record, completedAt);
 }
 
 function mergeStationArrivalRead(record, previous, response, now, workerIntervalMs) {
@@ -486,11 +527,15 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
   }
   const ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, incoming.ordinaryNotBefore || 0);
   const arrivalsRateLimitedUntil = Math.max(previous.arrivalsRateLimitedUntil || 0, incoming.arrivalsRateLimitedUntil || 0);
+  const railDeparturesNotBefore = Math.max(previous.railDeparturesNotBefore || 0, incoming.railDeparturesNotBefore || 0);
+  const railDeparturesRateLimitedUntil = Math.max(previous.railDeparturesRateLimitedUntil || 0, incoming.railDeparturesRateLimitedUntil || 0);
   const stationArrivalAttempt = retainBoardSourceAttempt(previous.stationArrivalAttempt, incoming.stationArrivalAttempt, now);
   const railDepartureAttempt = retainBoardSourceAttempt(previous.railDepartureAttempt, incoming.railDepartureAttempt, now);
   return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null,
     ...(stationArrivalAttempt ? { stationArrivalAttempt } : {}), ...(railDepartureAttempt ? { railDepartureAttempt } : {}),
-    ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}) };
+    ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}),
+    ...(railDeparturesNotBefore ? { railDeparturesNotBefore } : {}),
+    ...(railDeparturesRateLimitedUntil > now ? { railDeparturesRateLimitedUntil } : {}) };
 }
 function selectionMatches(event, record) {
   if (record.selectionMode !== 'platform' && !record.platformID) return true;
@@ -831,7 +876,10 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     ? arrivalReader.read(arrivalsURL, { fetchImpl, signal, clock, publicResponses,
       notBefore: previous.arrivalsNotBefore, rateLimitedUntil: previous.arrivalsRateLimitedUntil })
     : request(arrivalsURL).catch(() => ({ ok: false }));
-  const railTask = rail ? request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/ArrivalDepartures?lineIds=${record.lineID}`)).catch(() => ({ ok: false })) : Promise.resolve({ ok: false });
+  const railURL = rail ? activityRailDeparturesURL(record.stationID, record.lineID, config.tflAppKey) : null;
+  const railTask = railURL ? (arrivalReader
+    ? readRailDepartures(railURL, previous, arrivalReader, { fetchImpl, signal, clock, publicResponses })
+    : request(railURL)) : Promise.resolve({ ok: false });
   const [service, station] = await Promise.all([
     request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Status?detail=true`), 'GET', false, true),
     request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Disruption?getFamily=true&includeRouteBlockedStops=true&flattenResponse=true`))
@@ -855,9 +903,11 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     if (events.length || observation && observation.expiresAt > completedAt) sources[source] = { ...(observation ? { expiresAt: observation.expiresAt } : {}), observedAt: events.length ? Math.max(...events.map((e) => e.receivedAt)) : observation.observedAt, events };
   };
   if (arrivals.ok && arrivals.status === 200) add('station-arrivals', parseStationArrivals(arrivals.value, record, arrivals.headers, arrivals.completedAt), Array.isArray(arrivals.value) && arrivals.value.length === 0 ? stationEmptyObservation(arrivals.headers, arrivals.completedAt) : null);
-  if (departures.ok) add('rail-departures', parseRailDepartures(departures.value, record, departures.headers, departures.completedAt), Array.isArray(departures.value) && departures.value.length === 0 ? httpObservation(departures.headers, departures.completedAt, 90000, { cacheRequired: true }) : null);
+  const railSource = railDepartureSource(record, departures, completedAt);
+  if (railSource) sources['rail-departures'] = railSource;
   if (journey.ok) add('journey-planner', parseJourney(journey.value, record, journey.headers, journeyDepartAt, journey.completedAt, actualRequestAt));
-  const selected = selectEvents({ sources }, record, completedAt);
+  const retainedRail = departures.deferred ? previous.sources?.['rail-departures'] : null;
+  const selected = selectEvents({ sources: retainedRail ? { ...sources, 'rail-departures': retainedRail } : sources }, record, completedAt);
   const usefulRail = selected.some((e) => e.sourceID === 'rail-departures' && e.kind === 'outgoingDeparture');
   const through = selected.some((e) => e.kind === 'throughArrival');
   const rawRows = Array.isArray(arrivals.value) ? arrivals.value.filter((row) => objectRow(row) && row.naptanId === record.stationID && row.lineId === record.lineID) : [];
@@ -983,9 +1033,8 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
 
   // Availability masks presentation. It never destroys the original source
   // context or creates a permanent publication-style closure rejection.
-  const railDepartureAttempt = boardSourceAttempt(departures, sources['rail-departures'], previous.sources?.['rail-departures'],
-    previous.railDepartureAttempt, record, applicabilityAt);
-  let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, railDepartureAttempt,
+  const railReceipt = railDepartureReceipt(record, previous, departures, railSource, applicabilityAt);
+  let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, ...railReceipt,
     nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
   if (ordinaryBoard && ordinaryNotBefore > applicabilityAt) merged.ordinaryNotBefore = ordinaryNotBefore;
   if (arrivalReader) merged = mergeStationArrivalRead(record, merged, arrivals, applicabilityAt, config.workerIntervalMs);

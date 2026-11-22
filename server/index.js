@@ -17,7 +17,7 @@ import {
   LiveActivityStore,
   TokenRateLimiter,
   getRolloverDelayMs,
-  getStationArrivalsRefreshDelayMs,
+  getLiveSourceRefreshDelayMs,
   loadConfig,
   runLiveActivityWorkerCycle,
   registerLiveActivityToken,
@@ -347,7 +347,7 @@ if (config.workerEnabled) {
       sourceOnly,
       nextFullRefreshAt: worker.nextIntervalAt,
       scheduleSourceRefresh: (record, cache, now, workerIntervalMs) => {
-        worker.scheduleRerun(`${record.environment}:${record.activityID}:station-arrivals`, getStationArrivalsRefreshDelayMs(cache, now, workerIntervalMs), { sourceOnly: true });
+        worker.scheduleRerun(`${record.environment}:${record.activityID}:live-sources`, getLiveSourceRefreshDelayMs(cache, now, workerIntervalMs), { sourceOnly: true });
       },
       scheduleRolloverPush: (record, contentState, now, workerIntervalMs) => {
         const delayMs = getRolloverDelayMs(contentState, now, workerIntervalMs);
