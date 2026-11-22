@@ -590,6 +590,88 @@ test('UF276 station complete-empty uses strict HTTP authority and failure cannot
   assert.equal(calls, 0); assert.equal(blocked.sources['station-arrivals'].observedAt, emptyObservedAt);
 });
 
+test('active typed boards share minute reads and publish newer qualified observations of the same train', async (t) => {
+  const store = await temporaryStore(t);
+  const second = { ...record, activityID: 'minute-second', installID: 'minute-second-install' };
+  await store.upsertToken(second, new Date(now));
+  const config = loadConfig({});
+  const reads = [], supplemental = [], pushes = [];
+  let at = now, observedAt = now;
+  const fetchImpl = async url => {
+    const path = new URL(url).pathname;
+    if (path.startsWith('/StopPoint/') && path.endsWith('/Arrivals')) {
+      reads.push(at);
+      return new Response(JSON.stringify([arrival({
+        id: 'same-train', timestamp: new Date(observedAt).toISOString(),
+        expectedArrival: new Date(now + 300000).toISOString(),
+      })]), { headers: headers(at) });
+    }
+    supplemental.push(path);
+    return new Response(JSON.stringify([]), { headers: headers(at) });
+  };
+  const cycle = (options = {}) => runLiveActivityWorkerCycle({ store, config, now: new Date(at),
+    clock: () => at, fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload); }, logger, ...options });
+
+  await cycle();
+  const initial = pushes[0].aps['content-state'];
+  assert.ok(initial.arrivals.length);
+  assert.equal(pushes.length, 2);
+  const supplementalCount = supplemental.length;
+  for (const registration of store.state.records) {
+    assert.equal(getStationArrivalsRefreshDelayMs(registration.stationBoardCache, new Date(now)), 60000);
+  }
+
+  at = now + 59999;
+  await cycle({ sourceOnly: true });
+  assert.deepEqual(reads, [now]);
+
+  at = observedAt = now + 60000;
+  await cycle(); // A coalesced full trigger must still read when supplemental sources are not due.
+  assert.deepEqual(reads, [now, at]);
+  assert.equal(supplemental.length, supplementalCount);
+  assert.equal(pushes.length, 4);
+  const renewed = pushes[2].aps['content-state'];
+  assert.equal(renewed.arrivals[0].expectedArrival, initial.arrivals[0].expectedArrival);
+  assert.equal(renewed.updatedAt - initial.updatedAt, 60);
+  assert.equal(renewed.arrivals[0].expiresAt - initial.arrivals[0].expiresAt, 60);
+
+  at = now + 120000;
+  await cycle({ sourceOnly: true });
+  assert.deepEqual(reads, [now, now + 60000, at]);
+  assert.equal(pushes.length, 4, 'a repeated provider timestamp cannot renew the board');
+
+  for (const registration of [record, second]) {
+    await store.deactivate(registration.activityID, registration.environment, 'synthetic-stop', new Date(at));
+  }
+  at = now + 180000;
+  await cycle({ sourceOnly: true });
+  assert.equal(reads.length, 3, 'inactive registrations admit no source work');
+});
+
+test('a newer retained observation can renew the clock with an unchanged content digest', async (t) => {
+  const store = await temporaryStore(t);
+  const event = row({ sourceID: 'station-arrivals', kind: 'throughArrival', timeEvidence: 'arrivalPrediction',
+    time: now + 240000, expiresAt: now + 150000 });
+  const pushes = [];
+  const cycle = at => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+    cacheOnly: true, fetchImpl: async () => assert.fail('cache boundary must not read the network'),
+    pushImpl: async (_, payload) => { pushes.push(payload.aps['content-state']); }, logger });
+
+  await store.retainStationBoard(record.activityID, record.environment, cacheOf(event), new Date(now));
+  await cycle(now);
+  const digest = store.state.records[0].lastBoardContentDigest;
+  assert.equal(pushes.length, 1);
+
+  const later = now + 60000;
+  await store.retainStationBoard(record.activityID, record.environment, cacheOf({ ...event, receivedAt: later }), new Date(later));
+  await cycle(later);
+  assert.equal(store.state.records[0].lastBoardContentDigest, digest);
+  assert.equal(pushes.length, 2);
+  assert.equal(pushes[1].updatedAt - pushes[0].updatedAt, 60);
+  await cycle(later + 1000);
+  assert.equal(pushes.length, 2);
+});
+
 test('UF276 thirty-minute source renewals share requests across registrations without extra supplemental reads', async (t) => {
   const store = await temporaryStore(t); let at = now;
   const second = { ...record, activityID: 'synthetic-v2-second', installID: 'synthetic-install-second', selectionMode: 'platform', platformID: 'southbound-platform-2', platformHeading: 'Southbound - Platform 2' };

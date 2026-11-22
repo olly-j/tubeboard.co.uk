@@ -98,6 +98,7 @@ export function stationArrivalObservation(headers, now) {
 }
 
 export const STATION_ARRIVAL_ATTEMPT_FLOOR_MS = 30000;
+const STATION_ARRIVAL_REFRESH_INTERVAL_MS = 60000;
 function retryAfterDelay(value, now) {
   if (typeof value !== 'string') return 0;
   if (/^\d+$/.test(value.trim())) {
@@ -182,9 +183,9 @@ function nextStationArrivalRefresh(cache, now, notBefore, workerIntervalMs) {
   const source = cache.sources?.['station-arrivals'];
   const deadlines = (source?.events || []).map(e => e.expiresAt).filter(Number.isFinite);
   if (Number.isFinite(source?.expiresAt)) deadlines.push(source.expiresAt);
-  const expiry = deadlines.length ? Math.min(...deadlines) : null;
-  const target = expiry === null ? now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS : Math.min(now + workerIntervalMs, expiry - 15000);
-  return Math.max(notBefore, target);
+  const interval = Math.min(STATION_ARRIVAL_REFRESH_INTERVAL_MS, workerIntervalMs);
+  const beforeExpiry = deadlines.length ? Math.min(...deadlines) - 15000 : Infinity;
+  return Math.max(notBefore, Math.min(now + interval, beforeExpiry));
 }
 
 export async function refreshStationArrivals(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader) {

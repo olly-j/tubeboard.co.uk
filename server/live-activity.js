@@ -1044,9 +1044,9 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
     let expectedPublicationGeneration;
     try {
       let cache = record.stationBoardCache || {};
-      if (sourceOnly) {
+      if (sourceOnly || (!cacheOnly && cache.nextRefreshAt > now.getTime())) {
         cache = await refreshStationArrivals(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, arrivalReader);
-      } else if (!cacheOnly && !(cache.nextRefreshAt > now.getTime())) {
+      } else if (!cacheOnly) {
         // Only public HTTP reads are shared. Each activity qualifies those
         // immutable receipts against its own selection and retained context.
         cache = await refreshStationBoard(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, store, arrivalReader);
@@ -1071,7 +1071,9 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       const holdInitial = !record.lastSuccessAt && displayUntil > effectiveNow.getTime() && delivery.nextAt === null
         && !authoritativeClosure;
       if (holdInitial) contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, displayUntil);
-      if (!holdInitial && contentDigest !== record.lastBoardContentDigest) {
+      const observedAt = (contentState.updatedAt + APPLE_REFERENCE_UNIX_SECONDS) * 1000;
+      const newerObservation = Number.isFinite(record.lastBoardObservedAt) && observedAt > record.lastBoardObservedAt;
+      if (!holdInitial && (contentDigest !== record.lastBoardContentDigest || newerObservation)) {
         const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
         if (!current || registrationTuple(current) !== expectedTuple || publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;
         const priority = boardDeliveryPriority(current.lastBoardDelivery, delivery, effectiveNow.getTime());
