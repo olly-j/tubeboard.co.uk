@@ -128,8 +128,16 @@ test('unchanged original provider timestamps expire rather than borrowing regist
   const f = await fixture(t, { providerTimestamp: epoch - 60000 });
   await f.send(); await f.settle();
   assert.ok(f.pushes[0].body.aps['content-state'].arrivals.every(r => r.expiresAt * 1000 + 978307200000 === epoch + 60000));
+  const initial = f.pushes.at(-1).body.aps;
   await f.advance(90000);
-  assert.equal(f.pushes.at(-1).body.aps['content-state'].arrivals.length, 0);
+  assert.deepEqual(f.pushes.at(-1).body.aps, initial,
+    'a stale HTTP success must neither erase a future original ETA nor renew its source clock');
+  const [record] = await f.store.listActive(new Date(epoch + 90000));
+  assert.ok(!(record.stationBoardCache.sources['station-arrivals']?.expiresAt > epoch + 90000));
+  const eta = initial['content-state'].arrivals[0].expectedArrival * 1000 + 978307200000;
+  await f.advance(eta - epoch + 90001);
+  assert.equal(f.pushes.at(-1).body.aps['content-state'].arrivals.length, 0,
+    'the obsolete ETA is removed after it elapses even if no fresh prediction arrives');
 });
 
 for (const invalid of [NaN, Infinity, epoch - 1, epoch + 200000]) test(`invalid phase deadline ${invalid} cannot change admission`, { timeout: 10000 }, async t => {
