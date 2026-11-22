@@ -672,6 +672,46 @@ test('a newer retained observation can renew the clock with an unchanged content
   assert.equal(pushes.length, 2);
 });
 
+test('provider-wide failures preserve the last usable board through its original expiry', async (t) => {
+  for (const failure of [429, 503, 'timeout']) {
+    const store = await temporaryStore(t);
+    let at = now, outcome = 'live';
+    const pushes = [];
+    const fetchImpl = async url => {
+      if (outcome === 'timeout') throw new DOMException('Synthetic source deadline', 'TimeoutError');
+      if (Number.isInteger(outcome)) return new Response(null, { status: outcome });
+      const path = new URL(url).pathname;
+      const arrivals = outcome === 'live' && path.startsWith('/StopPoint/') && path.endsWith('/Arrivals')
+        ? [arrival({ expectedArrival: new Date(now + 300000).toISOString() })] : [];
+      return new Response(JSON.stringify(arrivals), { headers: headers(at) });
+    };
+    const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+      fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps['content-state']); }, logger, ...options });
+
+    await cycle();
+    const initial = pushes[0];
+    assert.ok(initial.arrivals.length, String(failure));
+    at = now + 90000;
+    outcome = failure;
+    await cycle();
+    assert.equal(pushes.length, 1, String(failure));
+    assert.equal(store.state.records[0].stationBoardCache.sources['station-arrivals'].observedAt, now);
+
+    at = now + 120000;
+    await cycle({ cacheOnly: true });
+    assert.equal(pushes.length, 2, String(failure));
+    assert.deepEqual(pushes[1].arrivals, []);
+    assert.equal(pushes[1].updatedAt, initial.updatedAt, 'expiry can signal waiting without creating a fresh clock');
+
+    at = now + 390000;
+    outcome = 'empty';
+    await cycle({ sourceOnly: true });
+    assert.equal(pushes.length, 3, String(failure));
+    assert.deepEqual(pushes[2].arrivals, []);
+    assert.equal(pushes[2].updatedAt - initial.updatedAt, 390, 'a qualified complete empty reaches the board');
+  }
+});
+
 test('UF276 thirty-minute source renewals share requests across registrations without extra supplemental reads', async (t) => {
   const store = await temporaryStore(t); let at = now;
   const second = { ...record, activityID: 'synthetic-v2-second', installID: 'synthetic-install-second', selectionMode: 'platform', platformID: 'southbound-platform-2', platformHeading: 'Southbound - Platform 2' };
