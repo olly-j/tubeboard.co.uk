@@ -226,6 +226,26 @@ test('Woodford All platforms push reserves one current clock per known direction
   }
 });
 
+test('Woodford retains two timed directions and its first unrelated untimed platform fact', () => {
+  const board = { ...record, stationID: '940GZZLUWOF', lineID: 'central', supportsRegularTimetable: true };
+  const platform = (id, number, destination, destinationStationID) => event(id, {
+    stationID: board.stationID, lineID: board.lineID, sourceID: 'at-station-destination',
+    kind: 'outgoingDestinationOnly', time: null, timeEvidence: null, platform: `Platform ${number}`,
+    destination, destinationStationID,
+  });
+  const live = (id, direction, seconds, destination, destinationStationID, kind = 'throughArrival') => event(id, {
+    stationID: board.stationID, lineID: board.lineID, sourceID: 'station-arrivals',
+    kind, time: now + seconds * 1000, timeEvidence: 'arrivalPrediction', direction, destination, destinationStationID,
+  });
+  const facts = [platform('platform-1', 1, 'Loughton', '940GZZLULGN'), platform('platform-2', 2, 'White City', '940GZZLUWCT')];
+  const east = live('east', 'Eastbound', 45, 'Epping', '940GZZLUEPG');
+  const west = live('west', 'Westbound', 80, 'West Ruislip', '940GZZLUWRP');
+  const incoming = live('incoming', 'Westbound', 15, 'Woodford', board.stationID, 'incomingArrival');
+  const ids = events => buildStationBoardState(board, context(...events), now).arrivals.map(row => row.id);
+  assert.deepEqual(ids([...facts, east, west, incoming]), ['platform-1', 'east', 'west']);
+  assert.deepEqual(ids([...facts, east, incoming]), ['platform-1', 'platform-2', 'east']);
+});
+
 test('Circle Live Activity can retain each reported rail and never count an operational or conflicting direction', () => {
   const board = { ...record, stationID: '940GZZLUBST', lineID: 'circle', supportsRegularTimetable: true };
   const trains = [

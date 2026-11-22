@@ -606,7 +606,8 @@ function prioritizePublicDirections(rows, record) {
   }
   if (firstByDirection.size < 2) return rows;
   const first = new Set(firstByDirection.values());
-  const prefixLength = rows.findIndex(row => !atPlatformDestination(row));
+  const atPlatformCount = rows.findIndex(row => !atPlatformDestination(row));
+  const prefixLength = first.size === 2 ? Math.min(atPlatformCount, 1) : atPlatformCount;
   return [...rows.slice(0, prefixLength), ...[...first].map(index => rows[index]),
     ...rows.slice(prefixLength).filter((_, index) => !first.has(index + prefixLength))];
 }
