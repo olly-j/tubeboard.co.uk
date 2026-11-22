@@ -527,8 +527,12 @@ remain 90 seconds in production.
 
 A newly qualified observation of the displayed board can update its visible
 clock even when the train details are identical. Repeated source timestamps
-retain their original clocks and expiration. Routine renewal uses the existing
-APNs priority policy and cannot guarantee receipt by the phone each minute.
+retain their original clocks and expiration. During a failed live-source read,
+an empty waiting update does not replace a delivered through train or estimated
+departure before its original ETA. Those rows still expire at their original
+stale-date. A new complete empty, withdrawal, disruption, or closure can
+supersede the held snapshot. Routine renewal uses the existing APNs priority
+policy and cannot guarantee receipt by the phone each minute.
 
 The existing machine, volume and worker serve these opportunities. Before
 expiry or full-cycle effects, a healthy station can move from roughly one

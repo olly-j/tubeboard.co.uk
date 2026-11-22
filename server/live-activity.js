@@ -948,8 +948,13 @@ const boardingClockEvidence = ['estimatedDeparture', 'scheduledDeparture', 'thro
 function boardDeliveryObservation(state, authoritativeClosure) {
   const first = state.arrivals.find(row => Number.isFinite(row.expectedArrival)
     && boardingClockEvidence.includes(row.timeEvidence));
+  const lastETA = evidence => state.arrivals.reduce((latest, row) => row.timeEvidence === evidence && Number.isFinite(row.expectedArrival)
+    ? Math.max(latest, (row.expectedArrival + APPLE_REFERENCE_UNIX_SECONDS) * 1000) : latest, 0);
   return {
     nextAt: first ? (first.expectedArrival + APPLE_REFERENCE_UNIX_SECONDS) * 1000 : null,
+    throughUntil: lastETA('throughArrivalPrediction'),
+    estimatedUntil: lastETA('estimatedDeparture'),
+    disrupted: state.isDisrupted,
     staleAt: state.arrivals.length > 0
       ? Math.round((state.staleAt + APPLE_REFERENCE_UNIX_SECONDS) * 1000) : null,
     // Provider row IDs can vary even for unchanged data. Persist only an
@@ -1073,7 +1078,17 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       if (holdInitial) contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, displayUntil);
       const observedAt = (contentState.updatedAt + APPLE_REFERENCE_UNIX_SECONDS) * 1000;
       const newerObservation = Number.isFinite(record.lastBoardObservedAt) && observedAt > record.lastBoardObservedAt;
-      if (!holdInitial && (contentDigest !== record.lastBoardContentDigest || newerObservation)) {
+      const previousDelivery = record.lastBoardDelivery;
+      const failedSourceETA = Math.max(
+        cache.stationArrivalAttempt?.failed ? previousDelivery?.throughUntil || 0 : 0,
+        cache.railDepartureAttempt?.failed ? previousDelivery?.estimatedUntil || 0 : 0
+      );
+      // ActivityKit keeps the original payload and stale-date during an
+      // outage. An unqualified waiting state would erase that snapshot early.
+      const holdAfterFailure = contentState.arrivals.length === 0 && failedSourceETA >= effectiveNow.getTime()
+        && !authoritativeClosure && !(contentState.isDisrupted && !previousDelivery?.disrupted);
+      if (holdAfterFailure) contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, failedSourceETA + 1);
+      if (!holdInitial && !holdAfterFailure && (contentDigest !== record.lastBoardContentDigest || newerObservation)) {
         const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
         if (!current || registrationTuple(current) !== expectedTuple || publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;
         const priority = boardDeliveryPriority(current.lastBoardDelivery, delivery, effectiveNow.getTime());

@@ -209,7 +209,8 @@ function mergeStationArrivalRead(record, previous, response, now, workerInterval
       sources['station-arrivals'] = { observedAt: events.length ? Math.max(...events.map(e => e.receivedAt)) : observation.observedAt, expiresAt: observation?.expiresAt, events };
     }
   }
-  const merged = mergeContexts(previous, { sources, arrivalsRateLimitedUntil: response.rateLimitedUntil }, record, now);
+  const stationArrivalAttempt = boardSourceAttempt(response, sources['station-arrivals']);
+  const merged = mergeContexts(previous, { sources, stationArrivalAttempt, arrivalsRateLimitedUntil: response.rateLimitedUntil }, record, now);
   const notBefore = Math.max(previous.arrivalsNotBefore || 0, response.nextAttemptAt || now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS);
   return { ...merged, arrivalsNotBefore: notBefore, arrivalsRefreshAt: nextStationArrivalRefresh(merged, now, notBefore, workerIntervalMs) };
 }
@@ -426,6 +427,18 @@ function mergeStationArrivalSchedule(previous, incoming, sources) {
   return { arrivalsNotBefore, ...(Number.isFinite(due) ? { arrivalsRefreshAt: Math.max(arrivalsNotBefore, due) } : {}) };
 }
 
+function boardSourceAttempt(response, qualifiedSource) {
+  if (Number.isFinite(response.completedAt) && !response.deferred && (!response.ok || qualifiedSource)) {
+    return { at: response.completedAt, failed: !response.ok };
+  }
+}
+
+function retainBoardSourceAttempt(previous, incoming, now) {
+  return [previous, incoming].filter(attempt => typeof attempt?.failed === 'boolean'
+    && Number.isFinite(attempt.at) && attempt.at <= now)
+    .reduce((latest, attempt) => !latest || attempt.at >= latest.at ? attempt : latest, undefined);
+}
+
 export function mergeContexts(previous = {}, incoming = {}, record, now) {
   const rejections = [...(previous.rejections || []), ...(incoming.rejections || [])].filter(r =>
     retainedRejection(r, record, now) && ['publicationChanged', 'timetableChanged', 'unsupportedCalendar',
@@ -459,7 +472,11 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
   }
   const ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, incoming.ordinaryNotBefore || 0);
   const arrivalsRateLimitedUntil = Math.max(previous.arrivalsRateLimitedUntil || 0, incoming.arrivalsRateLimitedUntil || 0);
-  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null, ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}) };
+  const stationArrivalAttempt = retainBoardSourceAttempt(previous.stationArrivalAttempt, incoming.stationArrivalAttempt, now);
+  const railDepartureAttempt = retainBoardSourceAttempt(previous.railDepartureAttempt, incoming.railDepartureAttempt, now);
+  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null,
+    ...(stationArrivalAttempt ? { stationArrivalAttempt } : {}), ...(railDepartureAttempt ? { railDepartureAttempt } : {}),
+    ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}) };
 }
 function selectionMatches(event, record) {
   if (record.selectionMode !== 'platform' && !record.platformID) return true;
@@ -935,7 +952,9 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
 
   // Availability masks presentation. It never destroys the original source
   // context or creates a permanent publication-style closure rejection.
-  let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
+  const railDepartureAttempt = boardSourceAttempt(departures, sources['rail-departures']);
+  let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, railDepartureAttempt,
+    nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
   if (ordinaryBoard && ordinaryNotBefore > applicabilityAt) merged.ordinaryNotBefore = ordinaryNotBefore;
   if (arrivalReader) merged = mergeStationArrivalRead(record, merged, arrivals, applicabilityAt, config.workerIntervalMs);
   return publicationAuthorityStore ? applyPublicationAuthority(merged, publicationAuthorityStore.publicationAuthority()) : merged;
