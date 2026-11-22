@@ -30,9 +30,7 @@
       ]
     },
     "circle": {
-      "commonJourneyTargets": {
-        "940GZZLUHSC": "940GZZLUGHK"
-      },
+      "commonJourneyTargets": {},
       "exclusiveFirstCalls": {
         "940GZZLUERC": [
           "940GZZLUPAC"
@@ -45,7 +43,6 @@
     "district": {
       "commonJourneyTargets": {
         "940GZZLUEBY": "940GZZLUECM",
-        "940GZZLUERC": "940GZZLUPAC",
         "940GZZLUKOY": "940GZZLUECT",
         "940GZZLURMD": "940GZZLUKWG",
         "940GZZLUUPM": "940GZZLUUPB",
@@ -108,10 +105,7 @@
       ]
     },
     "hammersmith-city": {
-      "commonJourneyTargets": {
-        "940GZZLUBKG": "940GZZLUEHM",
-        "940GZZLUHSC": "940GZZLUGHK"
-      },
+      "commonJourneyTargets": {},
       "exclusiveFirstCalls": {},
       "physicalEnds": [
         "940GZZLUBKG",
@@ -205,8 +199,7 @@
     "piccadilly": {
       "commonJourneyTargets": {
         "940GZZLUCKS": "940GZZLUOAK",
-        "940GZZLUHR5": "940GZZLUHRC",
-        "940GZZLUUXB": "940GZZLUHGD"
+        "940GZZLUHR5": "940GZZLUHRC"
       },
       "exclusiveFirstCalls": {
         "940GZZLUHR4": []
@@ -269,7 +262,6 @@
       "commonJourneyTargets": {
         "910GCLPHMJ1": "910GWNDSWRD",
         "910GCRYSTLP": "910GSYDENHM",
-        "910GHGHI": "910GCNNB",
         "910GNWCRELL": "910GSURREYQ",
         "910GWCROYDN": "910GNORWDJ"
       },

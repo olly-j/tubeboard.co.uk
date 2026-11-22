@@ -12,6 +12,7 @@ const catalogue = JSON.parse(fs.readFileSync(new URL('../contracts/station-board
 export const STATION_BOARD_LINES = new Map(catalogue.lines.map((line) => [line.lineID, line]));
 export const STATION_BOARD_STATIONS = new Map(catalogue.stations.map((station) => [station.stationID, station]));
 const regularOrigins = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-regular-origins-v1.json', import.meta.url))).lines;
+const journeyTargetEvidence = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-journey-target-evidence-v1.json', import.meta.url))).boards;
 const APPLE_EPOCH = 978307200000;
 const key = (value) => String(value || '').toLowerCase().replace(/ (underground|rail|dlr) station/g, '').replace(/\s*\([^)]*\)/g, '').replace(/\s+(station|terminus)$/, '').trim().replace(/\s+/g, ' ');
 const hash = (value) => crypto.createHash('sha256').update(canonical(value)).digest('hex');
@@ -342,10 +343,12 @@ export function journeyURL(record, departAt, actualRequestAt = departAt) {
   const line = STATION_BOARD_LINES.get(record.lineID);
   if (!line || !validBoard(record.stationID, record.lineID)) return null;
   const rule = catalogue.narrowQueryRules?.find((rule) => rule.stationID === record.stationID && rule.lineID === record.lineID);
+  const branch = rule?.targetID || line.branchTargetIDs.find((id) => id !== record.stationID && validBoard(id, record.lineID));
   const common = !rule && record.selectionMode === 'allPlatforms' && !record.platformID && departAt <= actualRequestAt
     ? regularOrigins[record.lineID]?.commonJourneyTargets?.[record.stationID] : null;
-  const validCommon = common && common !== record.stationID && validBoard(common, record.lineID) ? common : null;
-  const target = rule?.targetID || validCommon || line.branchTargetIDs.find((id) => id !== record.stationID && validBoard(id, record.lineID));
+  const evidence = journeyTargetEvidence[record.lineID]?.[record.stationID];
+  const target = common && common !== record.stationID && validBoard(common, record.lineID)
+    && evidence?.targetID === common && evidence.previousTargetID === branch ? common : branch;
   if (!target) return null;
   const local = londonLocal(departAt), url = new URL(`https://api.tfl.gov.uk/Journey/JourneyResults/${record.stationID}/to/${target}`);
   for (const [name, value] of Object.entries({ date: local.slice(0, 10).replaceAll('-', ''), time: local.slice(11, 16).replace(':', ''), timeIs: 'Departing', mode: line.mode, useRealTimeLiveArrivals: 'false', calcOneDirection: 'true', includeAlternativeRoutes: rule ? 'false' : 'true' })) url.searchParams.set(name, value);
@@ -362,7 +365,8 @@ export function parseJourney(root, record, headers, requestedAt, now, actualRequ
   if (!line || !validBoard(record.stationID, record.lineID) || root?.searchCriteria?.dateTimeType !== 'Departing' || root.searchCriteria.dateTime !== local || !Number.isInteger(root.recommendedMaxAgeMinutes) || root.recommendedMaxAgeMinutes <= 0 || !Array.isArray(root.stopMessages) || root.stopMessages.some((message) => typeof message !== 'string') || !Array.isArray(root.journeys)) return [];
   const observation = httpObservation(headers, now, Math.min(root.recommendedMaxAgeMinutes, 2) * 60000, { futureSkew: 120000 });
   if (!observation) return [];
-  observation.expiresAt = Math.min(observation.expiresAt, midnight(now));
+  observation.expiresAt = Math.min(observation.expiresAt, midnight(actualRequestAt));
+  if (observation.expiresAt <= now) return [];
   const seen = new Map(), events = [];
   for (const journey of root.journeys) {
     const leg = Array.isArray(journey?.legs) ? journey.legs.find((leg) => objectRow(leg) && leg.mode?.id !== 'walking') : null, option = leg?.routeOptions?.[0];
@@ -670,7 +674,7 @@ function immutable(value) {
   return value;
 }
 
-function datedWithdrawal(response, record, departAt, now) {
+function datedWithdrawal(response, record, departAt, actualRequestAt, now) {
   const body = response.value;
   const localRequestTime = londonLocal(departAt).slice(0, 16) + ':00';
   if (!response.ok || body?.searchCriteria?.dateTimeType !== 'Departing'
@@ -679,14 +683,16 @@ function datedWithdrawal(response, record, departAt, now) {
     || typeof response.headers?.age !== 'string' || !/^\d+$/.test(response.headers.age.trim())) return null;
   const observation = httpObservation(response.headers, response.completedAt,
     Math.min(body.recommendedMaxAgeMinutes, 2) * 60000, { cacheRequired: true });
-  if (!observation || observation.expiresAt <= now) return null;
-  const cutoff = midnight(departAt);
+  if (!observation) return null;
+  const cutoff = midnight(actualRequestAt);
+  observation.expiresAt = Math.min(observation.expiresAt, cutoff);
+  if (observation.expiresAt <= now) return null;
   const cancelled = body.journeys.flatMap(item => {
     const leg = Array.isArray(item?.legs) ? item.legs.find(leg => leg?.mode?.id !== 'walking') : null;
     if (leg?.departurePoint?.naptanId !== record.stationID || leg.routeOptions?.length !== 1
       || leg.routeOptions[0]?.lineIdentifier?.id !== record.lineID || !withdrawnJourneyLeg(leg)) return [];
     const clock = londonClock(leg.scheduledDepartureTime);
-    if (!Number.isFinite(clock)) return [Math.min(observation.expiresAt, cutoff)];
+    if (!Number.isFinite(clock)) return [observation.expiresAt];
     return clock > now && clock < cutoff ? [clock] : [];
   });
   const regularWithdrawalUntil = Math.max(...cancelled);
@@ -842,7 +848,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   }
   const originRule = regularOriginRule(record);
   const ordinaryBoard = supportsRegularOrigin(record);
-  const withdrawal = ordinaryBoard ? datedWithdrawal(journey, record, journeyDepartAt, applicabilityAt) : null;
+  const withdrawal = ordinaryBoard ? datedWithdrawal(journey, record, journeyDepartAt, actualRequestAt, applicabilityAt) : null;
   const currentProofs = retainAvailability(previous, { availabilityProofs }, record, applicabilityAt);
   // A station-family response can describe closures on other modes and name
   // this line as a diversion. Only qualified controls for the selected board

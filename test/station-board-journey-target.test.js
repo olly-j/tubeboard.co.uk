@@ -8,6 +8,7 @@ import { buildStationBoardState, journeyURL, parseJourney, refreshStationBoard, 
 // stops, route and disruption evidence. Each capture records its raw-body hash.
 const captures = JSON.parse(fs.readFileSync(new URL('./fixtures/edgware-nearby-journey-20261121.json', import.meta.url)));
 const { lines } = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-regular-origins-v1.json', import.meta.url)));
+const { boards: verified } = JSON.parse(fs.readFileSync(new URL('../contracts/station-board-journey-target-evidence-v1.json', import.meta.url)));
 const board = { stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms',
   contentStateContract: 'station-board-v2', plannedPresentationVersion: 2, supportsRegularTimetable: true };
 const config = loadConfig({});
@@ -17,7 +18,7 @@ const far = '/Journey/JourneyResults/940GZZLUEGW/to/940GZZLUMDN';
 const ordinary = '/Line/northern/Timetable/940GZZLUEGW';
 const reply = (body, headers) => new Response(JSON.stringify(body), { headers });
 
-test('only certified common enquiries change the existing explicit and ambiguous route rules', () => {
+test('near enquiries require paired evidence on an unshared certified segment', () => {
   for (const [lineID, line] of Object.entries(lines)) {
     for (const [stationID, target] of Object.entries(line.commonJourneyTargets)) {
       assert.ok(line.physicalEnds.includes(stationID));
@@ -25,10 +26,21 @@ test('only certified common enquiries change the existing explicit and ambiguous
       assert.notEqual(stationID, target);
     }
   }
+  const evidence = verified.northern[board.stationID];
+  assert.equal(Date.parse(evidence.pairedDispatchAt), Date.parse(captures.near2358.requestedAt));
+  assert.equal(evidence.targetResponseSHA256, captures.near2358.responseSHA256);
+  assert.equal(evidence.previousTargetResponseSHA256, captures.far2358.responseSHA256);
+  assert.equal(evidence.independentTargetResponseSHA256, captures.original2348.responseSHA256);
+  assert.equal(lines.central.commonJourneyTargets['940GZZLUEPG'], '940GZZLUTHB');
+  assert.equal(lines.jubilee.commonJourneyTargets['940GZZLUSTD'], '940GZZLUWHM');
+  assert.equal(lines.circle.commonJourneyTargets['940GZZLUHSC'], undefined); // Shared to Goldhawk Road
+  assert.equal(lines['hammersmith-city'].commonJourneyTargets['940GZZLUBKG'], undefined); // Shared to East Ham
   for (const [lineID, stationID, target, via] of [
     ['northern', '940GZZLUEGW', '940GZZLUBTK'], // Edgware – Burnt Oak
-    ['central', '940GZZLUEPG', '940GZZLUTHB'], // Epping – Theydon Bois
-    ['jubilee', '940GZZLUSTD', '940GZZLUWHM'], // Stratford – West Ham
+    ['central', '940GZZLUEPG', '940GZZLUWRP'], // Epping keeps its prior target pending evidence
+    ['jubilee', '940GZZLUSTD', '940GZZLUSTM'], // Stratford keeps its prior target pending evidence
+    ['circle', '940GZZLUHSC', '940GZZLUALD'], // The old enquiry remains on the shared segment
+    ['hammersmith-city', '940GZZLUBKG', '940GZZLUHSC'],
     ['district', '940GZZLUERC', '940GZZLUWIM', null], // Edgware Road keeps its Wimbledon narrow rule
     ['circle', '940GZZLUERC', '940GZZLUHSC'], // Two directions at the mixed station are not a common stop
     ['circle', '940GZZLUVIC', '940GZZLUHSC', '940GZZLUNHG'],
@@ -42,6 +54,7 @@ test('only certified common enquiries change the existing explicit and ambiguous
     assert.equal(url.searchParams.get('via'), via ?? null);
     assert.equal(url.searchParams.get('maxWalkingMinutes'), via ? '0' : null);
   }
+  assert.equal(journeyURL({ ...board, supportsRegularTimetable: undefined }, at).pathname, near);
   assert.equal(journeyURL({ ...board, selectionMode: 'platform', platformID: 'inbound' }, at).pathname, far);
   assert.equal(journeyURL(board, at + 120000, at).pathname, far);
   assert.equal(journeyURL({ ...board, stationID: 'unknown' }, at), null);
@@ -131,6 +144,38 @@ test('the worker sends the first qualified departure from the paired capture', a
   const state = buildStationBoardState(board, cache, received);
   assert.deepEqual(state.arrivals.map(r => r.destination), ['Morden', 'Golders Green', 'Morden']);
   assert.equal(state.arrivals[0].expectedArrival * 1000 + 978307200000, Date.parse('2026-11-22T00:01:00Z'));
+});
+
+test('a Journey completed after London midnight cannot renew its previous-day enquiry', async () => {
+  const midnight = Date.parse('2026-11-22T00:00:00Z');
+  for (const [dispatch, received, expectOldDay] of [
+    [midnight - 1000, midnight - 500, true],
+    [midnight - 1000, midnight, true],
+    [midnight - 1000, midnight + 1000, true],
+    [midnight + 1000, midnight + 2000, false],
+  ]) {
+    let clock = dispatch;
+    const paths = [];
+    const body = structuredClone(captures.near2358.body);
+    body.searchCriteria.dateTime = expectOldDay ? '2026-11-21T23:59:00' : '2026-11-22T00:00:00';
+    const fetchImpl = async url => {
+      if (url.pathname === near) {
+        paths.push(url.searchParams.get('date'));
+        clock = received;
+        return reply(body, { Date: new Date(received).toUTCString(), Age: '0', 'Cache-Control': 'public,max-age=60' });
+      }
+      return new Response(null, { status: 503 });
+    };
+    const cache = await refreshStationBoard(board, {}, config, fetchImpl, dispatch, undefined, () => clock);
+    const state = buildStationBoardState(board, cache, received);
+    const validReceipt = !expectOldDay || received < midnight;
+    assert.deepEqual(paths, [expectOldDay ? '20261121' : '20261122']);
+    assert.equal(state.arrivals.length, validReceipt ? 3 : 0);
+    if (validReceipt) {
+      assert.equal(state.arrivals[0].expiresAt * 1000 + 978307200000,
+        expectOldDay ? midnight : received + 60000);
+    }
+  }
 });
 
 test('scope closures suppress any Journey request and a proved near-leg withdrawal still blocks ordinary fallback', async () => {
