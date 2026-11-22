@@ -209,7 +209,8 @@ function mergeStationArrivalRead(record, previous, response, now, workerInterval
       sources['station-arrivals'] = { observedAt: events.length ? Math.max(...events.map(e => e.receivedAt)) : observation.observedAt, expiresAt: observation?.expiresAt, events };
     }
   }
-  const stationArrivalAttempt = boardSourceAttempt(response, sources['station-arrivals']);
+  const stationArrivalAttempt = boardSourceAttempt(response, sources['station-arrivals'], previous.sources?.['station-arrivals'],
+    previous.stationArrivalAttempt, record, now);
   const merged = mergeContexts(previous, { sources, stationArrivalAttempt, arrivalsRateLimitedUntil: response.rateLimitedUntil }, record, now);
   const notBefore = Math.max(previous.arrivalsNotBefore || 0, response.nextAttemptAt || now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS);
   return { ...merged, arrivalsNotBefore: notBefore, arrivalsRefreshAt: nextStationArrivalRefresh(merged, now, notBefore, workerIntervalMs) };
@@ -433,10 +434,17 @@ function mergeStationArrivalSchedule(previous, incoming, sources) {
   return { arrivalsNotBefore, ...(Number.isFinite(due) ? { arrivalsRefreshAt: Math.max(arrivalsNotBefore, due) } : {}) };
 }
 
-function boardSourceAttempt(response, qualifiedSource) {
-  if (Number.isFinite(response.completedAt) && !response.deferred && (!response.ok || qualifiedSource)) {
-    return { at: response.completedAt, failed: !response.ok };
-  }
+function boardSourceAttempt(response, source, previousSource, previousAttempt, record, now) {
+  if (!Number.isFinite(response.completedAt) || response.deferred) return undefined;
+  const lastObservation = Math.max(previousSource?.observedAt ?? -Infinity, previousAttempt?.observedAt ?? -Infinity);
+  const fresh = response.ok && Number.isFinite(source?.observedAt) && source.observedAt <= now
+    && (source.events.length ? source.events.some(event => usable(event, record, now)) : source.expiresAt > now);
+  // A successful transport cannot clear an outage without new, usable source
+  // evidence. Keep the observation floor even after the source rows expire.
+  const advanced = fresh && source.observedAt > lastObservation;
+  const observedAt = advanced ? source.observedAt : lastObservation;
+  const failed = !fresh || !advanced && previousAttempt?.failed === true;
+  return { at: response.completedAt, failed, ...(Number.isFinite(observedAt) ? { observedAt } : {}) };
 }
 
 function retainBoardSourceAttempt(previous, incoming, now) {
@@ -974,7 +982,8 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
 
   // Availability masks presentation. It never destroys the original source
   // context or creates a permanent publication-style closure rejection.
-  const railDepartureAttempt = boardSourceAttempt(departures, sources['rail-departures']);
+  const railDepartureAttempt = boardSourceAttempt(departures, sources['rail-departures'], previous.sources?.['rail-departures'],
+    previous.railDepartureAttempt, record, applicabilityAt);
   let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, railDepartureAttempt,
     nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
   if (ordinaryBoard && ordinaryNotBefore > applicabilityAt) merged.ordinaryNotBefore = ordinaryNotBefore;

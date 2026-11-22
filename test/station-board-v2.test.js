@@ -723,6 +723,78 @@ test('provider-wide failures prevent an early empty push while the last live ETA
   }
 });
 
+test('stale and malformed HTTP 200 reads cannot erase a delivered future ETA at source expiry', async t => {
+  for (const invalid of ['stale', 'malformed']) {
+    const store = await temporaryStore(t);
+    const pushes = [];
+    let at = now;
+    const fetchImpl = async url => {
+      if (!new URL(url).pathname.endsWith('/Arrivals')) return new Response('[]', { headers: headers(at) });
+      if (at === now) return new Response(JSON.stringify([arrival({
+        expectedArrival: new Date(now + 300000).toISOString()
+      })]), { headers: headers(at) });
+      return invalid === 'stale'
+        ? new Response('[]', { headers: headers(at, 151) })
+        : new Response('{"invalid":"arrivals shape"}', { headers: headers(at) });
+    };
+    const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at),
+      clock: () => at, fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger, ...options });
+
+    await cycle();
+    assert.equal(pushes[0]['content-state'].arrivals.length, 1);
+    at += 60000;
+    await cycle({ sourceOnly: true });
+    assert.deepEqual(store.state.records[0].stationBoardCache.stationArrivalAttempt,
+      { at, failed: true, observedAt: now }, invalid);
+
+    at = now + 120000;
+    await cycle({ cacheOnly: true });
+    assert.equal(pushes.length, 1, invalid);
+    assert.equal(store.state.records[0].stationBoardCache.sources['station-arrivals'], undefined);
+    assert.equal(pushes[0]['stale-date'], (now + 120000) / 1000);
+  }
+});
+
+test('a qualified older cached response cannot clear a station arrival failure', async t => {
+  const store = await temporaryStore(t);
+  const pushes = [];
+  let at = now;
+  const estimatedArrival = new Date(now + 300000).toISOString();
+  const fetchImpl = async url => {
+    if (!new URL(url).pathname.endsWith('/Arrivals')) return new Response('[]', { headers: headers(at) });
+    if (at === now + 60000) return new Response(null, { status: 404 });
+    if (at > now + 120000) return new Response('[]', { headers: headers(at) });
+    const observed = at === now ? now : now - 5000;
+    return new Response(JSON.stringify([arrival({
+      timestamp: new Date(observed).toISOString(), timing: { read: new Date(observed).toISOString() },
+      expectedArrival: estimatedArrival,
+    })]), { headers: headers(observed) });
+  };
+  const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at),
+    clock: () => at, fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger, ...options });
+
+  await cycle();
+  at = now + 60000;
+  await cycle({ sourceOnly: true });
+  assert.equal(store.state.records[0].stationBoardCache.stationArrivalAttempt.failed, true);
+
+  at = now + 105000;
+  await cycle({ sourceOnly: true });
+  const cache = store.state.records[0].stationBoardCache;
+  assert.equal(cache.sources['station-arrivals'].observedAt, now);
+  assert.deepEqual(cache.stationArrivalAttempt, { at, failed: true, observedAt: now });
+
+  at = now + 120000;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 1);
+  at = now + 135000;
+  await cycle({ sourceOnly: true });
+  assert.deepEqual(store.state.records[0].stationBoardCache.stationArrivalAttempt,
+    { at, failed: false, observedAt: at });
+  assert.deepEqual(pushes.at(-1)['content-state'].arrivals, []);
+  assert.equal(pushes.at(-1)['content-state'].updatedAt - pushes[0]['content-state'].updatedAt, 135);
+});
+
 test('a qualified station closure supersedes a future ETA during a source outage', async (t) => {
   const store = await temporaryStore(t);
   const pushes = [];
