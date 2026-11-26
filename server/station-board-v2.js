@@ -658,7 +658,7 @@ function prioritizePublicDirections(rows, record) {
   return [...rows.slice(0, prefixLength), ...[...first].map(index => rows[index]),
     ...rows.slice(prefixLength).filter((_, index) => !first.has(index + prefixLength))];
 }
-export function buildStationBoardState(record, cache, now, { preserveLegacyOrder = false } = {}) {
+export function buildStationBoardState(record, cache, now, { preserveLegacyOrder = false, observeDepartures } = {}) {
   const capable = record.plannedPresentationVersion === 2;
   const orderRows = rows => preserveLegacyOrder ? rows : prioritizePublicDirections(rows, record);
   const proofs = retainAvailability(cache, {}, record, now).filter((p) => p.closed || p.plannedUnavailable === true || p.scheduledClockOnly === true);
@@ -667,12 +667,36 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
   const sources = [...new Set(rows.map(plannedSource).filter(Boolean))];
   const retainsContexts = capable && (proofs.length > 0 || sources.length > 1);
   const eligible = (e) => !planned(e) || !proofs.some((p) => blocksScheduled(p, e.time, now));
+  const eligibleRows = rows.filter(eligible);
+  const chosen = compactPlanningSource(eligibleRows);
+  const timedBoardable = (e) => Number.isFinite(e.time) && e.time >= now && e.time <= now + 3600000
+    && (e.kind === 'outgoingDeparture' || e.kind === 'throughArrival' && e.timeEvidence === 'arrivalPrediction');
+  const preferredSource = (e) => !plannedSource(e) || plannedSource(e) === chosen;
+  const offersDeparture = (e) => timedBoardable(e) && eligible(e) && preferredSource(e);
+  const compactRows = (ordered) => {
+    const leading = ordered.slice(0, 3);
+    if (leading.some(offersDeparture)) return leading;
+    const departure = ordered.find(offersDeparture);
+    return departure ? [...leading.slice(0, 2), departure] : leading;
+  };
+  const finish = () => {
+    if (observeDepartures) {
+      const offered = rows.some(offersDeparture);
+      // Recovery must cite the offered source, not a candidate that packing
+      // dropped. A miss instead cites the eligible source that lost its clock.
+      const qualified = (offered ? rows : eligibleRows).find(e => offersDeparture(e)
+        && e.receivedAt === cache.sources?.[sourceKey(e.sourceID)]?.observedAt);
+      observeDepartures(qualified && {
+        source: sourceKey(qualified.sourceID), observedAt: qualified.receivedAt, offered,
+      });
+    }
+    return state;
+  };
   if (retainsContexts) {
-    const chosen = compactPlanningSource(rows.filter(eligible));
     const orderedSources = sources.sort((a,b) => Number(b === chosen) - Number(a === chosen) || a.localeCompare(b));
     const groups = [...orderedSources, null].map((source) => {
       const group = rows.filter((e) => plannedSource(e) === source);
-      const useful = orderRows(group.filter(eligible)).slice(0, 3);
+      const useful = compactRows(orderRows(group.filter(eligible)));
       return [...useful, ...group.filter((e) => !eligible(e)).slice(0, 3 - useful.length)];
     });
     let retained = groups.flat();
@@ -683,7 +707,7 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
       retained = [...new Set(prioritized)].slice(0, 9);
     }
     const selected = new Set(retained); rows = rows.filter((e) => selected.has(e));
-  } else rows = orderRows(compactEvents(rows.filter(eligible))).slice(0, 3);
+  } else rows = compactRows(orderRows(eligibleRows.filter(preferredSource)));
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
   const origin = regularOriginRule(record);
@@ -728,9 +752,9 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
   state.nextBoardBoundaryAt = nextBoundary(cache, record, now);
   const fits = () => Buffer.byteLength(JSON.stringify(state)) <= 3500
     && Buffer.byteLength(JSON.stringify({ aps: { timestamp: Math.floor(now / 1000), event: 'update', 'content-state': Object.fromEntries(Object.entries(state).filter(([k]) => k !== 'nextBoardBoundaryAt')), 'stale-date': Math.floor((state.staleAt * 1000 + APPLE_EPOCH) / 1000) } })) <= 4096;
-  if (fits()) return state;
+  if (fits()) return finish();
   state.statusReason = null;
-  if (fits()) return state;
+  if (fits()) return finish();
 
   const selectedRows = rows;
   const outgoing = selectedRows.filter(e => planned(e) || ['outgoingDeparture', 'outgoingDestinationOnly'].includes(e.kind)
@@ -756,11 +780,21 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
   updateRows(outgoing);
   if (fits()) {
     pack(outgoing, selectedRows);
-    return state;
+    return finish();
+  }
+  // Untimed destination facts are optional when packing the complete timed
+  // context. Keep every timed alternative and its availability proofs together.
+  const timedContext = outgoing.filter(e => e.kind !== 'outgoingDestinationOnly');
+  if (timedContext.length < outgoing.length && timedContext.some(offersDeparture)) {
+    updateRows(timedContext);
+    if (fits()) {
+      pack(timedContext, selectedRows);
+      return finish();
+    }
   }
   delete state.plannedAvailability;
-  pack([], orderRows(originalRows.filter(e => !planned(e))).slice(0, 3));
-  return state;
+  pack([], compactRows(orderRows(originalRows.filter(e => !planned(e)))));
+  return finish();
 }
 
 function immutable(value) {

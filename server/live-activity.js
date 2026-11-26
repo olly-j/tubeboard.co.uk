@@ -1010,6 +1010,46 @@ function boardDeliveryPriority(before, after, now) {
 }
 
 const stationArrivalReaders = new WeakMap();
+// Process-local, bounded by the public catalogue and two APNs environments.
+const departureIncidents = new WeakMap();
+const departureScope = record => record.plannedPresentationVersion === 2
+  && record.supportsRegularTimetable === true && record.selectionMode === 'allPlatforms' && !record.platformID
+  && validBoard(record.stationID, record.lineID) && ['sandbox', 'production'].includes(record.environment)
+  ? `${record.environment}:${record.stationID}:${record.lineID}` : null;
+
+function observeDepartureProjection(store, record, scope, projection, at) {
+  const { logger, observation, refreshed, retryUntil, cycleStartedAt, nextRefreshAt, workerIntervalMs, closed } = projection;
+  let incidents = departureIncidents.get(store);
+  let prior = incidents?.get(scope);
+  if (prior && !prior.open && at > prior.nextRefreshAt + workerIntervalMs) {
+    incidents.delete(scope);
+    prior = undefined;
+  }
+  if (closed || retryUntil > at || !observation) {
+    if (prior && !prior.open) incidents.delete(scope);
+    return;
+  }
+  const { source, observedAt, offered } = observation;
+  // Ignore retained/replayed observations and concurrent app-provided seeds.
+  if (refreshed[source]?.observedAt !== observedAt
+      || observedAt <= (record.stationBoardCache?.sources?.[source]?.observedAt ?? -Infinity)
+      || observedAt <= (prior?.observedAt ?? -Infinity)
+      || cycleStartedAt === prior?.cycleStartedAt) return;
+  if (!prior && offered || !offered && prior && at < prior.nextRefreshAt) return;
+  if (!incidents) departureIncidents.set(store, incidents = new Map());
+  const details = { stationID: record.stationID, lineID: record.lineID, environment: record.environment, source };
+  if (offered) {
+    incidents.delete(scope);
+    if (prior.open) logDepartureTransition(logger, 'info', { event: 'station-board-departures-recovered', ...details });
+  } else {
+    incidents.set(scope, { observedAt, cycleStartedAt, nextRefreshAt, open: Boolean(prior) });
+    if (prior && !prior.open) logDepartureTransition(logger, 'warn', { event: 'station-board-departures-missing', ...details });
+  }
+}
+
+function logDepartureTransition(logger, level, details) {
+  try { logger[level](JSON.stringify(details)); } catch { /* Observation cannot interrupt delivery. */ }
+}
 
 export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fetch, pushImpl = pushLiveActivityUpdate, logger = console, scheduleRolloverPush = null, now = new Date(), signal, cacheOnly = false, sourceOnly = false, clock = () => Date.now(), arrivalReader = null, scheduleSourceRefresh = null, nextFullRefreshAt = null }) {
   signal?.throwIfAborted();
@@ -1114,20 +1154,25 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
           cache.nextRefreshAt = Math.min(cache.nextRefreshAt, nextFullRefreshAt);
         }
       }
+      const scope = !cacheOnly && !sourceOnly && !(record.stationBoardCache?.nextRefreshAt > now.getTime())
+        ? departureScope(record) : null;
+      const refreshed = scope ? cache.sources : null;
       const effectiveNow = new Date(clock());
       cache = await store.retainStationBoard(record.activityID, record.environment, cache, effectiveNow, expectedTuple);
       if (!cache) continue;
       const publicationAuthority = store.publicationAuthority();
       cache = applyPublicationAuthority(cache, publicationAuthority);
       expectedPublicationGeneration = publicationGeneration(publicationAuthority);
-      const contentState = buildStationBoardState(record, cache, effectiveNow.getTime());
+      let observation;
+      const contentState = buildStationBoardState(record, cache, effectiveNow.getTime(),
+        scope ? { observeDepartures: value => { observation = value; } } : {});
       const displayUntil = Date.parse(record.initialRegularDisplayUntil || '');
       const effectiveTime = effectiveNow.getTime();
       const authoritativeClosure = regularReplacementAuthorized(cache, record, effectiveTime);
       const previousDelivery = boardDeliveryBeforeRefresh(record);
       // Records from earlier workers can retain a fractional inverse conversion.
       const lastBoardObservedAt = Math.round(record.lastBoardObservedAt);
-      let holdDeliveredRows = false, warningDue = false, delayedWarningSent = false;
+      let holdDeliveredRows = false, reusedDeliveredRows = false, warningDue = false, delayedWarningSent = false;
       if (contentState.arrivals.length === 0 && !authoritativeClosure
           && !(contentState.isDisrupted && !previousDelivery?.disrupted)) {
         const stationSource = cache.sources?.['station-arrivals'];
@@ -1143,6 +1188,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
         const remaining = previousDelivery?.liveRows?.filter(row =>
           unavailableSource(row) && wireClockMs(row.expectedArrival) >= effectiveTime) || [];
         if (remaining.length) {
+          reusedDeliveredRows = true;
           const boundary = Math.min(...remaining.map(row => wireClockMs(row.expectedArrival))) + 1;
           const warningAt = lastBoardObservedAt + LIVE_ACTIVITY_STALE_WARNING_MS;
           delayedWarningSent = previousDelivery.delayedWarningSent === true;
@@ -1183,6 +1229,21 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       }
       const retainedRecord = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
       if (retainedRecord && registrationTuple(retainedRecord) === expectedTuple && publicationGeneration(store.publicationAuthority()) === expectedPublicationGeneration) {
+        if (scope && !holdInitial && !reusedDeliveredRows && store.snapshot(state => {
+          // An async readback can be overtaken by a registration write. Check
+          // the committed registration again in the same turn as the log.
+          const latest = store.findByActivity(record.activityID, record.environment, state);
+          return latest && latest.active !== false && registrationTuple(latest) === expectedTuple;
+        })) {
+          // A new ordinary timetable can only have been obtained after its
+          // provider cooldown. Otherwise this floor may also represent Retry-After.
+          const ordinaryFloor = observation?.source === 'regular-timetable' ? 0 : cache.ordinaryNotBefore || 0;
+          const retryUntil = Math.max(ordinaryFloor, cache.arrivalsRateLimitedUntil || 0, cache.railDeparturesRateLimitedUntil || 0);
+          observeDepartureProjection(store, record, scope, {
+            logger, observation, refreshed: refreshed ?? {}, retryUntil, cycleStartedAt: now.getTime(),
+            nextRefreshAt: cache.nextRefreshAt, workerIntervalMs: config.workerIntervalMs, closed: authoritativeClosure,
+          }, effectiveTime);
+        }
         const schedulingNow = new Date(clock());
         if (typeof scheduleSourceRefresh === 'function') scheduleSourceRefresh(retainedRecord, retainedRecord.stationBoardCache, schedulingNow, config.workerIntervalMs);
         if (typeof scheduleRolloverPush === 'function') scheduleRolloverPush(retainedRecord, contentState, schedulingNow, config.workerIntervalMs);

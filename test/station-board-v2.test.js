@@ -148,6 +148,164 @@ test('the payload budget keeps complete outgoing contexts and never promotes a s
   assert.equal(afterExpiry.arrivals[0].expiresAt, packed.arrivals[1].expiresAt);
 });
 
+test('optional platform destinations cannot crowd out complete timed departure evidence', () => {
+  const scoped = { ...record, supportsRegularTimetable: true };
+  const id = (prefix, n) => `${prefix}:${String(n).repeat(64)}`;
+  const plan = row({ id: id('journey', 0), time: now + 120000, expiresAt: now + 150000 });
+  const destinations = [1, 2, 3].map(n => row({ id: id('destination', n), sourceID: 'at-station-destination',
+    kind: 'outgoingDestinationOnly', platform: `Platform ${n}`, time: null, timeEvidence: null }));
+  const cache = cacheOf(plan, ...destinations);
+  assert.ok(buildStationBoardState(scoped, cache, now).arrivals.some(item => item.id === plan.id));
+
+  const closureWindows = Array.from({ length: 28 }, (_, n) => ({
+    validFrom: now + 160000 + n * 14000, validUntil: now + 165000 + n * 14000,
+  }));
+  cache.availabilityProofs = [{ stationID: scoped.stationID, lineID: scoped.lineID, sourceScope: 'lineStatus',
+    closed: false, scheduledClockOnly: true, observedAt: now, expiresAt: now + 120000, closureWindows }];
+  let projection;
+  const state = buildStationBoardState(scoped, cache, now, { observeDepartures: value => { projection = value; } });
+  assert.ok(state.arrivals.some(item => item.id === plan.id));
+  assert.equal(state.plannedAvailability.proofs[0].closureWindows.length, 28);
+  assert.equal(state.arrivals.filter(item => item.timeEvidence === 'destinationOnly').length, 2);
+  assert.deepEqual(projection, { source: 'journey-planner', observedAt: now, offered: true });
+  assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(state, new Date(now)))) <= 4096);
+});
+
+test('a timed live departure survives optional platform facts with retained controls and overflow fallback', () => {
+  const scoped = { ...record, supportsRegularTimetable: true };
+  const arrivals = parseStationArrivals([arrival()], scoped, headers(), now);
+  assert.equal(arrivals[0]?.kind, 'throughArrival');
+  const facts = [1, 2, 3].map(n => row({ id: `destination:${n}`, sourceID: 'at-station-destination',
+    kind: 'outgoingDestinationOnly', platform: `Platform ${n}`, time: null, timeEvidence: null }));
+  const availabilityProofs = [{ stationID: scoped.stationID, lineID: scoped.lineID, sourceScope: 'lineStatus',
+    closed: false, scheduledClockOnly: true, observedAt: now, expiresAt: now + 120000,
+    closureWindows: [{ validFrom: now + 160000, validUntil: now + 190000 }] }];
+  const controlled = buildStationBoardState(scoped, { ...cacheOf(...arrivals, ...facts), availabilityProofs }, now);
+  assert.deepEqual(controlled.arrivals.map(item => item.id), [facts[0].id, facts[1].id, arrivals[0].id]);
+  assert.equal(controlled.arrivals[2].expiresAt, (arrivals[0].expiresAt - 978307200000) / 1000);
+  assert.equal(controlled.plannedAvailability.proofs.length, 1);
+
+  const oversized = row({ id: 'published-' + 'x'.repeat(4000), sourceID: 'timetable', time: now + 30000 });
+  let projection;
+  const fallback = buildStationBoardState(scoped,
+    { ...cacheOf(oversized, ...arrivals, ...facts), availabilityProofs }, now,
+    { observeDepartures: value => { projection = value; } });
+  assert.deepEqual(fallback.arrivals.map(item => item.id), [facts[0].id, facts[1].id, arrivals[0].id]);
+  assert.deepEqual(projection, { source: 'station-arrivals', observedAt: now, offered: true });
+  assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(fallback, new Date(now)))) <= 4096);
+});
+
+test('a repeated fresh offered-board contradiction opens once and recovers without extra reads', async t => {
+  const scoped = { ...record, supportsRegularTimetable: true };
+  const store = await temporaryStore(t, scoped);
+  const retained = [0, 1, 2].map(i => row({ sourceID: 'regular-timetable', id: `regular:${String(i).repeat(64)}`,
+    time: now + 360000 + i * 60000, via: 'Charing Cross', receivedAt: now, expiresAt: now + 600000 }));
+  await store.retainStationBoard(scoped.activityID, scoped.environment, cacheOf(...retained), new Date(now));
+
+  let at = now, receivedAt = now, mode = 'oversize';
+  const pushes = [], transitions = [], reads = [];
+  const response = (body, observedAt = at) => new Response(JSON.stringify(body), { headers: headers(observedAt) });
+  const station = id => ({ naptanId: id, commonName: STATION_BOARD_STATIONS.get(id).stationName });
+  const route = ['940GZZLUEGW', '940GZZLUMDN'].map((id, ordinal) => ({ ordinal, stopPoint: station(id) }));
+  const fetchImpl = async input => {
+    const url = new URL(input);
+    reads.push(url.pathname);
+    if (url.pathname === `/Line/${scoped.lineID}/Status`) {
+      const validityPeriods = Array.from({ length: 32 }, (_, i) => ({
+        fromDate: new Date(at + 150000 + i * 14000).toISOString(),
+        toDate: new Date(at + 151000 + i * 14000).toISOString(),
+      }));
+      const status = mode === 'healthy' || mode === 'rate-limited'
+        ? { statusSeverity: 10, statusSeverityDescription: 'Good Service', validityPeriods: [] }
+        : { statusSeverity: 20, statusSeverityDescription: 'Service Closed', validityPeriods,
+          disruption: { affectedRoutes: [{ direction: 'outbound', isEntireRouteSection: true,
+            routeSectionNaptanEntrySequence: route }] } };
+      return response([{ id: scoped.lineID, modeName: 'tube', lineStatuses: [status] }]);
+    }
+    if (url.pathname.endsWith('/Disruption')) {
+      if (mode === 'rate-limited') return new Response(null, { status: 429, headers: { 'Retry-After': '300' } });
+      if (mode === 'closed') return response([{ stationAtcoCode: scoped.stationID, type: 'stationclosure',
+        fromDate: new Date(at - 30000).toISOString(), toDate: new Date(at + 120000).toISOString() }]);
+    }
+    if (url.pathname.startsWith('/Journey/')) {
+      const body = journey();
+      body.searchCriteria.dateTime = `${londonLocal(at).slice(0, 16)}:00`;
+      const leg = body.journeys[0].legs[0];
+      body.journeys = [0, 1, 2].map(i => ({ legs: [{ ...leg, id: `service-${i}`,
+        scheduledDepartureTime: `${londonLocal(at + 60000 + i * 15000).slice(0, 19)}`,
+        routeOptions: [{ ...leg.routeOptions[0], directions: ['Morden via Bank'] }] }] }));
+      return response(body, receivedAt);
+    }
+    return response([]);
+  };
+  const signals = text => {
+    if (text.startsWith('{')) transitions.push(JSON.parse(text));
+  };
+  const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}),
+    now: new Date(at), clock: () => at, fetchImpl,
+    logger: { info: signals, warn: signals }, pushImpl: async (_, payload) => { pushes.push(payload); },
+    ...options });
+  const tick = async (seconds, nextMode, fresh = true, options) => {
+    at = now + seconds * 1000;
+    if (fresh) receivedAt = at;
+    mode = nextMode;
+    await cycle(options);
+  };
+  await tick(0, 'oversize');
+  assert.equal(pushes[0].aps['content-state'].arrivals.length, 0, 'required timed alternatives and restrictions exceed the budget');
+  const afterFirstReads = reads.length;
+  at = now + 30000;
+  await cycle({ cacheOnly: true });
+  assert.equal(reads.length, afterFirstReads);
+  assert.deepEqual(transitions, []);
+  await tick(90, 'oversize', false);
+  assert.deepEqual(transitions, [], 'repeated provider clock does not confirm');
+  await tick(180, 'oversize');
+  assert.deepEqual(transitions.map(event => event.event), ['station-board-departures-missing']);
+  await tick(270, 'oversize');
+  assert.equal(transitions.length, 1);
+  await tick(360, 'rate-limited');
+  assert.ok(pushes.at(-1).aps['content-state'].arrivals.some(item => item.timeEvidence === 'scheduledDeparture'));
+  assert.equal(transitions.length, 1, 'valid timed rows during Retry-After do not confirm recovery');
+  await tick(720, 'closed');
+  assert.equal(transitions.length, 1, 'a fresh closure does not recover an open incident');
+  let failedDelivery = false;
+  await tick(810, 'healthy', true, { pushImpl: async (_, payload) => {
+    failedDelivery = true;
+    assert.ok(payload.aps['content-state'].arrivals.some(item => item.timeEvidence === 'scheduledDeparture'));
+    throw Object.assign(new Error('Synthetic APNs failure'), { backoffMs: 1000 });
+  } });
+  assert.ok(failedDelivery);
+  assert.equal(transitions.length, 1, 'an APNs failure cannot recover the incident');
+
+  let accepted = false, superseded = false;
+  const listActive = store.listActive.bind(store);
+  store.listActive = async (...args) => {
+    const staleReadback = await listActive(...args);
+    // Replace the registration after reading the previous selection but
+    // before the worker can use that asynchronous readback.
+    if (accepted && !superseded) {
+      superseded = true;
+      await store.upsertToken({ ...scoped, pushTokenHex: 'cafebabe'.repeat(8),
+        tokenUpdatedAt: new Date(at).toISOString() }, new Date(at));
+    }
+    return staleReadback;
+  };
+  await tick(900, 'healthy', true, { pushImpl: async () => { accepted = true; } });
+  store.listActive = listActive;
+  assert.ok(accepted && superseded);
+  assert.equal(transitions.length, 1, 'a superseded registration cannot recover the incident');
+
+  await tick(990, 'healthy');
+  assert.deepEqual(transitions.map(event => event.event), ['station-board-departures-missing', 'station-board-departures-recovered']);
+  assert.ok(pushes.at(-1).aps['content-state'].arrivals.some(item => item.timeEvidence === 'scheduledDeparture'));
+  assert.ok(transitions.every(event => event.stationID === scoped.stationID && event.lineID === scoped.lineID
+    && !JSON.stringify(event).includes(scoped.activityID) && !JSON.stringify(event).includes(scoped.installID)));
+  assert.ok(reads.every(path => [`/StopPoint/${scoped.stationID}/Arrivals`, `/StopPoint/${scoped.stationID}/Disruption`,
+    `/Line/${scoped.lineID}/Status`, `/Line/${scoped.lineID}/Arrivals`, `/Line/${scoped.lineID}/Timetable/${scoped.stationID}`].includes(path)
+    || path.startsWith(`/Journey/JourneyResults/${scoped.stationID}/to/`)));
+});
+
 test('selection precedes publication/planner preference and physical platforms never guess schedules', () => {
   const tt = ['Bank', 'Charing Cross', 'Morden'].map((destination, i) => row({ id: `tt-${i}`, sourceID: 'timetable', destination, providerDirection: null }));
   const planner = row({ id: 'planner' }), cache = cacheOf(...tt, planner);
