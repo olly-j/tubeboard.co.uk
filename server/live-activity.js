@@ -957,7 +957,8 @@ export async function pushLiveActivityUpdate(record, payload, config, { priority
 const boardingClockEvidence = ['estimatedDeparture', 'scheduledDeparture', 'throughArrivalPrediction'];
 const liveOutageEvidence = ['estimatedDeparture', 'throughArrivalPrediction'];
 const LIVE_ACTIVITY_STALE_WARNING_MS = 5 * 60 * 1000;
-const wireClockMs = clock => (clock + APPLE_REFERENCE_UNIX_SECONDS) * 1000;
+const wireClockMs = clock => Math.round((clock + APPLE_REFERENCE_UNIX_SECONDS) * 1000);
+const swiftClock = ms => (ms - APPLE_REFERENCE_UNIX_SECONDS * 1000) / 1000;
 
 function boardDeliveryObservation(state, authoritativeClosure, delayedWarningSent = false) {
   const first = state.arrivals.find(row => Number.isFinite(row.expectedArrival)
@@ -1124,6 +1125,8 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       const effectiveTime = effectiveNow.getTime();
       const authoritativeClosure = regularReplacementAuthorized(cache, record, effectiveTime);
       const previousDelivery = boardDeliveryBeforeRefresh(record);
+      // Records from earlier workers can retain a fractional inverse conversion.
+      const lastBoardObservedAt = Math.round(record.lastBoardObservedAt);
       let holdDeliveredRows = false, warningDue = false, delayedWarningSent = false;
       if (contentState.arrivals.length === 0 && !authoritativeClosure
           && !(contentState.isDisrupted && !previousDelivery?.disrupted)) {
@@ -1132,7 +1135,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
         // A cache-only boundary can prune the last station generation before
         // the next read, including after a 200 that repeated its original clock.
         // The retained complete-empty context is an explicit replacement.
-        const stationExpiredWithoutRenewal = !stationSource && stationAttempt?.observedAt <= record.lastBoardObservedAt;
+        const stationExpiredWithoutRenewal = !stationSource && stationAttempt?.observedAt <= lastBoardObservedAt;
         const unavailableSource = row => row.timeEvidence === 'throughArrivalPrediction'
           ? stationSource?.events?.length !== 0 && (stationAttempt?.failed
             || stationExpiredWithoutRenewal && wireClockMs(row.expiresAt) <= effectiveTime)
@@ -1140,8 +1143,8 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
         const remaining = previousDelivery?.liveRows?.filter(row =>
           unavailableSource(row) && wireClockMs(row.expectedArrival) >= effectiveTime) || [];
         if (remaining.length) {
-          const boundary = Math.round(Math.min(...remaining.map(row => wireClockMs(row.expectedArrival)))) + 1;
-          const warningAt = record.lastBoardObservedAt + LIVE_ACTIVITY_STALE_WARNING_MS;
+          const boundary = Math.min(...remaining.map(row => wireClockMs(row.expectedArrival))) + 1;
+          const warningAt = lastBoardObservedAt + LIVE_ACTIVITY_STALE_WARNING_MS;
           delayedWarningSent = previousDelivery.delayedWarningSent === true;
           const shouldWarn = !delayedWarningSent && Number.isFinite(warningAt)
             && remaining.some(row => wireClockMs(row.expectedArrival) > Math.max(warningAt, effectiveTime));
@@ -1153,8 +1156,8 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
           holdDeliveredRows = !warningDue && remaining.length === previousDelivery.liveRows.length;
           if (!holdDeliveredRows) {
             contentState.arrivals = remaining;
-            contentState.updatedAt = (record.lastBoardObservedAt / 1000) - APPLE_REFERENCE_UNIX_SECONDS;
-            contentState.staleAt = (previousDelivery.staleAt / 1000) - APPLE_REFERENCE_UNIX_SECONDS;
+            contentState.updatedAt = swiftClock(lastBoardObservedAt);
+            contentState.staleAt = swiftClock(previousDelivery.staleAt);
             delete contentState.plannedAvailability;
             const fitsApns = () => Buffer.byteLength(JSON.stringify(buildApnsPayload(contentState, effectiveNow))) <= 4096;
             if (!fitsApns()) contentState.statusReason = null;
@@ -1167,7 +1170,7 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
         && !authoritativeClosure;
       if (holdInitial) contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, displayUntil);
       const observedAt = wireClockMs(contentState.updatedAt);
-      const newerObservation = Number.isFinite(record.lastBoardObservedAt) && observedAt > record.lastBoardObservedAt;
+      const newerObservation = Number.isFinite(lastBoardObservedAt) && observedAt > lastBoardObservedAt;
       const contentDigest = stationBoardContentDigest(contentState, { dynamicScheduledCountdown: record.supportsRegularTimetable === true });
       if (!holdInitial && !holdDeliveredRows && (contentDigest !== record.lastBoardContentDigest || newerObservation || warningDue)) {
         const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
