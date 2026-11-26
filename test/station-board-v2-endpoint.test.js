@@ -10,7 +10,13 @@ import { STATION_BOARD_LINES, londonLocal, londonClock, selectEvents, mergeConte
 
 test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards with no public cache access', { timeout: 15000 }, async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-v2-http-'));
-  const child = spawn(process.execPath, ['server/index.js'], { cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH, PORT: '0', LIVE_ACTIVITY_WORKER_ENABLED: 'false', DISRUPTION_ALERT_WORKER_ENABLED: 'false', TUBEBOARD_STATUS_MONITOR_ENABLED: 'false', LIVE_ACTIVITY_DATA_FILE: path.join(directory, 'activities.json'), DISRUPTION_ALERT_DATA_FILE: path.join(directory, 'alerts.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // The seed is for the next whole London minute. Both sides of the local
+  // HTTP connection must see it still in the future at the +1s assertion.
+  const fixtureTime = Date.UTC(2026, 9, 1, 13);
+  t.mock.timers.enable({ apis: ['Date'], now: fixtureTime });
+  const setServerClock = `import { mock } from 'node:test'; mock.timers.enable({ apis: ['Date'], now: ${fixtureTime} });`;
+  const clockModule = 'data:text/javascript,' + encodeURIComponent(setServerClock);
+  const child = spawn(process.execPath, ['--import', clockModule, 'server/index.js'], { cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH, PORT: '0', LIVE_ACTIVITY_WORKER_ENABLED: 'false', DISRUPTION_ALERT_WORKER_ENABLED: 'false', TUBEBOARD_STATUS_MONITOR_ENABLED: 'false', LIVE_ACTIVITY_DATA_FILE: path.join(directory, 'activities.json'), DISRUPTION_ALERT_DATA_FILE: path.join(directory, 'alerts.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { child.kill('SIGTERM'); await once(child, 'exit'); await fs.rm(directory, { recursive: true, force: true }); });
   const origin = await new Promise((resolve, reject) => { child.once('error', reject); let output = ''; child.stdout.on('data', (data) => { output += data; const match = /http:\/\/localhost:(\d+)/.exec(output); if (match) resolve(match[0]); }); child.once('exit', () => reject(new Error('Local service ended before listen'))); });
   const fixture = JSON.parse(await fs.readFile(new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url)));

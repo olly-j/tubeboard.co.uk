@@ -41,9 +41,11 @@ async function withDeadline(operation, {
   }
 }
 
-export function fetchJsonResponse(url, fetchImpl = fetch, { includeHeaders = false, method = 'GET', bodyLimitBytes = null, decodeJSON = null, ...options } = {}) {
+export function fetchJsonResponse(url, fetchImpl = fetch, { includeHeaders = false, method = 'GET', bodyLimitBytes = null, decodeJSON = null, cacheControl = 'no-cache', redirect, ...options } = {}) {
   return withDeadline(async (signal) => {
-    const response = await fetchImpl(url, { signal, ...(method !== 'GET' ? { method } : {}), ...(includeHeaders ? { headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' } } : {}) });
+    const response = await fetchImpl(url, { signal, ...(method !== 'GET' ? { method } : {}),
+      ...(includeHeaders ? { headers: { Accept: 'application/json', 'Cache-Control': cacheControl } } : {}),
+      ...(redirect ? { redirect } : {}) });
     if (!response.ok) {
       // Non-success bodies are not used; release the connection promptly.
       if (response.body?.cancel) void response.body.cancel().catch(() => {});
