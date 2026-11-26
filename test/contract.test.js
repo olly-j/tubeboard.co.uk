@@ -29,11 +29,11 @@ const aasaPath = new URL('../.well-known/apple-app-site-association', import.met
 const styleSheetPath = new URL('../styles-20260820.css', import.meta.url);
 const appStoreURL = 'https://apps.apple.com/gb/app/tubeboard-live-departures/id6779771046';
 const homepageProductAssets = [
-  'follow-train-1-2-6-20261121233653',
-  'live-board-woodford-1-2-6-20261118110726-ed2e82e4',
+  'follow-train-1-2-6-20261126221539',
+  'live-board-leyton-1-2-6-20261126221539',
   'by-destination-v1-2-20260905103957',
   'add-station-1-2-6-20261117225101',
-  'saved-home-1-2-6-20261121142731',
+  'saved-home-1-2-6-20261126221539',
   'next-departures-v1-2-20260905103957'
 ];
 

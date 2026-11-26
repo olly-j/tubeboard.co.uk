@@ -43,8 +43,8 @@
   },
   "limits": [
     "Capture is simulator evidence, not physical/paired/background delivery or network-wide acceptance.",
-    "The homepage hero uses the exact build in finalSourceHero. The original Follow, Lock Screen and social card retain the source attribution in currentCaptureUpdate.",
-    "The hero identifies the actual capture build and source tree. It is independent of a later distribution build-number stamp.",
+    "Current board, Home and Follow images each identify their capture in this manifest. The social card and earlier Lock Screen image retain their original capture identities.",
+    "The three current scenes use verified candidate simulator binaries and controlled data.",
     "No website deployment, App Store upload, submission or publication occurred."
   ],
   "currentCaptureUpdate": {
@@ -105,54 +105,54 @@
     ]
   },
   "finalSourceHero": {
-    "stem": "live-board-woodford-1-2-6-20261118110726-ed2e82e4",
+    "stem": "live-board-leyton-1-2-6-20261126221539",
     "version": "1.2.6",
-    "build": "20261118110726",
-    "sourceCommit": "ed2e82e43f17d999941dc13eba679b5937e8b13e",
-    "gitTree": "b436b09d0a631c31ada67ecc1bf64a30dd986ec0",
-    "executableSHA256": "881c91e574a9917529857d45005909195b24a21936bed70a60ede8cf799f916c",
-    "sourceWithinTubeBoardReleaseEvidence": "20261118-passenger-release/marketing/final-ed2e82e43f17/raw/iphone-6.9/post-touch.png",
-    "capturedAt": "2026-11-18T18:54:26.824245+00:00",
+    "build": "20261126221539",
+    "sourceCommit": "6bd0a91c6b319d8b01009cf28c847cecc9b0fe1b",
+    "sourceTree": "a37a515a083471973cb8f10e088bf91fcb0d736f",
+    "sourceWithinTubeBoardReleaseEvidence": "20261126-origin-coverage/hammersmith-evening-window/integrated-release/storefront-review/medium/attachments/6E047528-322B-49F3-984D-779A493C2027.png",
+    "provenanceReceipt": "20261126-origin-coverage/hammersmith-evening-window/integrated-release/storefront-review/medium/result.json",
     "size": [
-      1320,
-      2868
+      1178,
+      2556
     ],
-    "rawSHA256": "044717185f2a76ac503acf32f17d9a6e57bdb6f423528924f31c2c8b27957ca8",
-    "pngSHA256": "044717185f2a76ac503acf32f17d9a6e57bdb6f423528924f31c2c8b27957ca8",
-    "webpSHA256": "9e8ee979ef35eac1e37015b06573bc890b0f8ba3e77658228a7bce2569a2b483",
-    "normalizedDecodedPixelSHA256": "4db0e5cb79beb751b360fe5d6e39c919da8638c7b015689d8093242a7d975f0b",
-    "capture": "Ordinary Release on iPhone 17 Pro Max simulator, dark appearance, standard Large text, naturally timed. Woodford, Central line, three westbound Platform 2 and seven eastbound Platform 3 predicted rows, Central severe-delay advisory."
+    "pngSHA256": "c2977ad8c5c4b669edb420eb70b8c37e0300a808311edc33674d8351e3b6ca68",
+    "webpSHA256": "8182ae79b13f103bfbff85c68b2e982efcd3fab6c82dcb8aa77a52b2f61d6d7d",
+    "normalizedDecodedPixelSHA256": "dbf8dbd436c99ec3ba35c54ef2585c1c858e3224ad8522897d90eb41980be803",
+    "capture": "Leyton Central line board with eastbound countdowns to Epping and Hainault and westbound trains from platform 1. Native iPhone 15 Pro simulator with controlled data."
   },
   "stationHomeCapture": {
-    "stem": "saved-home-1-2-6-20261121142731",
+    "stem": "saved-home-1-2-6-20261126221539",
     "version": "1.2.6",
-    "build": "20261121142731",
-    "sourceCommit": "1d768faa94d51069ccf3385bb438bfcae06395c8",
-    "sourceWithinTubeBoardReleaseEvidence": "20261121-release-journeys/home/current-store-draft/native-link/phone/saved-home.png",
-    "provenanceReceipt": "20261121-release-journeys/home/current-store-draft/native-link/phone/capture-receipt.json",
+    "build": "20261126221539",
+    "sourceCommit": "6bd0a91c6b319d8b01009cf28c847cecc9b0fe1b",
+    "sourceTree": "a37a515a083471973cb8f10e088bf91fcb0d736f",
+    "sourceWithinTubeBoardReleaseEvidence": "20261126-origin-coverage/hammersmith-evening-window/integrated-release/storefront-review/medium/attachments/C60CC0B6-7F7A-46B4-AB9F-ABB82A165174.png",
+    "provenanceReceipt": "20261126-origin-coverage/hammersmith-evening-window/integrated-release/storefront-review/medium/result.json",
     "size": [
-      1320,
-      2868
+      1178,
+      2556
     ],
-    "pngSHA256": "9e6269a2c84c3f75a2d087dca04be2ef96baf0002316697169734168f19ffa8a",
-    "webpSHA256": "d668902fc6450378aa1687caed8528abd7a566d668b2215ce662d378daa6b70f",
-    "normalizedDecodedPixelSHA256": "61fbb79c85e6a0e4690010f9e09ae473abddb88497a59fdd3050848ef5e48ce4",
-    "capture": "Native iPhone 17 Pro Max simulator Home with controlled saved Leyton and recent Brixton. Original capture PNG and pixel-identical WebP."
+    "pngSHA256": "b69fdbb229f18f89a8b484d16c18fc3963b398d46808fbdb2173852c6c336e61",
+    "webpSHA256": "d159c26d08ff5b5a3ae8541d0ede4b0c3f43faaf9b87404d1b956315776e881a",
+    "normalizedDecodedPixelSHA256": "65127bea62e1c727726fc81d491f336982f2383eb4b1dfce999b0546cfcf3f21",
+    "capture": "TubeBoard Home with Brixton ready to reopen and Leyton under Saved. Native iPhone 15 Pro simulator with controlled data."
   },
   "followCapture": {
-    "stem": "follow-train-1-2-6-20261121233653",
+    "stem": "follow-train-1-2-6-20261126221539",
     "version": "1.2.6",
-    "build": "20261121233653",
-    "sourceCommit": "3fb0d60ec97d48f1d0fae676e5978aea67431dd7",
-    "sourceWithinTubeBoardReleaseEvidence": "20261121-countdowns-origins/native/targeted_app_3fb0d60e/attachments/0A6632D3-C44C-48E2-B809-5381D97AD7D7.png",
-    "provenanceReceipt": "20261121-countdowns-origins/native/targeted_app_3fb0d60e/readout.md",
+    "build": "20261126221539",
+    "sourceCommit": "6bd0a91c6b319d8b01009cf28c847cecc9b0fe1b",
+    "sourceTree": "a37a515a083471973cb8f10e088bf91fcb0d736f",
+    "sourceWithinTubeBoardReleaseEvidence": "20261126-origin-coverage/hammersmith-evening-window/integrated-release/storefront-review/medium/attachments/FD8C4B7D-FF85-4777-8D9A-3C8197C6EC63.png",
+    "provenanceReceipt": "20261126-origin-coverage/hammersmith-evening-window/integrated-release/storefront-review/medium/result.json",
     "size": [
-      1320,
-      2868
+      1178,
+      2556
     ],
-    "pngSHA256": "43c1d1b21458c9a9a7f414c0b4b1604786f40207fb8e4755c8c069ea6f0a740d",
-    "webpSHA256": "22c1e96b93bf73a90c66c07cf1f86801b0cc8fc3b61805bb22cda8a348c11db6",
-    "normalizedDecodedPixelSHA256": "3e65403249f51f8c01b2d15d31bd38e8e82150eead23f90e9d0f658d83560e8f",
-    "capture": "Native iPhone simulator Premium Follow fixture, with a Central line train approaching Woodford towards Ealing Broadway. Original capture PNG and pixel-identical WebP."
+    "pngSHA256": "c06571a3bf9fc054db44279433b49424ab843e4d3aedcda668145434caa64f7a",
+    "webpSHA256": "ba829fef74a6bbf6ba8a4c532d4617915a635f6861b7b2a44e261b8204131f5c",
+    "normalizedDecodedPixelSHA256": "d0f80d33efacf95711201df7a0333651fe61b9825a5fc1df76265288546d2f9b",
+    "capture": "Follow a Train shows train 021 at Liverpool Street, heading towards Epping, with countdowns for the stops ahead. Native iPhone 15 Pro simulator with controlled data."
   }
 }
