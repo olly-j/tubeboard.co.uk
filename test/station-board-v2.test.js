@@ -171,6 +171,34 @@ test('optional platform destinations cannot crowd out complete timed departure e
   assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(state, new Date(now)))) <= 4096);
 });
 
+test('three platform facts leave room on the compact board for a dated train and its availability', () => {
+  const scoped = { ...record, supportsRegularTimetable: true };
+  const plan = row({ id: 'dated', time: now + 90000 });
+  const facts = [1, 2, 3].map(n => row({ id: `fact-${n}`, sourceID: 'at-station-destination',
+    kind: 'outgoingDestinationOnly', platform: `Platform ${n}`, time: null, timeEvidence: null,
+    receivedAt: now - 15000 }));
+  const proof = { stationID: scoped.stationID, lineID: scoped.lineID, sourceScope: 'lineStatus',
+    closed: false, scheduledClockOnly: true, observedAt: now, expiresAt: now + 120000 };
+  const render = closureWindows => {
+    let observation;
+    const state = buildStationBoardState(scoped, { ...cacheOf(plan, ...facts),
+      availabilityProofs: [{ ...proof, closureWindows }] }, now, {
+      observeDepartures: value => { observation = value; },
+    });
+    return { state, observation };
+  };
+  const open = render([{ validFrom: now + 160000, validUntil: now + 190000 }]);
+  assert.deepEqual(open.state.arrivals.slice(0, 3).map(item => item.id), ['fact-1', 'fact-2', 'dated']);
+  assert.equal(open.state.updatedAt, (now - 978307200000) / 1000);
+  assert.equal(open.state.plannedAvailability.proofs.length, 1);
+  assert.deepEqual(open.observation, { source: 'journey-planner', observedAt: now, offered: true });
+
+  const closed = render([{ validFrom: now + 60000, validUntil: now + 120000 }]);
+  assert.deepEqual(closed.state.arrivals.slice(0, 3).map(item => item.id), facts.map(item => item.id));
+  assert.equal(closed.state.plannedAvailability.proofs.length, 1);
+  assert.equal(closed.observation, undefined);
+});
+
 test('a timed live departure survives optional platform facts with retained controls and overflow fallback', () => {
   const scoped = { ...record, supportsRegularTimetable: true };
   const arrivals = parseStationArrivals([arrival()], scoped, headers(), now);

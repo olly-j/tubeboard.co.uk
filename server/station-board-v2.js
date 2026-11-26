@@ -708,12 +708,14 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
     const departure = ordered.find(offersDeparture);
     return departure ? [...leading.slice(0, 2), departure] : leading;
   };
+  const displayedRows = () => orderRows(compactEvents(rows.filter(eligible))).slice(0, 3);
   const finish = () => {
     if (observeDepartures) {
-      const offered = rows.some(offersDeparture);
+      const displayed = displayedRows();
+      const offered = displayed.some(offersDeparture);
       // Recovery must cite the offered source, not a candidate that packing
       // dropped. A miss instead cites the eligible source that lost its clock.
-      const qualified = (offered ? rows : eligibleRows).find(e => offersDeparture(e)
+      const qualified = (offered ? displayed : eligibleRows).find(e => offersDeparture(e)
         && e.receivedAt === cache.sources?.[sourceKey(e.sourceID)]?.observedAt);
       observeDepartures(qualified && {
         source: sourceKey(qualified.sourceID), observedAt: qualified.receivedAt, offered,
@@ -735,7 +737,13 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
       const prioritized = [...active, ...independent, ...groups.flat()];
       retained = [...new Set(prioritized)].slice(0, 9);
     }
-    const selected = new Set(retained); rows = rows.filter((e) => selected.has(e));
+    const selected = new Set(retained);
+    if (retained.some(offersDeparture)) {
+      // The client sorts known platform facts ahead of clocks across source
+      // groups. Reserve one of its three rows for a boardable countdown.
+      for (const fact of retained.filter(atPlatformDestination).slice(2)) selected.delete(fact);
+    }
+    rows = rows.filter((e) => selected.has(e));
   } else rows = compactRows(orderRows(eligibleRows.filter(preferredSource)));
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
@@ -750,7 +758,7 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
   const observedAt = () => {
     // Derive the visible board clock after selection and the compact limit.
     // Masked alternatives, status and a cache-only dispatch cannot renew it.
-    const clocks = orderRows(compactEvents(rows.filter(eligible))).slice(0, 3)
+    const clocks = displayedRows()
       .filter((row) => row.kind !== 'unverifiedArrival')
       .map((row) => row.receivedAt).filter(Number.isFinite);
     const explicitEmpty = cache.sources?.['station-arrivals'];
