@@ -1,0 +1,25 @@
+# Ordinary timetable fallback for active station boards
+
+The existing worker may read a station's ordinary TfL timetable when a typed Activity advertises `supportsRegularTimetable: true`. Only exact origin station/line pairs with a supported service calendar are eligible. At a mixed origin, the working must have an exclusive outbound first call from the published route map. The timer represents a scheduled departure from an ordinary profile. The feed does not identify a platform, so an explicitly selected platform does not admit these rows.
+
+The original HTTP age controls eligibility. The worker enforces the response cache limit and caps the presentation at the earlier of ten minutes from receipt and London midnight. Dated withdrawal and no-service controls override the regular profile.
+
+A current or retained boarding prediction that answers a certified terminus board avoids the optional ordinary read. An incoming train or a through train at a mixed origin does not answer the independent starting path. A qualified dated departure normally avoids the ordinary read. The worker may preserve ordinary coverage when a dated Journey expires before the next full refresh. Live and qualified dated evidence take precedence over the ordinary profile for the board.
+
+An immediate all-platform Journey enquiry can use the certified common next stop at a physical terminus when the segment is exclusive to the selected line among services of the same mode. A retained paired TfL receipt must verify the selected origin, near target and previous target. The initial receipt covers Edgware to Burnt Oak. All other boards retain their previous target. This can keep a disruption elsewhere on a longer itinerary from suppressing a clear boarding leg. TfL still supplies the actual train destination, route and departure clock. A disrupted, withdrawn or unqualified boarding leg is withheld. Existing narrow route rules, a platform selection or a query shifted past a known closure keep their previous target. An active scoped closure still blocks the enquiry.
+
+Journey rows and dated withdrawals use the original London dispatch day's midnight as their calendar limit, including when a valid restriction shifts the requested departure into the next date. A receipt that arrives at or after that cutoff supplies no dated evidence. Compatible typed all-platform registrations share one canonical request in a cycle. A different platform enquiry can share one separate existing target. The worker issues one Journey enquiry per selected scope and keeps its existing admission rules for optional ordinary fallback.
+
+An arrivals 429 blocks ordinary timetable requests for that station until the provider retry deadline or the existing five-minute minimum, whichever is later. The worker preserves that deadline across restart and Activity replacement. Failed or unusable ordinary attempts respect the existing full refresh cadence for their station and line. Independent source requests keep their own admission rules. The handset sends neither credentials nor a timetable body.
+
+Regenerate the checked-in origin catalogue from the app checkout that owns the reviewed `PublishedLineMaps.json` and origin generator:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/import-regular-timetable-origins.py "$APP_CHECKOUT" > contracts/station-board-regular-origins-v1.json
+```
+
+The file records the app revision, atlas digest and the service catalogue digest. The test fixtures replay retained TfL responses for Stratford Jubilee, Epping, Edgware and the Circle line starting path from Edgware Road. Origin rules describe which runs can qualify, independently of whether a future service is operating. A scheduled row on the mixed Edgware Road Circle board carries origin proof only when its validated first call is Paddington on the starting path. The proof is delivered with the exact boarding context to capable clients. Older app versions continue to receive their existing wire vocabulary.
+
+An Apple Activity push replaces its complete content. A capable handset may include `initialRegularDisplayUntil` only when a qualified ordinary departure is already visible. It sends an ISO-8601 UTC deadline capped by that train’s original departure and source expiry. The worker accepts it on the first exact-board registration, caps it at ten minutes and Activity end, and never renews it on replay or token rotation. While the deadline is still future and the worker has never successfully delivered content, it defers a replacement with no qualifying boarding clock after a provider failure. An independently qualified boarding clock, a fresh scoped closure or cancellation, or arrival at the original deadline overrides that guard. The deadline neither supplies rows nor extends any source state.
+
+Deployment and a handset/worker handoff test remain necessary for end-to-end verification of this contract.

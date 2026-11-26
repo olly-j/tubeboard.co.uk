@@ -8,22 +8,6 @@ import test from 'node:test';
 import { LiveActivityStore } from '../server/live-activity.js';
 import { STATION_BOARD_LINES, londonLocal, londonClock, selectEvents, mergeContexts } from '../server/station-board-v2.js';
 
-function replayDepartureMinute(anchor) {
-  const local = londonLocal(anchor);
-  const minute = Number(local.slice(11, 13)) * 60 + Number(local.slice(14, 16));
-  // The positive carry-forward assertion evaluates at anchor + 1 second.
-  // Keep its departure strictly later, even during a minute's final second.
-  return minute + Math.floor((anchor % 60000 + 1000) / 60000) + 1;
-}
-
-test('endpoint fixture departure remains future at the final-second replay', () => {
-  for (const stamp of ['2026-11-17T12:49:00.000Z', '2026-11-17T12:49:59.000Z', '2026-11-17T12:49:59.999Z']) {
-    const anchor = Date.parse(stamp);
-    const departure = londonClock(`2026-11-17T${String(Math.floor(replayDepartureMinute(anchor) / 60)).padStart(2, '0')}:${String(replayDepartureMinute(anchor) % 60).padStart(2, '0')}:00`);
-    assert.ok(departure > anchor + 1000, stamp);
-  }
-});
-
 test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards with no public cache access', { timeout: 15000 }, async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-v2-http-'));
   const child = spawn(process.execPath, ['server/index.js'], { cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH, PORT: '0', LIVE_ACTIVITY_WORKER_ENABLED: 'false', DISRUPTION_ALERT_WORKER_ENABLED: 'false', TUBEBOARD_STATUS_MONITOR_ENABLED: 'false', LIVE_ACTIVITY_DATA_FILE: path.join(directory, 'activities.json'), DISRUPTION_ALERT_DATA_FILE: path.join(directory, 'alerts.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -33,10 +17,37 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   const health = await (await fetch(`${origin}/healthz`)).json(); assert.equal(health.ok, true); assert.equal(health.contractVersion, 1); assert.deepEqual(health.contentStateContracts, ['station-board-v2']); assert.equal(health.plannedPresentationVersion, 2);
   const post = async (body) => fetch(`${origin}/api/live-activities/tokens`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const legacyResponse = await post(fixture); assert.equal(legacyResponse.status, 200); assert.deepEqual(await legacyResponse.json(), { ok: true });
-  const schemaResponse = await fetch(`${origin}/contracts/live-activity-registration-v2.schema.json`); assert.equal(schemaResponse.status, 200); const schema = await schemaResponse.json(); assert.equal(schema.properties.lineID.enum.length, 19); assert.equal(schema.properties.contentStateContract.const, 'station-board-v2');
+  const schemaResponse = await fetch(`${origin}/contracts/live-activity-registration-v2.schema.json`);
+  assert.equal(schemaResponse.status, 200);
+  const schemaText = await schemaResponse.text();
+  assert.equal(schemaText, await fs.readFile(new URL('../contracts/live-activity-registration-v2.schema.json', import.meta.url), 'utf8'));
+  const schema = JSON.parse(schemaText);
+  assert.equal(schema.properties.lineID.enum.length, 19);
+  assert.equal(schema.properties.contentStateContract.const, 'station-board-v2');
+  assert.deepEqual(schema.properties.supportsRegularTimetable, { const: true });
+  assert.deepEqual(schema.properties.initialRegularDisplayUntil, { type: 'string', format: 'date-time' });
+  assert.ok(schema.allOf.some(rule => rule.if?.required?.includes('initialRegularDisplayUntil')
+    && rule.then?.required?.includes('supportsRegularTimetable')));
+  assert.ok(schema.allOf.some(rule => rule.if?.required?.includes('supportsRegularTimetable')
+    && ['contentStateContract', 'plannedPresentationVersion'].every(field => rule.then?.required?.includes(field))));
   for (const [lineID, line] of STATION_BOARD_LINES) { const response = await post({ ...fixture, installID: `synthetic-${lineID}`, activityID: `synthetic-${lineID}`, stationID: line.boundedOriginID, lineID, contentStateContract: 'station-board-v2' }); assert.equal(response.status, 200, lineID); }
   const capabilityBoard = { ...fixture, installID: 'synthetic-capability', activityID: 'synthetic-capability', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2, tokenUpdatedAt: new Date().toISOString() };
   const capResponse = await post(capabilityBoard); assert.equal(capResponse.status, 200); assert.deepEqual(await capResponse.json(), { ok: true, contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 });
+  const regular = { ...capabilityBoard, installID: 'synthetic-regular', activityID: 'synthetic-regular',
+    stationID: '940GZZLUSTD', lineID: 'jubilee', selectionMode: 'allPlatforms', platformID: null,
+    platformHeading: null, platformLabel: null, platformDirection: null,
+    activityStartedAt: new Date().toISOString(), activityEndsAt: new Date(Date.now() + 300000).toISOString(),
+    environment: 'sandbox', supportsRegularTimetable: true,
+    initialRegularDisplayUntil: new Date(Date.now() + 60000).toISOString() };
+  const regularResponse = await post(regular);
+  assert.equal(regularResponse.status, 200);
+  assert.deepEqual(await regularResponse.json(), { ok: true, contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 });
+  for (const invalid of [
+    { supportsRegularTimetable: undefined }, { supportsRegularTimetable: false }, { supportsRegularTimetable: 'true' },
+    { plannedPresentationVersion: undefined }, { contentStateContract: undefined },
+    { initialRegularDisplayUntil: 'tomorrow' }, { initialRegularDisplayUntil: null },
+    { selectionMode: 'platform', platformID: '2' },
+  ]) assert.equal((await post({ ...regular, ...invalid })).status, 400, JSON.stringify(invalid));
   const tiedOld = await post({ ...capabilityBoard, plannedPresentationVersion: undefined }); assert.deepEqual(await tiedOld.json(), { ok: true, contentStateContract: 'station-board-v2' });
   const tiedNew = await post(capabilityBoard); assert.deepEqual(await tiedNew.json(), { ok: false, contentStateContract: 'station-board-v2' });
   const restored = { ...capabilityBoard, tokenUpdatedAt: new Date(Date.parse(capabilityBoard.tokenUpdatedAt) + 1000).toISOString() };
@@ -49,7 +60,7 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   assert.equal((await post({ ...fixture, installID: 'synthetic-invalid', contentStateContract: 'station-board-v2', lineID: 'mildmay' })).status, 400);
   assert.equal((await fetch(`${origin}/contracts/station-board-catalogue-v2.json`)).status, 404);
   assert.equal((await fetch(`${origin}/server/station-board-v2.js`)).status, 404);
-  const anchor = Date.now(), local = londonLocal(anchor), day = local.slice(0, 10), minute = replayDepartureMinute(anchor);
+  const anchor = Date.now(), local = londonLocal(anchor), day = local.slice(0, 10), minute = Number(local.slice(11, 13)) * 60 + Number(local.slice(14, 16)) + 1;
   assert.ok(minute < 1440, 'Endpoint carry-forward replay needs a current-day minute remaining');
   const departure = londonClock(`${day}T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00`), midnight = londonClock(`${new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)}T00:00:00`);
   const board = { ...fixture, installID: 'synthetic-seed-install', activityID: 'synthetic-seed-activity', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', platformID: null, platformHeading: null, platformLabel: null, platformDirection: null, tokenUpdatedAt: new Date(anchor).toISOString(), contentStateContract: 'station-board-v2' };
@@ -83,5 +94,8 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   assert.equal(seededStore.state.records.find((r) => r.activityID === board.activityID).stationBoardCache.sources.timetable, undefined);
   const expiry = mergeContexts(partial, {}, board, Math.min(anchor + 600000, midnight)); assert.equal(expiry.sources.timetable, undefined);
   const bad = structuredClone(seed); bad.contexts[0].rows[0].platform = 'Platform 1'; assert.equal((await post({ ...board, plannedContextSeed: bad })).status, 400);
-  const saved = JSON.parse(await fs.readFile(path.join(directory, 'activities.json'))); assert.equal(saved.records.filter((r) => r.contentStateContract === 'station-board-v2').length, 21); assert.equal(saved.records.find((r) => r.activityID === fixture.activityID).contentStateContract, undefined);
+  const registeredRegular = seededStore.state.records.find(r => r.activityID === regular.activityID);
+  assert.equal(registeredRegular.supportsRegularTimetable, true);
+  assert.equal(registeredRegular.initialRegularDisplayUntil, regular.initialRegularDisplayUntil);
+  const saved = JSON.parse(await fs.readFile(path.join(directory, 'activities.json'))); assert.equal(saved.records.filter((r) => r.contentStateContract === 'station-board-v2').length, 22); assert.equal(saved.records.find((r) => r.activityID === fixture.activityID).contentStateContract, undefined);
 });

@@ -1,0 +1,76 @@
+{
+  "sourceBodiesSHA256": [
+    "1e2e29da4d1c9c5772e4968fb311268b98b133a1d07fdcf718e18ea851303a36",
+    "9f3fc8cb4c73f467e182e67a1a355be3ff7af258eeb31736135009fbac798baa"
+  ],
+  "stationDisruption": [
+    {
+      "$type": "Tfl.Api.Presentation.Entities.DisruptedPoint, Tfl.Api.Presentation.Entities",
+      "atcoCode": "940GZZDLSTD",
+      "fromDate": "2026-11-21T04:30:00Z",
+      "toDate": "2026-11-23T01:29:00Z",
+      "description": "DOCKLANDS LIGHT RAILWAY: Saturday 21 and Sunday 22 November, no service between Canning Town and Stratford International. Please use JUBILEE LINE and local London Buses services.",
+      "commonName": "Stratford DLR Station",
+      "type": "Part Closure",
+      "mode": "dlr",
+      "stationAtcoCode": "940GZZDLSTD",
+      "appearance": "PlannedWork"
+    },
+    {
+      "$type": "Tfl.Api.Presentation.Entities.DisruptedPoint, Tfl.Api.Presentation.Entities",
+      "atcoCode": "910GSTFD",
+      "fromDate": "2026-11-21T20:10:00Z",
+      "toDate": "2026-11-21T23:59:00Z",
+      "description": "MILDMAY LINE: Saturday 21 November, the 2014 and 2244 trains from Stratford to Richmond will not run. The 2131 train from Richmond to Stratford will not run. The 2259 train from Stratford to Richmond will terminate at Willesden Junction at 2342",
+      "commonName": "Stratford (London) Rail Station",
+      "type": "Information",
+      "mode": "elizabeth-line",
+      "stationAtcoCode": "910GSTFD",
+      "appearance": "PlannedWork"
+    },
+    {
+      "$type": "Tfl.Api.Presentation.Entities.DisruptedPoint, Tfl.Api.Presentation.Entities",
+      "atcoCode": "910GSTFD",
+      "fromDate": "2026-11-21T20:10:00Z",
+      "toDate": "2026-11-21T23:59:00Z",
+      "description": "MILDMAY LINE: Saturday 21 November, the 2014 and 2244 trains from Stratford to Richmond will not run. The 2131 train from Richmond to Stratford will not run. The 2259 train from Stratford to Richmond will terminate at Willesden Junction at 2342",
+      "commonName": "Stratford (London) Rail Station",
+      "type": "Information",
+      "mode": "national-rail",
+      "stationAtcoCode": "910GSTFD",
+      "appearance": "PlannedWork"
+    },
+    {
+      "$type": "Tfl.Api.Presentation.Entities.DisruptedPoint, Tfl.Api.Presentation.Entities",
+      "atcoCode": "910GSTFD",
+      "fromDate": "2026-11-21T20:10:00Z",
+      "toDate": "2026-11-21T23:59:00Z",
+      "description": "MILDMAY LINE: Saturday 21 November, the 2014 and 2244 trains from Stratford to Richmond will not run. The 2131 train from Richmond to Stratford will not run. The 2259 train from Stratford to Richmond will terminate at Willesden Junction at 2342",
+      "commonName": "Stratford (London) Rail Station",
+      "type": "Information",
+      "mode": "overground",
+      "stationAtcoCode": "910GSTFD",
+      "appearance": "PlannedWork"
+    }
+  ],
+  "status": [
+    {
+      "id": "jubilee",
+      "lineStatuses": [
+        {
+          "statusSeverity": 9,
+          "statusSeverityDescription": "Minor Delays",
+          "reason": "Jubilee Line: Minor delays due to an earlier faulty train at North Greenwich.  ",
+          "validityPeriods": [
+            {
+              "$type": "Tfl.Api.Presentation.Entities.ValidityPeriod, Tfl.Api.Presentation.Entities",
+              "fromDate": "2026-11-21T17:43:25Z",
+              "toDate": "2026-11-22T01:29:00Z",
+              "isNow": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

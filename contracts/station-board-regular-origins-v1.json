@@ -1,0 +1,281 @@
+{
+  "lines": {
+    "bakerloo": {
+      "commonJourneyTargets": {
+        "940GZZLUEAC": "940GZZLULBN",
+        "940GZZLUHAW": "940GZZLUKEN"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUEAC",
+        "940GZZLUHAW"
+      ]
+    },
+    "central": {
+      "commonJourneyTargets": {
+        "940GZZLUEPG": "940GZZLUTHB",
+        "940GZZLUWRP": "940GZZLURSG"
+      },
+      "exclusiveFirstCalls": {
+        "940GZZLUEBY": [
+          "940GZZLUWTA"
+        ],
+        "940GZZLUHLT": [
+          "940GZZLUGGH"
+        ]
+      },
+      "physicalEnds": [
+        "940GZZLUEPG",
+        "940GZZLUWRP"
+      ]
+    },
+    "circle": {
+      "commonJourneyTargets": {},
+      "exclusiveFirstCalls": {
+        "940GZZLUERC": [
+          "940GZZLUPAC"
+        ]
+      },
+      "physicalEnds": [
+        "940GZZLUHSC"
+      ]
+    },
+    "district": {
+      "commonJourneyTargets": {
+        "940GZZLUEBY": "940GZZLUECM",
+        "940GZZLUKOY": "940GZZLUECT",
+        "940GZZLURMD": "940GZZLUKWG",
+        "940GZZLUUPM": "940GZZLUUPB",
+        "940GZZLUWIM": "940GZZLUWIP"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUEBY",
+        "940GZZLUERC",
+        "940GZZLUKOY",
+        "940GZZLURMD",
+        "940GZZLUUPM",
+        "940GZZLUWIM"
+      ]
+    },
+    "dlr": {
+      "commonJourneyTargets": {
+        "940GZZDLBEC": "940GZZDLGAL",
+        "940GZZDLBNK": "940GZZDLSHA",
+        "940GZZDLLEW": "940GZZDLELV",
+        "940GZZDLSIT": "940GZZDLSTD",
+        "940GZZDLTWG": "940GZZDLSHA",
+        "940GZZDLWLA": "940GZZDLKGV"
+      },
+      "exclusiveFirstCalls": {
+        "940GZZDLSTD": [
+          "940GZZDLPUD"
+        ]
+      },
+      "physicalEnds": [
+        "940GZZDLBEC",
+        "940GZZDLBNK",
+        "940GZZDLLEW",
+        "940GZZDLSIT",
+        "940GZZDLTWG",
+        "940GZZDLWLA"
+      ]
+    },
+    "elizabeth": {
+      "commonJourneyTargets": {
+        "910GABWDXR": "910GWOLWXR",
+        "910GHTRWTM4": "910GHTRWAPT",
+        "910GHTRWTM5": "910GHTRWAPT",
+        "910GLIVST": "910GSTFD",
+        "910GPADTON": "910GACTONML",
+        "910GRDNGSTN": "910GTWYFORD",
+        "910GSHENFLD": "910GBRTWOOD"
+      },
+      "exclusiveFirstCalls": {
+        "910GPADTLL": []
+      },
+      "physicalEnds": [
+        "910GABWDXR",
+        "910GHTRWTM4",
+        "910GHTRWTM5",
+        "910GLIVST",
+        "910GPADTON",
+        "910GRDNGSTN",
+        "910GSHENFLD"
+      ]
+    },
+    "hammersmith-city": {
+      "commonJourneyTargets": {},
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUBKG",
+        "940GZZLUHSC"
+      ]
+    },
+    "jubilee": {
+      "commonJourneyTargets": {
+        "940GZZLUSTD": "940GZZLUWHM",
+        "940GZZLUSTM": "940GZZLUCPK"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUSTD",
+        "940GZZLUSTM"
+      ]
+    },
+    "liberty": {
+      "commonJourneyTargets": {
+        "910GROMFORD": "910GEMRSPKH",
+        "910GUPMNSTR": "910GEMRSPKH"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GROMFORD",
+        "910GUPMNSTR"
+      ]
+    },
+    "lioness": {
+      "commonJourneyTargets": {
+        "910GEUSTON": "910GSHMPSTD",
+        "910GWATFJDC": "910GWATFDHS"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GEUSTON",
+        "910GWATFJDC"
+      ]
+    },
+    "metropolitan": {
+      "commonJourneyTargets": {},
+      "exclusiveFirstCalls": {
+        "940GZZLUALD": [
+          "940GZZLULVT"
+        ],
+        "940GZZLUAMS": [
+          "940GZZLUCAL"
+        ],
+        "940GZZLUCSM": [
+          "940GZZLUCAL"
+        ],
+        "940GZZLUUXB": [
+          "940GZZLUHGD"
+        ],
+        "940GZZLUWAF": [
+          "940GZZLUCXY"
+        ]
+      },
+      "physicalEnds": []
+    },
+    "mildmay": {
+      "commonJourneyTargets": {
+        "910GRICHMND": "910GKEWGRDN",
+        "910GSTFD": "910GHACKNYW"
+      },
+      "exclusiveFirstCalls": {
+        "910GCLPHMJ1": []
+      },
+      "physicalEnds": [
+        "910GRICHMND",
+        "910GSTFD"
+      ]
+    },
+    "northern": {
+      "commonJourneyTargets": {
+        "940GZZBPSUST": "940GZZNEUGST",
+        "940GZZLUEGW": "940GZZLUBTK",
+        "940GZZLUHBT": "940GZZLUTAW",
+        "940GZZLUMDN": "940GZZLUSWN",
+        "940GZZLUMHL": "940GZZLUFYC"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZBPSUST",
+        "940GZZLUEGW",
+        "940GZZLUHBT",
+        "940GZZLUMDN",
+        "940GZZLUMHL"
+      ]
+    },
+    "piccadilly": {
+      "commonJourneyTargets": {
+        "940GZZLUCKS": "940GZZLUOAK",
+        "940GZZLUHR5": "940GZZLUHRC"
+      },
+      "exclusiveFirstCalls": {
+        "940GZZLUHR4": []
+      },
+      "physicalEnds": [
+        "940GZZLUCKS",
+        "940GZZLUHR5",
+        "940GZZLUUXB"
+      ]
+    },
+    "suffragette": {
+      "commonJourneyTargets": {
+        "910GBARKRIV": "910GBARKING",
+        "910GGOSPLOK": "910GUPRHLWY"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GBARKRIV",
+        "910GGOSPLOK"
+      ]
+    },
+    "victoria": {
+      "commonJourneyTargets": {
+        "940GZZLUBXN": "940GZZLUSKW",
+        "940GZZLUWWL": "940GZZLUBLR"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUBXN",
+        "940GZZLUWWL"
+      ]
+    },
+    "waterloo-city": {
+      "commonJourneyTargets": {
+        "940GZZLUBNK": "940GZZLUWLO",
+        "940GZZLUWLO": "940GZZLUBNK"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "940GZZLUBNK",
+        "940GZZLUWLO"
+      ]
+    },
+    "weaver": {
+      "commonJourneyTargets": {
+        "910GCHESHNT": "910GTHBLDSG",
+        "910GCHINGFD": "910GHGHMSPK",
+        "910GENFLDTN": "910GBHILLPK",
+        "910GLIVST": "910GBTHNLGR"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GCHESHNT",
+        "910GCHINGFD",
+        "910GENFLDTN",
+        "910GLIVST"
+      ]
+    },
+    "windrush": {
+      "commonJourneyTargets": {
+        "910GCLPHMJ1": "910GWNDSWRD",
+        "910GCRYSTLP": "910GSYDENHM",
+        "910GNWCRELL": "910GSURREYQ",
+        "910GWCROYDN": "910GNORWDJ"
+      },
+      "exclusiveFirstCalls": {},
+      "physicalEnds": [
+        "910GCLPHMJ1",
+        "910GCRYSTLP",
+        "910GHGHI",
+        "910GNWCRELL",
+        "910GWCROYDN"
+      ]
+    }
+  },
+  "publishedLineMapsSHA256": "a57b819cfe5485dedbdf761e179c3b3d7e3c4a3fef1f74684bf35d7402c40a27",
+  "serviceCatalogueSHA256": "1d9e7615be2e0cea9a7424952f1d6f99a66aadf5595d4249d9642698645b3a82",
+  "sourceAppHead": "c80ad1c29914bd52550c3d65c76cf534fce3d99b"
+}

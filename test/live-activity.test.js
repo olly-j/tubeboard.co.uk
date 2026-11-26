@@ -1043,14 +1043,17 @@ test('UF277 prior raw digest migrates once only after actual APNs acceptance', a
   assert.equal(f.store.state.records[0].lastSuccessAt, new Date(f.now + 1000).toISOString());
 });
 
-test('UF277 empty typed heartbeat behavior and legacy worker remain unchanged', async (t) => {
+test('an explicit empty typed observation keeps its source time without changing the legacy worker', async (t) => {
   const f = await uf277Fixture(t);
   const empty = structuredClone(f.cache); empty.sources['station-arrivals'].events = [];
   empty.sources['station-arrivals'].observedAt = f.now + 1;
   await f.store.retainStationBoard(f.record.activityID, f.record.environment, empty, new Date(f.now + 1));
   await f.cycle(1); await f.cycle(15000);
-  assert.equal(f.pushes.length, 2); assert.ok(f.pushes.every((p) => p.aps['content-state'].arrivals.length === 0));
-  assert.equal(f.pushes[1].aps['content-state'].staleAt, f.pushes[1].aps['content-state'].updatedAt);
+  assert.equal(f.pushes.length, 1);
+  const state = f.pushes[0].aps['content-state'];
+  assert.deepEqual(state.arrivals, []);
+  assert.equal(state.updatedAt, (f.now + 1 - 978307200000) / 1000);
+  assert.equal(state.staleAt, state.updatedAt);
   const legacy = await uf277Fixture(t);
   await legacy.store.transaction((data) => { delete data.records[0].contentStateContract; });
   const fetchImpl = async (url) => String(url).includes('/Status') ? jsonResponse([]) : jsonResponse([{

@@ -1,0 +1,414 @@
+{
+  "$type": "Tfl.Api.Presentation.Entities.TimetableResponse, Tfl.Api.Presentation.Entities",
+  "lineId": "jubilee",
+  "lineName": "Jubilee",
+  "direction": "inbound",
+  "stations": [
+    {
+      "id": "940GZZLUBMY",
+      "name": "Bermondsey Underground Station"
+    },
+    {
+      "id": "940GZZLUBST",
+      "name": "Baker Street Underground Station"
+    },
+    {
+      "id": "940GZZLUCPK",
+      "name": "Canons Park Underground Station"
+    },
+    {
+      "id": "940GZZLUDOH",
+      "name": "Dollis Hill Underground Station"
+    },
+    {
+      "id": "940GZZLUFYR",
+      "name": "Finchley Road Underground Station"
+    },
+    {
+      "id": "940GZZLUGPK",
+      "name": "Green Park Underground Station"
+    },
+    {
+      "id": "940GZZLUKBN",
+      "name": "Kilburn Underground Station"
+    },
+    {
+      "id": "940GZZLUKBY",
+      "name": "Kingsbury Underground Station"
+    },
+    {
+      "id": "940GZZLUNDN",
+      "name": "Neasden Underground Station"
+    },
+    {
+      "id": "940GZZLUQBY",
+      "name": "Queensbury Underground Station"
+    },
+    {
+      "id": "940GZZLUSJW",
+      "name": "St. John's Wood Underground Station"
+    },
+    {
+      "id": "940GZZLUSTM",
+      "name": "Stanmore Underground Station"
+    },
+    {
+      "id": "940GZZLUSWC",
+      "name": "Swiss Cottage Underground Station"
+    },
+    {
+      "id": "940GZZLUSWK",
+      "name": "Southwark Underground Station"
+    },
+    {
+      "id": "940GZZLUWIG",
+      "name": "Willesden Green Underground Station"
+    },
+    {
+      "id": "940GZZLUWYP",
+      "name": "Wembley Park Underground Station"
+    }
+  ],
+  "timetable": {
+    "$type": "Tfl.Api.Presentation.Entities.Timetable, Tfl.Api.Presentation.Entities",
+    "departureStopId": "940GZZLUSTD",
+    "routes": [
+      {
+        "$type": "Tfl.Api.Presentation.Entities.TimetableRoute, Tfl.Api.Presentation.Entities",
+        "stationIntervals": [
+          {
+            "$type": "Tfl.Api.Presentation.Entities.StationInterval, Tfl.Api.Presentation.Entities",
+            "id": "0",
+            "intervals": [
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWHM",
+                "timeToArrival": 2.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUCGT",
+                "timeToArrival": 5.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUNGW",
+                "timeToArrival": 7.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUCYF",
+                "timeToArrival": 9.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUCWR",
+                "timeToArrival": 11.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUBMY",
+                "timeToArrival": 13.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLULNB",
+                "timeToArrival": 15.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUSWK",
+                "timeToArrival": 17.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWLO",
+                "timeToArrival": 19.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWSM",
+                "timeToArrival": 20.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUGPK",
+                "timeToArrival": 22.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUBND",
+                "timeToArrival": 24.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUBST",
+                "timeToArrival": 27.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUSJW",
+                "timeToArrival": 30.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUSWC",
+                "timeToArrival": 31.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUFYR",
+                "timeToArrival": 33.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWHP",
+                "timeToArrival": 34.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUKBN",
+                "timeToArrival": 36.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWIG",
+                "timeToArrival": 38.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUDOH",
+                "timeToArrival": 40.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUNDN",
+                "timeToArrival": 42.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWYP",
+                "timeToArrival": 45.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUKBY",
+                "timeToArrival": 49.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUQBY",
+                "timeToArrival": 51.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUCPK",
+                "timeToArrival": 54.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUSTM",
+                "timeToArrival": 56.0
+              }
+            ]
+          },
+          {
+            "$type": "Tfl.Api.Presentation.Entities.StationInterval, Tfl.Api.Presentation.Entities",
+            "id": "1",
+            "intervals": [
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWHM",
+                "timeToArrival": 2.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUCGT",
+                "timeToArrival": 5.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUNGW",
+                "timeToArrival": 7.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUCYF",
+                "timeToArrival": 9.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUCWR",
+                "timeToArrival": 11.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUBMY",
+                "timeToArrival": 13.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLULNB",
+                "timeToArrival": 15.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUSWK",
+                "timeToArrival": 17.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWLO",
+                "timeToArrival": 19.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWSM",
+                "timeToArrival": 20.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUGPK",
+                "timeToArrival": 22.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUBND",
+                "timeToArrival": 24.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUBST",
+                "timeToArrival": 27.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUSJW",
+                "timeToArrival": 29.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUSWC",
+                "timeToArrival": 31.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUFYR",
+                "timeToArrival": 33.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWHP",
+                "timeToArrival": 34.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUKBN",
+                "timeToArrival": 36.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWIG",
+                "timeToArrival": 38.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUDOH",
+                "timeToArrival": 40.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUNDN",
+                "timeToArrival": 42.0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.Interval, Tfl.Api.Presentation.Entities",
+                "stopId": "940GZZLUWYP",
+                "timeToArrival": 46.0
+              }
+            ]
+          }
+        ],
+        "schedules": [
+          {
+            "name": "Saturday (also Good Friday)",
+            "knownJourneys": [
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "18",
+                "minute": "33",
+                "intervalId": 1
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "18",
+                "minute": "35",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "18",
+                "minute": "38",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "18",
+                "minute": "40",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "18",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "20",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "23",
+                "intervalId": 1
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "25",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "28",
+                "intervalId": 0
+              },
+              {
+                "$type": "Tfl.Api.Presentation.Entities.KnownJourney, Tfl.Api.Presentation.Entities",
+                "hour": "20",
+                "minute": "30",
+                "intervalId": 0
+              }
+            ]
+          },
+          {
+            "name": "Monday - Thursday",
+            "knownJourneys": []
+          },
+          {
+            "name": "Friday",
+            "knownJourneys": []
+          },
+          {
+            "name": "Sunday",
+            "knownJourneys": []
+          }
+        ]
+      }
+    ]
+  }
+}
