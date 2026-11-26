@@ -850,6 +850,80 @@ test('an outage retires each delivered ETA on cache-only boundaries without rene
   assert.equal(requests, afterFailure);
 });
 
+test('Woodford original expiry between successful station reads keeps only delivered future ETAs', async t => {
+  const generation = Date.parse('2026-11-26T11:31:57Z');
+  const stationID = '940GZZLUWOF';
+  const etaOffsets = [50000, 80000, 290000];
+  const rows = (observed, offsets) => offsets.map((offset, index) => ({
+    id: `woodford-generation-${index}`, lineId: 'central', naptanId: stationID,
+    destinationName: 'Epping', destinationNaptanId: '940GZZLUEPG',
+    platformName: 'Eastbound - Platform 3',
+    expectedArrival: new Date(generation + offset).toISOString(),
+    timestamp: new Date(observed).toISOString(),
+  }));
+
+  for (const replacement of ['elapsed', 'fresh empty', 'fresh changed ETA']) {
+    await t.test(replacement, async t => {
+      const store = await temporaryStore(t, { ...record, stationID, lineID: 'central',
+        tokenUpdatedAt: new Date(generation).toISOString() }, generation);
+      const pushes = [], boundaries = [];
+      let at = generation + 48000, stationReads = 0;
+      const fetchImpl = async url => {
+        if (new URL(url).pathname !== `/StopPoint/${stationID}/Arrivals`) {
+          return new Response('[]', { headers: headers(at) });
+        }
+        stationReads++;
+        const bumped = at === generation + 148000;
+        const trains = !bumped ? rows(generation, etaOffsets)
+          : replacement === 'fresh empty' ? [] : rows(generation + 101000, [320000]);
+        const sourceHeaders = bumped ? headers(at, 0, 30)
+          : headers(generation + 47000, at === generation + 48000 ? 1 : 58, 30);
+        return new Response(JSON.stringify(trains), { headers: sourceHeaders });
+      };
+      const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+        fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger,
+        scheduleRolloverPush: (_, state) => boundaries.push(state.nextBoardBoundaryAt), ...options });
+
+      await cycle();
+      const initial = pushes[0]['content-state'];
+      assert.equal(initial.arrivals.length, 3);
+      for (const elapsed of etaOffsets.slice(0, 2)) {
+        at = generation + elapsed + 1;
+        await cycle({ cacheOnly: true });
+      }
+      const delivered = pushes.at(-1);
+      assert.equal(delivered['content-state'].arrivals.length, 1);
+      if (replacement !== 'elapsed') {
+        at = generation + 105000;
+        await cycle({ sourceOnly: true });
+        assert.equal(stationReads, 2);
+      }
+      assert.equal(store.state.records[0].stationBoardCache.stationArrivalAttempt.failed, false);
+      const readsBeforeExpiry = stationReads, pushesBeforeExpiry = pushes.length;
+
+      at = generation + 120000;
+      await cycle({ cacheOnly: true });
+      assert.equal(stationReads, readsBeforeExpiry);
+      assert.equal(store.state.records[0].stationBoardCache.sources['station-arrivals'], undefined);
+      assert.equal(pushes.length, pushesBeforeExpiry, 'source expiry alone must not push an empty board');
+      assert.equal(boundaries.at(-1), generation + etaOffsets.at(-1) + 1);
+      assert.equal(delivered['content-state'].updatedAt, initial.updatedAt);
+
+      if (replacement === 'elapsed') {
+        at = generation + etaOffsets.at(-1) + 1;
+        await cycle({ cacheOnly: true });
+      } else {
+        at = generation + 148000;
+        await cycle({ sourceOnly: true });
+        assert.equal(stationReads, readsBeforeExpiry + 1);
+      }
+      assert.equal(pushes.length, pushesBeforeExpiry + 1);
+      assert.deepEqual(pushes.at(-1)['content-state'].arrivals.map(row => row.expectedArrival),
+        replacement === 'fresh changed ETA' ? [(generation + 320000) / 1000 - 978307200] : []);
+    });
+  }
+});
+
 test('a sleeping Activity gets one cache-only warning at five minutes while unavailable ETAs remain future', async t => {
   let store = await temporaryStore(t);
   let at = now, requests = 0;
@@ -1005,6 +1079,51 @@ test('a qualified station closure supersedes a future ETA during a source outage
   assert.equal(pushes.length, 2);
   assert.deepEqual(pushes[1].payload.aps['content-state'].arrivals, []);
   assert.equal(pushes[1].priority, '10');
+});
+
+test('a complete source withdrawal stays removed on a mixed station and rail Activity', async t => {
+  const stationID = '910GSHENFLD';
+  const stationRows = [arrival({
+    lineId: 'elizabeth', naptanId: stationID, stationName: 'Shenfield',
+    destinationName: 'Liverpool Street', destinationNaptanId: '910GLIVSTLL',
+    platformName: '3', expectedArrival: new Date(now + 300000).toISOString(),
+  })];
+  const railRows = [{
+    naptanId: stationID, destinationName: 'Paddington', destinationNaptanId: '910GPADTLL',
+    departureStatus: 'OnTime', estimatedTimeOfDeparture: new Date(now + 240000).toISOString(), platformName: '2',
+  }];
+  for (const withdrawn of ['station', 'rail']) {
+    const store = await temporaryStore(t, { ...record, stationID, lineID: 'elizabeth' });
+    const pushes = [];
+    let at = now;
+    const fetchImpl = async url => {
+      const endpoint = new URL(url).pathname;
+      const source = endpoint === `/StopPoint/${stationID}/Arrivals` ? 'station'
+        : endpoint === `/StopPoint/${stationID}/ArrivalDepartures` ? 'rail' : null;
+      if (source && at > now + 90000) return new Response(null, { status: 503 });
+      if (at > now && source === 'rail' && withdrawn === 'station') return new Response(null, { status: 503 });
+      const sourceRows = at > now && source === withdrawn ? [] : source === 'station' ? stationRows
+        : source === 'rail' ? railRows : [];
+      return new Response(JSON.stringify(sourceRows), { headers: headers(at) });
+    };
+    const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+      fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps['content-state'].arrivals); }, logger, ...options });
+
+    await cycle();
+    assert.deepEqual(pushes[0].map(row => row.timeEvidence).sort(), ['estimatedDeparture', 'throughArrivalPrediction']);
+    at = now + 90000;
+    await cycle();
+    const remaining = withdrawn === 'station' ? 'estimatedDeparture' : 'throughArrivalPrediction';
+    assert.deepEqual(pushes[1].map(row => row.timeEvidence), [remaining], withdrawn);
+    at = now + 120000;
+    await cycle({ cacheOnly: true });
+    at = now + 150000;
+    await cycle({ sourceOnly: true });
+    assert.ok(pushes.slice(1).every(rows => rows.every(row => row.timeEvidence === remaining)), withdrawn);
+    at = now + (withdrawn === 'station' ? 240001 : 300001);
+    await cycle({ cacheOnly: true });
+    assert.deepEqual(pushes.at(-1), [], withdrawn);
+  }
 });
 
 test('a failed rail departure read keeps the delivered ETA hold across a service restart', async (t) => {
@@ -1326,7 +1445,7 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
     });
     t.after(() => worker.stop());
     worker.start();
-    const until = now + (advancing ? 370000 : 160000); let waits = 0;
+    const until = now + (advancing ? 370000 : 340000); let waits = 0;
     while (true) {
       // Real persistence awaits do not advance virtual provider/network time.
       if (active && !sleeping) { assert.ok(++waits < 10000, 'business work must settle or schedule transport'); await new Promise(resolve => setImmediate(resolve)); continue; }
@@ -1354,8 +1473,15 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
       assert.ok(delivered.some(d => d.at > now + 240000), 'actual timer path crosses two original120s windows');
     } else {
       const expiry = initialTimestamp + 120000;
-      assert.ok(delivered.some(d => d.at > expiry && d.payload.aps['content-state'].arrivals.length === 0));
-      assert.ok(delivered.filter(d => d.at > expiry).every(d => d.payload.aps['content-state'].arrivals.every(r => r.expiresAt * 1000 + 978307200000 <= d.at)), 'old unchanged provider timestamp is never renewed');
+      const first = delivered[0].payload.aps['content-state'];
+      const originalETA = (first.arrivals[0].expectedArrival + 978307200) * 1000;
+      const empty = delivered.filter(d => !d.payload.aps['content-state'].arrivals.length);
+      assert.ok(empty.length > 0 && empty.every(d => d.at > originalETA), 'an expired source must not clear a future delivered ETA');
+      assert.ok(delivered.filter(d => d.at > expiry).every(d => {
+        const state = d.payload.aps['content-state'];
+        return state.updatedAt === first.updatedAt && state.arrivals.every(row =>
+          row.expiresAt === first.arrivals[0].expiresAt && row.expectedArrival === first.arrivals[0].expectedArrival);
+      }), 'an unchanged provider generation must never renew the original source or ETA');
     }
   }
 });
