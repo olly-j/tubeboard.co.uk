@@ -201,6 +201,123 @@ async function initialDisplayFixture(t, { hold = 45000 } = {}) {
 
 const allOutage = async () => new Response(null, { status: 503 });
 
+// Original 26 November TfL headers and SHA-256s. The station timetables
+// retain their route intervals and weekday clocks for the replay window.
+const recovery = JSON.parse(fs.readFileSync(new URL('./fixtures/regular-timetable-recovery-20261126.json', import.meta.url)));
+const restore = ({ body, headers }) => reply(body, headers);
+const stratfordDLR = { ...record, lineID: 'dlr', stationID: '940GZZDLSTD' };
+const wimbledonDistrict = { ...record, lineID: 'district', stationID: '940GZZLUWIM' };
+
+test('active Activities carry the real Stratford DLR direction and Wimbledon revalidation recoveries', async t => {
+  for (const [capture, board, query, cacheControl, first] of [
+    [recovery.stratford, stratfordDLR, '?direction=outbound', 'no-cache', ['Canary Wharf', '15:31']],
+    [recovery.wimbledon, wimbledonDistrict, '', 'no-cache, max-age=0', ['Edgware Road (Circle Line)', '15:34']],
+  ]) {
+    const f = await initialDisplayFixture(t);
+    const at = Date.parse(capture.follow.receivedAt);
+    await f.register({ ...f.payload, ...board, initialRegularDisplayUntil: undefined,
+      tokenUpdatedAt: new Date(at).toISOString() }, at);
+    const requests = [];
+    await f.cycle(at, async (input, { headers, redirect }) => {
+      const url = new URL(input);
+      if (!url.pathname.includes('/Timetable/')) return allOutage();
+      assert.equal(url.pathname, `/Line/${board.lineID}/Timetable/${board.stationID}`);
+      assert.equal(redirect, 'error');
+      requests.push([url.search, headers['Cache-Control']]);
+      return restore(requests.length === 1 ? capture.initial : capture.follow);
+    });
+    assert.deepEqual(requests, [['', 'no-cache'], [query, cacheControl]]);
+    assert.equal(f.push.length, 1);
+    const [row] = f.push[0].arrivals;
+    assert.ok(f.push[0].arrivals.every(item => item.plannedSourceID === 'regular-timetable'
+      && item.timeEvidence === 'scheduledDeparture' && item.originQualified && item.reportedPlatform === null));
+    assert.deepEqual([row.destination, new Date(row.expectedArrival * 1000 + Date.UTC(2001, 0, 1)).toISOString().slice(11, 16)], first);
+    if (board.lineID === 'dlr') assert.ok(f.push[0].arrivals.every(row => row.destination === 'Canary Wharf'));
+  }
+});
+
+test('ordinary timetable recovery never chains a third read or follows a foreign or ambiguous direction', async () => {
+  const { initial, follow } = recovery.stratford;
+  const at = Date.parse(follow.receivedAt);
+  const options = initial.body.disambiguation.disambiguationOptions;
+  const menu = (extra, headers = initial.headers) => reply({
+    ...initial.body, disambiguation: { disambiguationOptions: [...options, ...extra] },
+  }, headers);
+  for (const [root, scoped, count] of [
+    [() => menu([{ ...options[0], uri: 'https://example.com' }]), () => restore(follow), 1],
+    [() => menu([{ ...options[0], uri: options[0].uri.replace('outbound', 'inbound') }]), () => restore(follow), 1],
+    [() => menu([], { ...initial.headers, Age: '43200' }), () => restore(initial), 2],
+    [() => restore(initial), () => reply(follow.body, { ...follow.headers, Age: '43200' }), 2],
+    [() => restore(initial), () => reply({ ...follow.body, direction: 'inbound' }, follow.headers), 2],
+  ]) {
+    let requests = 0;
+    const cache = await refreshStationBoard(stratfordDLR, {}, config, async (url) => {
+      if (!new URL(url).pathname.includes('/Timetable/')) return allOutage();
+      return ++requests === 1 ? root() : scoped();
+    }, at, null);
+    assert.equal(requests, count);
+    assert.deepEqual(selectEvents(cache, stratfordDLR, at), []);
+  }
+});
+
+test('a stale scoped timetable can recover next cycle within the root receipt lifetime', async () => {
+  const { initial, follow } = recovery.stratford;
+  const at = Date.parse(follow.receivedAt);
+  let clock = at;
+  const requests = [];
+  const fetch = async (input, { headers }) => {
+    const url = new URL(input);
+    if (!url.pathname.includes('/Timetable/')) return allOutage();
+    requests.push([url.search, headers['Cache-Control']]);
+    if (!url.search) return reply(initial.body, { ...initial.headers, Date: new Date(clock).toUTCString() });
+    clock += 1000;
+    const age = requests.length === 2 ? '43200' : '0';
+    return reply(follow.body, { ...follow.headers, Date: new Date(clock).toUTCString(), Age: age });
+  };
+  const first = await refreshStationBoard(stratfordDLR, {}, config, fetch, at, null, () => clock);
+  assert.deepEqual(selectEvents(first, stratfordDLR, clock), []);
+  const retryAt = first.ordinaryNotBefore;
+  clock = retryAt;
+  const next = await refreshStationBoard(stratfordDLR, first, config, fetch, retryAt, null, () => clock);
+  assert.deepEqual(requests, [
+    ['', 'no-cache'], ['?direction=outbound', 'no-cache'],
+    ['', 'no-cache'], ['?direction=outbound', 'no-cache'],
+  ]);
+  const rows = selectEvents(next, stratfordDLR, clock);
+  assert.ok(rows.length > 0);
+  assert.ok(rows.every(row => row.expiresAt === retryAt + 600000));
+});
+
+test('ordinary direction and revalidation both honor Retry-After and current closure', async () => {
+  for (const [capture, board] of [[recovery.stratford, stratfordDLR], [recovery.wimbledon, wimbledonDistrict]]) {
+    const at = Date.parse(capture.follow.receivedAt);
+    const rateLimited = () => new Response(null, { status: 429, headers: { 'Retry-After': '480' } });
+    for (const limitOn of [1, 2]) {
+      let reads = 0;
+      const fetch = async url => new URL(url).pathname.includes('/Timetable/')
+        ? ++reads === limitOn ? rateLimited() : restore(capture.initial)
+        : allOutage();
+      const cache = await refreshStationBoard(board, {}, config, fetch, at, null);
+      assert.equal(cache.ordinaryNotBefore, at + 480000);
+      assert.deepEqual(selectEvents(cache, board, at), []);
+      await refreshStationBoard(board, cache, config, fetch, at + config.workerIntervalMs, null);
+      assert.equal(reads, limitOn);
+    }
+    let closedReads = 0;
+    const closedCache = await refreshStationBoard(board, {}, config, async url => {
+      const pathname = new URL(url).pathname;
+      if (pathname.includes('/Timetable/')) closedReads++;
+      if (pathname.endsWith('/Status')) return reply([{ id: board.lineID, modeName: board.lineID === 'dlr' ? 'dlr' : 'tube',
+        lineStatuses: [{ lineId: board.lineID, statusSeverity: 16, statusSeverityDescription: 'Suspended',
+          validityPeriods: [{ fromDate: '2026-11-26T15:20:00Z', toDate: '2026-11-26T16:00:00Z' }] }],
+      }], { Date: new Date(at).toUTCString(), Age: '0', 'Cache-Control': 'public,max-age=120' });
+      return allOutage();
+    }, at, null);
+    assert.equal(closedReads, 0);
+    assert.deepEqual(selectEvents(closedCache, board, at), []);
+  }
+});
+
 test('station arrivals 429 defers ordinary reads across restart and replacement registration', async t => {
   for (const sourceOnly of [false, true]) {
     const f = await initialDisplayFixture(t);
