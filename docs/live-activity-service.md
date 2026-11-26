@@ -516,6 +516,41 @@ Transport allows no redirects, at most65536 decoded body bytes/1024 bytes per pu
 Before production: complete exact-source independent/security review, injected transport/clock tests and local HTTP controls, `npm run check`, production-compatible Node22 tests and `flyctl config validate --config fly.toml`. Privately stage the existing owned-product key; do not expose it to source/artifacts. Existing owner-approved guarded deployment uses clean protected main and `scripts/deploy-production.sh --confirm-production`, preserving Fly volume, APNs secrets/environments, token stores and workers. Retain prior source/service/Fly revision as rollback, verify actual health source and one fixed sanitized owned-product response, then enable client qualification only after the reviewed source-clock gate. Disable new capability or revert this provider route to stop new reads; existing Unified fallback remains. Merge, transport HTTP200 and deployment are not owner-phone/complete-line/public acceptance. Service version allocation and final deployment evidence remain integration-owner work.
 
 
+## TB-132: Active Live Activity freshness
+
+An active typed station board targets a station-arrivals read within 60 seconds
+of the previous read. An approaching original expiry can bring the next read
+forward. Serialization, the shared 30-second URL floor and failure cooldowns
+still govern admission. Active Elizabeth and Overground boards also target
+one qualified rail-departures read per minute for their exact station and line.
+The two feeds share the serialized worker and maintain separate request
+cooldowns. An idle or ended activity makes no live-source requests. Full-board,
+legacy activity, timetable, status and other supplemental source intervals
+remain 90 seconds in production.
+
+A newly qualified observation of the displayed board can update its visible
+clock even when the train details are identical. Repeated source timestamps
+retain their original clocks and expiration. During a failed live-source read,
+an empty waiting update does not replace a delivered through train or estimated
+departure before its original ETA. The service keeps the exact delivered future
+live rows, preserves their original observation, expiry and APNs stale-date,
+and removes elapsed rows on cache-only boundaries. If the last observation
+reaches five minutes old and a held ETA remains future, one cache-only push
+gives an asleep phone a chance to display the delayed-update warning. An APNs
+acknowledgement records that transition across restarts. A fresh complete empty,
+withdrawal, disruption, or closure can supersede the held snapshot. The warning
+and routine renewals are delivery opportunities, with no guarantee the phone
+receives each update.
+
+The existing machine, volume and worker serve these opportunities. Before
+expiry or full-cycle effects, a healthy station can move from roughly one
+logical read per 90 seconds toward one per minute. The existing ceiling
+remains two logical reads per minute per station URL, with at most one
+additional request per read if the HTTP Age header is absent. The rail URL
+floor allows at most one logical read per minute per station and line, up to
+20 more per hour than the full-cycle cadence, with the same optional readback.
+Registrations of the same source URL share the read.
+
 ## UF276: Timestamped Live Activity Source Renewal (1.4.6)
 
 This source correction addresses a captured HTTP200 station-arrivals response
@@ -546,9 +581,10 @@ expiry; an older delayed positive cannot revive trains. A strictly newer
 qualified source can recover. This bounded context has the existing activity
 record lifecycle and adds no client identity or wire field.
 
-The ordinary full worker stays at90 seconds. Source-only opportunities target
-15 seconds before original station-arrivals expiry, subject to a shared30-second
-logical-attempt floor per actual official URL. The same URL coalesces across
+The full worker runs every 90 seconds. For an active station-board registration,
+a station-arrivals read is due within 60 seconds of the last attempt, or sooner
+when the original source expires. The early read targets 15 seconds before expiry.
+All registrations for the same official URL share the 30-second attempt floor. The same URL coalesces across
 full/source-only cycles and multiple registrations; completed bodies are not
 cached between cycles. Normal operation permits at most2 logical requests/min;
 the existing one missing-Age retry permits at most4 HTTP requests/min. Source-only

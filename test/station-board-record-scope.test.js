@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { LiveActivityStore, loadConfig, runLiveActivityWorkerCycle } from '../server/live-activity.js';
-import { refreshStationBoard, selectEvents, STATION_BOARD_STATIONS } from '../server/station-board-v2.js';
+import { buildStationBoardState, parseStationArrivals, refreshStationBoard, selectEvents, STATION_BOARD_STATIONS } from '../server/station-board-v2.js';
 const now = Date.parse('2026-10-01T13:00:00Z');
 const config = loadConfig({});
 const headers = (at = now, age = 0, maxAge = 120) => ({ date: new Date(at).toUTCString(), age: String(age), 'cache-control': `public,max-age=${maxAge}` });
@@ -199,4 +199,67 @@ test('conditional facts latency uses final closure applicability without renewin
       assert.ok(cache.sources['journey-planner']); assert.deepEqual(selectEvents(cache, record, at), []);
     }
   }
+});
+
+test('Woodford All platforms push reserves one current clock per known direction', () => {
+  const board = { ...record, stationID: '940GZZLUWOF', lineID: 'central', supportsRegularTimetable: true };
+  function train(id, direction, minutes, expiresAt = now + 120000) {
+    const east = direction === 'Eastbound';
+    return event(id, { stationID: board.stationID, lineID: board.lineID, sourceID: 'station-arrivals',
+      kind: 'throughArrival', timeEvidence: 'arrivalPrediction', direction,
+      platform: east ? 'Platform 3' : 'Platform 2', destination: east ? 'Epping' : 'West Ruislip',
+      destinationStationID: east ? '940GZZLUEPG' : '940GZZLUWRP',
+      time: now + minutes * 60000, expiresAt });
+  }
+  const cache = context(train('east-1', 'Eastbound', 1), train('east-2', 'Eastbound', 2),
+    train('east-3', 'Eastbound', 3), train('old-west', 'Westbound', 1, now),
+    train('west-1', 'Westbound', 4));
+  const all = buildStationBoardState(board, cache, now);
+  assert.equal(all.platform, 'All platforms');
+  assert.deepEqual(all.arrivals.map(row => row.id), ['east-1', 'west-1', 'east-2']);
+  assert.deepEqual(all.arrivals.map(row => row.boardingContext.direction), ['Eastbound', 'Westbound', 'Eastbound']);
+  for (const platform of [{ platformLabel: 'Platform 3' }, { platformDirection: 'Eastbound' }]) {
+    const east = buildStationBoardState({ ...board, selectionMode: 'platform', platformID: 'Eastbound',
+      platformHeading: 'Eastbound', ...platform }, cache, now);
+    assert.equal(east.platform, 'Eastbound');
+    assert.deepEqual(east.arrivals.map(row => row.id), ['east-1', 'east-2', 'east-3']);
+  }
+});
+
+test('Woodford retains two timed directions and its first unrelated untimed platform fact', () => {
+  const board = { ...record, stationID: '940GZZLUWOF', lineID: 'central', supportsRegularTimetable: true };
+  const platform = (id, number, destination, destinationStationID) => event(id, {
+    stationID: board.stationID, lineID: board.lineID, sourceID: 'at-station-destination',
+    kind: 'outgoingDestinationOnly', time: null, timeEvidence: null, platform: `Platform ${number}`,
+    destination, destinationStationID,
+  });
+  const live = (id, direction, seconds, destination, destinationStationID, kind = 'throughArrival') => event(id, {
+    stationID: board.stationID, lineID: board.lineID, sourceID: 'station-arrivals',
+    kind, time: now + seconds * 1000, timeEvidence: 'arrivalPrediction', direction, destination, destinationStationID,
+  });
+  const facts = [platform('platform-1', 1, 'Loughton', '940GZZLULGN'), platform('platform-2', 2, 'White City', '940GZZLUWCT')];
+  const east = live('east', 'Eastbound', 45, 'Epping', '940GZZLUEPG');
+  const west = live('west', 'Westbound', 80, 'West Ruislip', '940GZZLUWRP');
+  const incoming = live('incoming', 'Westbound', 15, 'Woodford', board.stationID, 'incomingArrival');
+  const ids = events => buildStationBoardState(board, context(...events), now).arrivals.map(row => row.id);
+  assert.deepEqual(ids([...facts, east, west, incoming]), ['platform-1', 'east', 'west']);
+  assert.deepEqual(ids([...facts, east, incoming]), ['platform-1', 'platform-2', 'east']);
+});
+
+test('Circle Live Activity can retain each reported rail and never count an operational or conflicting direction', () => {
+  const board = { ...record, stationID: '940GZZLUBST', lineID: 'circle', supportsRegularTimetable: true };
+  const trains = [
+    ['inner-1', 'Inner Rail - Platform 1', 'inbound', 1],
+    ['inner-2', 'Inner Rail - Platform 1', 'inbound', 2],
+    ['inner-3', 'Inner Rail - Platform 1', 'inbound', 3],
+    ['conflict', 'Outer Rail - Platform 2', 'Inner Rail', 4],
+    ['operational', 'Platform 2', 'outbound', 5],
+    ['outer', 'Outer Rail - Platform 2', 'outbound', 6],
+  ].map(([id, platformName, direction, minutes]) => ({ id, platformName, direction, lineId: board.lineID,
+    naptanId: board.stationID, destinationName: 'Liverpool Street', destinationNaptanId: '940GZZLULVT',
+    timestamp: new Date(now).toISOString(), expectedArrival: new Date(now + minutes * 60000).toISOString() }));
+  const parsed = parseStationArrivals(trains, board, headers(), now);
+  assert.deepEqual(parsed.map(row => row.direction), ['Inner Rail', 'Inner Rail', 'Inner Rail', null, null, 'Outer Rail']);
+  const state = buildStationBoardState(board, context(...parsed), now);
+  assert.deepEqual(state.arrivals.map(row => row.id), [parsed[0].id, parsed[5].id, parsed[1].id]);
 });
