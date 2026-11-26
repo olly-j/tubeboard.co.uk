@@ -196,10 +196,119 @@ async function initialDisplayFixture(t, { hold = 45000 } = {}) {
     pushImpl: async (_, body) => { push.push(body.aps['content-state']); },
     scheduleRolloverPush: (_, body) => { deadlines.push(body.nextBoardBoundaryAt); },
   });
-  return { payload, register, cycle, push, deadlines, restart() { store = new LiveActivityStore(filename); } };
+  const current = async at => (await store.listActive(new Date(at)))[0]?.stationBoardCache;
+  return { payload, register, cycle, push, deadlines, current, filename, restart() { store = new LiveActivityStore(filename); } };
 }
 
 const allOutage = async () => new Response(null, { status: 503 });
+
+// The original weekday intervals and clocks spanning the release 44 Edgware
+// witness. The SHA and headers identify the full public response.
+const edgware = JSON.parse(fs.readFileSync(new URL('./fixtures/edgware-regular-renewal-20261126.json', import.meta.url)));
+const edgwarePath = '/Line/northern/Timetable/940GZZLUEGW';
+const capturedAt = Date.parse(edgware.headers.Date);
+const swifts = milliseconds => (milliseconds - Date.UTC(2001, 0, 1)) / 1000;
+const clockLabel = row => new Date(row.expectedArrival * 1000 + Date.UTC(2001, 0, 1)).toISOString().slice(11, 16);
+const regular = board => board?.sources?.['regular-timetable'];
+
+function edgwareRead(at, observed, body = edgware.body) {
+  return restore({ body, headers: { ...edgware.headers, Date: new Date(at).toUTCString(), Age: String((at - observed) / 1000) } });
+}
+
+async function activeEdgware(t) {
+  const f = await initialDisplayFixture(t);
+  await f.register({ ...f.payload, lineID: 'northern', stationID: '940GZZLUEGW',
+    initialRegularDisplayUntil: undefined, tokenUpdatedAt: new Date(capturedAt).toISOString() }, capturedAt);
+  const reads = [];
+  const cycle = (offset, observed, body = edgware.body, cacheOnly = false, sourceOnly = false) => {
+    const at = capturedAt + offset;
+    return f.cycle(at, async url => {
+      if (new URL(url).pathname !== edgwarePath) return allOutage();
+      reads.push(at);
+      return edgwareRead(at, observed, body);
+    }, cacheOnly, sourceOnly);
+  };
+  return { ...f, reads, cycle };
+}
+
+test('an active Edgware timetable renews its on-wire validity before expiry after a skipped full cycle', async t => {
+  for (const cdnAge of [0, 60000]) {
+    const f = await activeEdgware(t);
+    await f.cycle(0, capturedAt);
+    const initial = f.push.at(-1);
+    assert.equal(initial.updatedAt, swifts(capturedAt));
+    const originalExpiry = capturedAt + 600000;
+    assert.ok(initial.arrivals.every(row => row.expiresAt === swifts(originalExpiry)));
+
+    await f.cycle(360000, capturedAt);
+    await f.cycle(500000, capturedAt, edgware.body, true);
+    await f.cycle(520000, capturedAt, edgware.body, false, true);
+    assert.deepEqual(f.reads, [capturedAt], 'no early, cache-only or source-only ordinary read');
+    const previousPushes = f.push.length;
+    await f.cycle(540000, capturedAt - cdnAge);
+    assert.deepEqual(f.reads, [capturedAt, capturedAt + 540000], 'renew before the original cutoff');
+    assert.ok(f.push.length > previousPushes);
+    const renewed = f.push.at(-1);
+    assert.equal(renewed.updatedAt, initial.updatedAt, 'the cached source clock does not advance');
+    const renewedExpiry = capturedAt + 1140000;
+    assert.ok(renewed.arrivals.length > 0 && renewed.arrivals.every(row => row.expiresAt === swifts(renewedExpiry)));
+    await f.cycle(601000, capturedAt, edgware.body, true);
+    assert.equal(f.reads.length, 2);
+    assert.ok(f.push.at(-1).arrivals.some(row => row.plannedSourceID === 'regular-timetable'));
+
+    // A changed clock in an older receipt has no authority over the current
+    // working. The same change is admissible in a strictly newer observation.
+    const changed = structuredClone(edgware.body);
+    const affected = changed.timetable.routes.flatMap(route => route.schedules)
+      .flatMap(schedule => schedule.knownJourneys).find(row => row.hour === '16' && row.minute === '54');
+    assert.ok(affected);
+    affected.minute = '55';
+    await f.cycle(990000, capturedAt - 60000, changed);
+    const unchanged = regular(await f.current(capturedAt + 990000));
+    assert.ok(unchanged?.events.length && unchanged.events.every(row => row.expiresAt === renewedExpiry));
+    assert.ok(unchanged.events.some(row => new Date(row.time).toISOString().slice(11,16) === '16:54'));
+    await f.cycle(1080000, capturedAt + 1080000, changed);
+    const replaced = f.push.at(-1);
+    assert.equal(replaced.updatedAt, swifts(capturedAt + 1080000));
+    assert.equal(clockLabel(replaced.arrivals[0]), '16:55');
+    assert.ok(!replaced.arrivals.some(row => clockLabel(row) === '16:54'));
+  }
+});
+
+test('an unchanged observed timetable keeps supplying its rolling tail past the initial hour', async t => {
+  const f = await activeEdgware(t);
+  for (let offset = 0; offset <= 3600000; offset += 450000) await f.cycle(offset, capturedAt);
+  assert.equal(f.reads.length, 9);
+  const rows = regular(await f.current(capturedAt + 3600000))?.events || [];
+  assert.ok(rows.length > 0 && rows.every(row => row.time >= capturedAt + 3600000 && row.receivedAt === capturedAt));
+  assert.ok(rows.some(row => row.expiresAt === capturedAt + 4200000));
+  assert.ok(f.push.at(-1).arrivals.some(row => row.plannedSourceID === 'regular-timetable'));
+});
+
+test('a legacy Edgware cache establishes whole-day proof only after exact overlap qualification', async t => {
+  const f = await activeEdgware(t);
+  await f.cycle(0, capturedAt);
+  const persisted = JSON.parse(fs.readFileSync(f.filename, 'utf8'));
+  const original = regular(persisted.records[0].stationBoardCache);
+  delete original.evidence;
+  delete original.expiresAt;
+  const initialIDs = new Set(original.events.map(row => row.id));
+  fs.writeFileSync(f.filename, JSON.stringify(persisted));
+  f.restart();
+
+  const olderObservation = capturedAt - 60000;
+  await f.cycle(450000, olderObservation);
+  const first = regular(await f.current(capturedAt + 450000));
+  assert.equal(first.evidence.ordinaryTimetable.observedAt, olderObservation);
+  assert.ok(first.events.length && first.events.every(row => initialIDs.has(row.id)
+    && row.receivedAt === capturedAt && row.expiresAt === capturedAt + 1050000));
+
+  await f.cycle(900000, olderObservation);
+  const next = regular(await f.current(capturedAt + 900000));
+  assert.ok(next.events.some(row => initialIDs.has(row.id) && row.receivedAt === capturedAt));
+  assert.ok(next.events.some(row => !initialIDs.has(row.id) && row.receivedAt === olderObservation));
+  assert.ok(next.events.every(row => row.expiresAt === capturedAt + 1500000));
+});
 
 // Original 26 November TfL headers and SHA-256s. The station timetables
 // retain their route intervals and weekday clocks for the replay window.
