@@ -532,10 +532,15 @@ A newly qualified observation of the displayed board can update its visible
 clock even when the train details are identical. Repeated source timestamps
 retain their original clocks and expiration. During a failed live-source read,
 an empty waiting update does not replace a delivered through train or estimated
-departure before its original ETA. Those rows still expire at their original
-stale-date. A new complete empty, withdrawal, disruption, or closure can
-supersede the held snapshot. Routine renewal uses the existing APNs priority
-policy and cannot guarantee receipt by the phone each minute.
+departure before its original ETA. The service keeps the exact delivered future
+live rows, preserves their original observation, expiry and APNs stale-date,
+and removes elapsed rows on cache-only boundaries. If the last observation
+reaches five minutes old and a held ETA remains future, one cache-only push
+gives an asleep phone a chance to display the delayed-update warning. An APNs
+acknowledgement records that transition across restarts. A fresh complete empty,
+withdrawal, disruption, or closure can supersede the held snapshot. The warning
+and routine renewals are delivery opportunities, with no guarantee the phone
+receives each update.
 
 The existing machine, volume and worker serve these opportunities. Before
 expiry or full-cycle effects, a healthy station can move from roughly one

@@ -322,6 +322,8 @@ export class LiveActivityStore extends TransactionalJsonStore {
     return this.transaction((state) => {
       const record = this.findByActivity(activityID, environment, state);
       if (!record || record.active === false || record.contentStateContract !== STATION_BOARD_CONTRACT || expectedTuple !== null && registrationTuple(record) !== expectedTuple) return { changed: false, value: null };
+      const delivery = boardDeliveryBeforeRefresh(record);
+      if (delivery !== record.lastBoardDelivery) record.lastBoardDelivery = delivery;
       record.stationBoardCache = applyPublicationAuthority(mergeContexts(applyPublicationAuthority(record.stationBoardCache, state.publicationAuthority), incoming, record, now.getTime()), state.publicationAuthority);
       return { value: record.stationBoardCache };
     });
@@ -953,26 +955,46 @@ export async function pushLiveActivityUpdate(record, payload, config, { priority
 }
 
 const boardingClockEvidence = ['estimatedDeparture', 'scheduledDeparture', 'throughArrivalPrediction'];
+const liveOutageEvidence = ['estimatedDeparture', 'throughArrivalPrediction'];
+const LIVE_ACTIVITY_STALE_WARNING_MS = 5 * 60 * 1000;
+const wireClockMs = clock => (clock + APPLE_REFERENCE_UNIX_SECONDS) * 1000;
 
-function boardDeliveryObservation(state, authoritativeClosure) {
+function boardDeliveryObservation(state, authoritativeClosure, delayedWarningSent = false) {
   const first = state.arrivals.find(row => Number.isFinite(row.expectedArrival)
     && boardingClockEvidence.includes(row.timeEvidence));
-  const lastETA = evidence => state.arrivals.reduce((latest, row) => row.timeEvidence === evidence && Number.isFinite(row.expectedArrival)
-    ? Math.max(latest, (row.expectedArrival + APPLE_REFERENCE_UNIX_SECONDS) * 1000) : latest, 0);
   return {
     nextAt: first ? (first.expectedArrival + APPLE_REFERENCE_UNIX_SECONDS) * 1000 : null,
-    throughUntil: lastETA('throughArrivalPrediction'),
-    estimatedUntil: lastETA('estimatedDeparture'),
+    // Retain only the delivered public live rows that can survive an outage.
+    // A compact board has at most three live rows, even with hidden plans.
+    liveRows: state.arrivals.filter(row => liveOutageEvidence.includes(row.timeEvidence)
+      && row.isCached === false && Number.isFinite(row.expectedArrival) && Number.isFinite(row.expiresAt)).slice(0, 3),
+    ...(delayedWarningSent ? { delayedWarningSent: true } : {}),
     disrupted: state.isDisrupted,
     staleAt: state.arrivals.length > 0
       ? Math.round((state.staleAt + APPLE_REFERENCE_UNIX_SECONDS) * 1000) : null,
-    // Provider row IDs can vary even for unchanged data. Persist only an
-    // opaque digest of the visible boarding context, never another text copy.
+    // Provider row IDs can vary; this digest detects boarding changes.
     context: first ? crypto.createHash('sha256').update(JSON.stringify([
       first.destination, first.via, first.reportedPlatform, first.boardingContext?.direction,
     ])).digest('hex') : null,
     closed: authoritativeClosure,
   };
+}
+
+function boardDeliveryBeforeRefresh(record) {
+  const previous = record.lastBoardDelivery;
+  if (!Number.isFinite(previous?.nextAt) || Array.isArray(previous.liveRows)
+    || !record.lastBoardContentDigest || !record.stationBoardCache) return previous;
+  const sentAt = Date.parse(record.lastPushAt || '');
+  if (!Number.isFinite(sentAt)) return previous;
+
+  // Recover old deliveries only if the exact accepted payload can be
+  // reconstructed before cache expiry prunes its original facts.
+  for (const preserveLegacyOrder of [false, true]) {
+    const state = buildStationBoardState(record, record.stationBoardCache, sentAt, { preserveLegacyOrder });
+    const digest = stationBoardContentDigest(state, { dynamicScheduledCountdown: record.supportsRegularTimetable === true });
+    if (digest === record.lastBoardContentDigest) return boardDeliveryObservation(state, previous.closed);
+  }
+  return previous;
 }
 
 function boardDeliveryPriority(before, after, now) {
@@ -1056,15 +1078,30 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
     const url = activityRailDeparturesURL(floor.stationID, floor.lineID, config.tflAppKey);
     arrivalReader.observeNotBefore(url, floor.notBefore, floor.rateLimitedUntil);
   }
-  for (const record of liveRecords.filter((record) => record.contentStateContract === STATION_BOARD_CONTRACT)) {
+  const stationBoards = liveRecords.filter(record => record.contentStateContract === STATION_BOARD_CONTRACT);
+  // Registrations can start at different times. Decide which public URLs are
+  // due before iterating so every matching rider can use this cycle's receipt.
+  const dueStations = new Set(), dueRailBoards = new Set();
+  if (!cacheOnly) {
+    for (const board of stationBoards) {
+      const cache = board.stationBoardCache || {};
+      const fullDue = !sourceOnly && !(cache.nextRefreshAt > now.getTime());
+      if (fullDue || !(cache.arrivalsRefreshAt > now.getTime())) dueStations.add(board.stationID);
+      if (STATION_BOARD_LINES.get(board.lineID)?.qualifiedRailDepartureSource
+          && (fullDue || !(cache.railDeparturesNotBefore > now.getTime()))) {
+        dueRailBoards.add(`${board.stationID}:${board.lineID}`);
+      }
+    }
+  }
+  for (const record of stationBoards) {
     signal?.throwIfAborted();
     const expectedTuple = registrationTuple(record);
     let expectedPublicationGeneration;
     try {
       let cache = record.stationBoardCache || {};
       if (sourceOnly || (!cacheOnly && cache.nextRefreshAt > now.getTime())) {
-        cache = await refreshStationArrivals(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, arrivalReader);
-        cache = await refreshRailDepartures(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, arrivalReader);
+        cache = await refreshStationArrivals(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, arrivalReader, dueStations.has(record.stationID));
+        cache = await refreshRailDepartures(record, cache, config, fetchImpl, now.getTime(), signal, clock, publicResponses, arrivalReader, dueRailBoards.has(`${record.stationID}:${record.lineID}`));
       } else if (!cacheOnly) {
         // Only public HTTP reads are shared. Each activity qualifies those
         // immutable receipts against its own selection and retained context.
@@ -1083,26 +1120,48 @@ export async function runLiveActivityWorkerCycle({ store, config, fetchImpl = fe
       cache = applyPublicationAuthority(cache, publicationAuthority);
       expectedPublicationGeneration = publicationGeneration(publicationAuthority);
       const contentState = buildStationBoardState(record, cache, effectiveNow.getTime());
-      const contentDigest = stationBoardContentDigest(contentState, { dynamicScheduledCountdown: record.supportsRegularTimetable === true });
       const displayUntil = Date.parse(record.initialRegularDisplayUntil || '');
-      const authoritativeClosure = regularReplacementAuthorized(cache, record, effectiveNow.getTime());
-      const delivery = boardDeliveryObservation(contentState, authoritativeClosure);
-      const holdInitial = !record.lastSuccessAt && displayUntil > effectiveNow.getTime() && delivery.nextAt === null
+      const effectiveTime = effectiveNow.getTime();
+      const authoritativeClosure = regularReplacementAuthorized(cache, record, effectiveTime);
+      const previousDelivery = boardDeliveryBeforeRefresh(record);
+      let holdAfterFailure = false, warningDue = false, delayedWarningSent = false;
+      if (contentState.arrivals.length === 0 && !authoritativeClosure
+          && !(contentState.isDisrupted && !previousDelivery?.disrupted)) {
+        const failedSource = row => row.timeEvidence === 'throughArrivalPrediction'
+          ? cache.stationArrivalAttempt?.failed : cache.railDepartureAttempt?.failed;
+        const remaining = previousDelivery?.liveRows?.filter(row =>
+          failedSource(row) && wireClockMs(row.expectedArrival) >= effectiveTime) || [];
+        if (remaining.length) {
+          const boundary = Math.round(Math.min(...remaining.map(row => wireClockMs(row.expectedArrival)))) + 1;
+          const warningAt = record.lastBoardObservedAt + LIVE_ACTIVITY_STALE_WARNING_MS;
+          delayedWarningSent = previousDelivery.delayedWarningSent === true;
+          const shouldWarn = !delayedWarningSent && Number.isFinite(warningAt)
+            && remaining.some(row => wireClockMs(row.expectedArrival) > Math.max(warningAt, effectiveTime));
+          // An ETA at the warning boundary can roll over in the same update.
+          const warningBoundary = warningAt + 1 === boundary ? boundary : warningAt;
+          warningDue = shouldWarn && warningBoundary <= effectiveTime;
+          contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, boundary,
+            shouldWarn && !warningDue ? warningBoundary : Infinity);
+          holdAfterFailure = !warningDue && remaining.length === previousDelivery.liveRows.length;
+          if (!holdAfterFailure) {
+            contentState.arrivals = remaining;
+            contentState.updatedAt = (record.lastBoardObservedAt / 1000) - APPLE_REFERENCE_UNIX_SECONDS;
+            contentState.staleAt = (previousDelivery.staleAt / 1000) - APPLE_REFERENCE_UNIX_SECONDS;
+            delete contentState.plannedAvailability;
+            const fitsApns = () => Buffer.byteLength(JSON.stringify(buildApnsPayload(contentState, effectiveNow))) <= 4096;
+            if (!fitsApns()) contentState.statusReason = null;
+            if (!fitsApns()) contentState.status = 'Status unavailable';
+          }
+        }
+      }
+      const delivery = boardDeliveryObservation(contentState, authoritativeClosure, warningDue || delayedWarningSent);
+      const holdInitial = !record.lastSuccessAt && displayUntil > effectiveTime && delivery.nextAt === null
         && !authoritativeClosure;
       if (holdInitial) contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, displayUntil);
-      const observedAt = (contentState.updatedAt + APPLE_REFERENCE_UNIX_SECONDS) * 1000;
+      const observedAt = wireClockMs(contentState.updatedAt);
       const newerObservation = Number.isFinite(record.lastBoardObservedAt) && observedAt > record.lastBoardObservedAt;
-      const previousDelivery = record.lastBoardDelivery;
-      const failedSourceETA = Math.max(
-        cache.stationArrivalAttempt?.failed ? previousDelivery?.throughUntil || 0 : 0,
-        cache.railDepartureAttempt?.failed ? previousDelivery?.estimatedUntil || 0 : 0
-      );
-      // ActivityKit keeps the original payload and stale-date during an
-      // outage. An unqualified waiting state would erase that snapshot early.
-      const holdAfterFailure = contentState.arrivals.length === 0 && failedSourceETA >= effectiveNow.getTime()
-        && !authoritativeClosure && !(contentState.isDisrupted && !previousDelivery?.disrupted);
-      if (holdAfterFailure) contentState.nextBoardBoundaryAt = Math.min(contentState.nextBoardBoundaryAt || Infinity, failedSourceETA + 1);
-      if (!holdInitial && !holdAfterFailure && (contentDigest !== record.lastBoardContentDigest || newerObservation)) {
+      const contentDigest = stationBoardContentDigest(contentState, { dynamicScheduledCountdown: record.supportsRegularTimetable === true });
+      if (!holdInitial && !holdAfterFailure && (contentDigest !== record.lastBoardContentDigest || newerObservation || warningDue)) {
         const current = (await store.listActive(effectiveNow)).find((r) => r.activityID === record.activityID && r.environment === record.environment);
         if (!current || registrationTuple(current) !== expectedTuple || publicationGeneration(store.publicationAuthority()) !== expectedPublicationGeneration) continue;
         const priority = boardDeliveryPriority(current.lastBoardDelivery, delivery, effectiveNow.getTime());

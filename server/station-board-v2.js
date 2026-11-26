@@ -188,9 +188,9 @@ function nextStationArrivalRefresh(cache, now, notBefore, workerIntervalMs) {
   return Math.max(notBefore, Math.min(now + interval, beforeExpiry));
 }
 
-export async function refreshStationArrivals(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader) {
+export async function refreshStationArrivals(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader, sharedReadDue = false) {
   signal?.throwIfAborted();
-  if (previous.arrivalsRefreshAt > now) return mergeContexts(previous, {}, record, now);
+  if (!sharedReadDue && previous.arrivalsRefreshAt > now) return mergeContexts(previous, {}, record, now);
   const url = new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`);
   if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
   const response = await arrivalReader.read(url, { fetchImpl, signal, clock, publicResponses,
@@ -211,7 +211,8 @@ function readRailDepartures(url, previous, arrivalReader, options) {
 }
 
 function railDepartureSource(record, response, now) {
-  if (!response.ok) return undefined;
+  const age = response.headers?.age;
+  if (!response.ok || response.status !== 200 || typeof age !== 'string' || !/^\d+$/.test(age.trim())) return undefined;
   const events = parseRailDepartures(response.value, record, response.headers, response.completedAt);
   if (events.length) return { observedAt: Math.max(...events.map(event => event.receivedAt)), events };
   if (Array.isArray(response.value) && response.value.length === 0) {
@@ -229,8 +230,8 @@ function railDepartureReceipt(record, previous, response, source, now) {
   };
 }
 
-export async function refreshRailDepartures(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader) {
-  if (!STATION_BOARD_LINES.get(record.lineID)?.qualifiedRailDepartureSource || previous.railDeparturesNotBefore > now) return previous;
+export async function refreshRailDepartures(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader, sharedReadDue = false) {
+  if (!STATION_BOARD_LINES.get(record.lineID)?.qualifiedRailDepartureSource || (!sharedReadDue && previous.railDeparturesNotBefore > now)) return previous;
   const url = activityRailDeparturesURL(record.stationID, record.lineID, config.tflAppKey);
   const response = await readRailDepartures(url, previous, arrivalReader, { fetchImpl, signal, clock, publicResponses });
   const completedAt = clock();
@@ -254,7 +255,8 @@ function mergeStationArrivalRead(record, previous, response, now, workerInterval
     previous.stationArrivalAttempt, record, now);
   const merged = mergeContexts(previous, { sources, stationArrivalAttempt, arrivalsRateLimitedUntil: response.rateLimitedUntil }, record, now);
   const notBefore = Math.max(previous.arrivalsNotBefore || 0, response.nextAttemptAt || now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS);
-  return { ...merged, arrivalsNotBefore: notBefore, arrivalsRefreshAt: nextStationArrivalRefresh(merged, now, notBefore, workerIntervalMs) };
+  const nextRefresh = response.deferred ? notBefore : nextStationArrivalRefresh(merged, now, notBefore, workerIntervalMs);
+  return { ...merged, arrivalsNotBefore: notBefore, arrivalsRefreshAt: nextRefresh };
 }
 
 const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
@@ -656,8 +658,9 @@ function prioritizePublicDirections(rows, record) {
   return [...rows.slice(0, prefixLength), ...[...first].map(index => rows[index]),
     ...rows.slice(prefixLength).filter((_, index) => !first.has(index + prefixLength))];
 }
-export function buildStationBoardState(record, cache, now) {
+export function buildStationBoardState(record, cache, now, { preserveLegacyOrder = false } = {}) {
   const capable = record.plannedPresentationVersion === 2;
+  const orderRows = rows => preserveLegacyOrder ? rows : prioritizePublicDirections(rows, record);
   const proofs = retainAvailability(cache, {}, record, now).filter((p) => p.closed || p.plannedUnavailable === true || p.scheduledClockOnly === true);
   let rows = selectEvents(cache, record, now, { retainingMaskedPlans: capable, retainingPlannedAlternatives: capable });
   const originalRows = rows;
@@ -669,7 +672,7 @@ export function buildStationBoardState(record, cache, now) {
     const orderedSources = sources.sort((a,b) => Number(b === chosen) - Number(a === chosen) || a.localeCompare(b));
     const groups = [...orderedSources, null].map((source) => {
       const group = rows.filter((e) => plannedSource(e) === source);
-      const useful = prioritizePublicDirections(group.filter(eligible), record).slice(0, 3);
+      const useful = orderRows(group.filter(eligible)).slice(0, 3);
       return [...useful, ...group.filter((e) => !eligible(e)).slice(0, 3 - useful.length)];
     });
     let retained = groups.flat();
@@ -680,7 +683,7 @@ export function buildStationBoardState(record, cache, now) {
       retained = [...new Set(prioritized)].slice(0, 9);
     }
     const selected = new Set(retained); rows = rows.filter((e) => selected.has(e));
-  } else rows = prioritizePublicDirections(compactEvents(rows.filter(eligible)), record).slice(0, 3);
+  } else rows = orderRows(compactEvents(rows.filter(eligible))).slice(0, 3);
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
   const origin = regularOriginRule(record);
@@ -694,7 +697,7 @@ export function buildStationBoardState(record, cache, now) {
   const observedAt = () => {
     // Derive the visible board clock after selection and the compact limit.
     // Masked alternatives, status and a cache-only dispatch cannot renew it.
-    const clocks = prioritizePublicDirections(compactEvents(rows.filter(eligible)), record).slice(0, 3)
+    const clocks = orderRows(compactEvents(rows.filter(eligible))).slice(0, 3)
       .filter((row) => row.kind !== 'unverifiedArrival')
       .map((row) => row.receivedAt).filter(Number.isFinite);
     const explicitEmpty = cache.sources?.['station-arrivals'];
@@ -756,7 +759,7 @@ export function buildStationBoardState(record, cache, now) {
     return state;
   }
   delete state.plannedAvailability;
-  pack([], prioritizePublicDirections(originalRows.filter(e => !planned(e)), record).slice(0, 3));
+  pack([], orderRows(originalRows.filter(e => !planned(e))).slice(0, 3));
   return state;
 }
 
