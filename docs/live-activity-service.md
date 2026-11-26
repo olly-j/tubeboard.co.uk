@@ -542,6 +542,15 @@ withdrawal, disruption, or closure can supersede the held snapshot. The warning
 and routine renewals are delivery opportunities, with no guarantee the phone
 receives each update.
 
+At the original station-arrival expiry boundary, the same hold applies when
+the last qualified generation has expired before another source observation
+can replace it. A repeated HTTP 200 with the same provider timestamp leaves
+the generation unchanged. This prevents an empty update solely because a
+cache-only boundary fell between reads. The hold uses only future rows from
+the last delivered board and yields to qualified replacements, including a
+complete empty response. The original observation, source expiry, and
+TfL request schedule stay intact.
+
 The existing machine, volume and worker serve these opportunities. Before
 expiry or full-cycle effects, a healthy station can move from roughly one
 logical read per 90 seconds toward one per minute. The existing ceiling
