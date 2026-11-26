@@ -159,7 +159,8 @@ test('v1.2 support preserves widget recovery and explains added journeys', async
   assert.match(html, /choose a platform or direction if the widget offers that setting/i);
   assert.match(html, /large widget shows both directions when available/i);
   assert.match(html, /reports that it is offline/i);
-  assert.match(html, /shown separately as no current departures/i);
+  assert.match(html, /Live times unavailable<\/strong>, trains may still be running/i);
+  assert.match(html, /Last prediction<\/strong> uses the most recent estimate/i);
   assert.match(html, /Apple Watch/);
   assert.match(html, /Apple Vision Pro/);
   assert.match(html, /choose the lines you want under Settings/i);
