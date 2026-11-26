@@ -10,7 +10,11 @@ import { STATION_BOARD_LINES, londonLocal, londonClock, selectEvents, mergeConte
 
 test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards with no public cache access', { timeout: 15000 }, async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-v2-http-'));
-  const child = spawn(process.execPath, ['server/index.js'], { cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH, PORT: '0', LIVE_ACTIVITY_WORKER_ENABLED: 'false', DISRUPTION_ALERT_WORKER_ENABLED: 'false', TUBEBOARD_STATUS_MONITOR_ENABLED: 'false', LIVE_ACTIVITY_DATA_FILE: path.join(directory, 'activities.json'), DISRUPTION_ALERT_DATA_FILE: path.join(directory, 'alerts.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // Preserve the real HTTP route but choose its test clock independently of CI.
+  const anchor = Date.parse('2026-11-17T12:49:59.500Z');
+  const clockSetup = `import { mock } from 'node:test'; mock.timers.enable({ apis: ['Date'], now: ${anchor} });`;
+  const testClock = `data:text/javascript,${encodeURIComponent(clockSetup)}`;
+  const child = spawn(process.execPath, ['--import', testClock, 'server/index.js'], { cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH, PORT: '0', LIVE_ACTIVITY_WORKER_ENABLED: 'false', DISRUPTION_ALERT_WORKER_ENABLED: 'false', TUBEBOARD_STATUS_MONITOR_ENABLED: 'false', LIVE_ACTIVITY_DATA_FILE: path.join(directory, 'activities.json'), DISRUPTION_ALERT_DATA_FILE: path.join(directory, 'alerts.json') }, stdio: ['ignore', 'pipe', 'pipe'] });
   t.after(async () => { child.kill('SIGTERM'); await once(child, 'exit'); await fs.rm(directory, { recursive: true, force: true }); });
   const origin = await new Promise((resolve, reject) => { child.once('error', reject); let output = ''; child.stdout.on('data', (data) => { output += data; const match = /http:\/\/localhost:(\d+)/.exec(output); if (match) resolve(match[0]); }); child.once('exit', () => reject(new Error('Local service ended before listen'))); });
   const fixture = JSON.parse(await fs.readFile(new URL('../contracts/fixtures/live-activity-registration-v1.json', import.meta.url)));
@@ -31,14 +35,14 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   assert.ok(schema.allOf.some(rule => rule.if?.required?.includes('supportsRegularTimetable')
     && ['contentStateContract', 'plannedPresentationVersion'].every(field => rule.then?.required?.includes(field))));
   for (const [lineID, line] of STATION_BOARD_LINES) { const response = await post({ ...fixture, installID: `synthetic-${lineID}`, activityID: `synthetic-${lineID}`, stationID: line.boundedOriginID, lineID, contentStateContract: 'station-board-v2' }); assert.equal(response.status, 200, lineID); }
-  const capabilityBoard = { ...fixture, installID: 'synthetic-capability', activityID: 'synthetic-capability', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2, tokenUpdatedAt: new Date().toISOString() };
+  const capabilityBoard = { ...fixture, installID: 'synthetic-capability', activityID: 'synthetic-capability', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2, tokenUpdatedAt: new Date(anchor).toISOString() };
   const capResponse = await post(capabilityBoard); assert.equal(capResponse.status, 200); assert.deepEqual(await capResponse.json(), { ok: true, contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 });
   const regular = { ...capabilityBoard, installID: 'synthetic-regular', activityID: 'synthetic-regular',
     stationID: '940GZZLUSTD', lineID: 'jubilee', selectionMode: 'allPlatforms', platformID: null,
     platformHeading: null, platformLabel: null, platformDirection: null,
-    activityStartedAt: new Date().toISOString(), activityEndsAt: new Date(Date.now() + 300000).toISOString(),
+    activityStartedAt: new Date(anchor).toISOString(), activityEndsAt: new Date(anchor + 300000).toISOString(),
     environment: 'sandbox', supportsRegularTimetable: true,
-    initialRegularDisplayUntil: new Date(Date.now() + 60000).toISOString() };
+    initialRegularDisplayUntil: new Date(anchor + 60000).toISOString() };
   const regularResponse = await post(regular);
   assert.equal(regularResponse.status, 200);
   assert.deepEqual(await regularResponse.json(), { ok: true, contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 });
@@ -60,8 +64,8 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   assert.equal((await post({ ...fixture, installID: 'synthetic-invalid', contentStateContract: 'station-board-v2', lineID: 'mildmay' })).status, 400);
   assert.equal((await fetch(`${origin}/contracts/station-board-catalogue-v2.json`)).status, 404);
   assert.equal((await fetch(`${origin}/server/station-board-v2.js`)).status, 404);
-  const anchor = Date.now(), local = londonLocal(anchor), day = local.slice(0, 10), minute = Number(local.slice(11, 13)) * 60 + Number(local.slice(14, 16)) + 1;
-  assert.ok(minute < 1440, 'Endpoint carry-forward replay needs a current-day minute remaining');
+  const day = londonLocal(anchor).slice(0, 10);
+  const minute = 12 * 60 + 51; // The carry-forward read is one second after the last half-second of 12:49.
   const departure = londonClock(`${day}T${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}:00`), midnight = londonClock(`${new Date(Date.parse(`${day}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)}T00:00:00`);
   const board = { ...fixture, installID: 'synthetic-seed-install', activityID: 'synthetic-seed-activity', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', platformID: null, platformHeading: null, platformLabel: null, platformDirection: null, tokenUpdatedAt: new Date(anchor).toISOString(), contentStateContract: 'station-board-v2' };
   const publication = { url: 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip', sha256: 'a'.repeat(64), timezone: 'Europe/London', operatingStartDate: `${day.slice(0,4)}-01-01`, operatingEndDate: `${day.slice(0,4)}-12-31`, holidayCoverageStart: `${day.slice(0,4)}-01-01`, holidayCoverageEnd: `${day.slice(0,4)}-12-31`, nonOperationBankHolidays: true };

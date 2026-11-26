@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import assert from 'node:assert/strict';
+import { EventEmitter, once } from 'node:events';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { setImmediate as flushWorkerCallbacks } from 'node:timers/promises';
 import { STATION_BOARD_LINES, STATION_BOARD_STATIONS, validBoard, httpObservation, stationArrivalObservation, StationArrivalReader, refreshStationArrivals, londonClock, londonLocal, journeyURL, parseJourney, parseRailDepartures, parseStationArrivals, parseDestinationFacts, mergeContexts, selectEvents, countdown, nextBoundary, buildStationBoardState, refreshStationBoard } from '../server/station-board-v2.js';
 import { pushLiveActivityUpdate, stationBoardContentDigest, validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, getLiveSourceRefreshDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
 import { SerialWorker } from '../server/worker-lifecycle.js';
@@ -1286,19 +1288,22 @@ test('UF276 worker primes persisted URL cooldowns before new registrations even 
   assert.equal(store.state.records[0].stationBoardCache.arrivalsNotBefore, now + 300000);
 });
 
-test('UF276 actual worker timers renew before expiry with transport latency and let unchanged bodies expire', async (t) => {
+test('UF276 actual worker timers renew before expiry with transport latency and let unchanged bodies expire', { timeout: 15000 }, async (t) => {
   for (const advancing of [true, false]) {
     const store = await temporaryStore(t);
     await store.upsertToken({ ...record, activityID: 'timer-second', installID: 'timer-second-install', selectionMode: 'platform', platformID: 'southbound-platform-2', platformHeading: 'Southbound - Platform 2' }, new Date(now));
     let at = now, sleeping = 0, active = 0, maximum = 0, initialTimestamp = null, currentCycle;
     const timers = new Map(), reads = [], supplements = [], delivered = [], cycles = [];
+    const progress = new EventEmitter();
     const schedule = (callback, delay) => { const key = { at: at + delay, callback, unref() {} }; timers.set(key, key); return key; };
     const cancel = timer => timers.delete(timer);
     const latency = (delay, signal) => new Promise((resolve, reject) => {
+      signal?.throwIfAborted();
       sleeping++;
       const timer = schedule(() => { sleeping--; signal?.removeEventListener('abort', abort); resolve(); }, delay);
       const abort = () => { cancel(timer); sleeping--; reject(signal.reason); };
       signal?.addEventListener('abort', abort, { once: true });
+      progress.emit('ready');
     });
     const fetchImpl = async (url, { signal }) => {
       const path = new URL(url).pathname, dispatch = at, cycle = currentCycle;
@@ -1321,21 +1326,34 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
             pushImpl: async (_, payload) => { await latency(1000, signal); delivered.push({ at, payload }); return { status: 200 }; },
             scheduleSourceRefresh: (r, cache, current, interval) => worker.scheduleRerun(`${r.activityID}:source`, getLiveSourceRefreshDelayMs(cache, current, interval), { sourceOnly: true }),
             scheduleRolloverPush: (r, state, current, interval) => worker.scheduleRerun(`${r.activityID}:cache`, getRolloverDelayMs(state, current, interval), { cacheOnly: true }), logger });
-        } finally { active--; currentCycle = undefined; }
+        } finally {
+          active--;
+          currentCycle = undefined;
+          progress.emit('ready');
+        }
       }
     });
-    t.after(() => worker.stop());
-    worker.start();
-    const until = now + (advancing ? 370000 : 160000); let waits = 0;
-    while (true) {
-      // Real persistence awaits do not advance virtual provider/network time.
-      if (active && !sleeping) { assert.ok(++waits < 10000, 'business work must settle or schedule transport'); await new Promise(resolve => setImmediate(resolve)); continue; }
-      waits = 0;
-      const next = [...timers.values()].sort((a, b) => a.at - b.at)[0];
-      if (!next || next.at > until) { at = until; await worker.stop(); break; }
-      at = next.at; timers.delete(next); next.callback(); await new Promise(resolve => setImmediate(resolve));
+    const until = now + (advancing ? 370000 : 160000);
+    try {
+      worker.start();
+      while (true) {
+        t.signal.throwIfAborted();
+        if (active && !sleeping) {
+          // Real persistence can finish or arm simulated transport without advancing its clock.
+          await once(progress, 'ready', { signal: t.signal });
+          await flushWorkerCallbacks();
+          continue;
+        }
+        const next = [...timers.values()].sort((a, b) => a.at - b.at)[0];
+        if (!next || next.at > until) { at = until; break; }
+        at = next.at;
+        timers.delete(next);
+        next.callback();
+        await flushWorkerCallbacks();
+      }
+    } finally {
+      await worker.stop();
     }
-    at = Math.max(at, until); await worker.stop();
     assert.equal(maximum, 1); assert.equal(timers.size, 0);
     assert.ok(cycles.some(c => c.sourceOnly === true)); assert.ok(cycles.some(c => c.cacheOnly === true));
     assert.ok(reads.length >= (advancing ? 9 : 2));
