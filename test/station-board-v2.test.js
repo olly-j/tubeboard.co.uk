@@ -1456,11 +1456,17 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
     });
     t.after(() => worker.stop());
     worker.start();
-    const until = now + (advancing ? 370000 : 340000); let waits = 0;
+    const until = now + (advancing ? 370000 : 340000);
+    let persistenceWaitStartedAt = null;
     while (true) {
       // Real persistence awaits do not advance virtual provider/network time.
-      if (active && !sleeping) { assert.ok(++waits < 10000, 'business work must settle or schedule transport'); await new Promise(resolve => setImmediate(resolve)); continue; }
-      waits = 0;
+      if (active && !sleeping) {
+        persistenceWaitStartedAt ??= performance.now();
+        assert.ok(performance.now() - persistenceWaitStartedAt < 5000, 'business work must settle or schedule transport');
+        await new Promise(resolve => setTimeout(resolve, 1));
+        continue;
+      }
+      persistenceWaitStartedAt = null;
       const next = [...timers.values()].sort((a, b) => a.at - b.at)[0];
       if (!next || next.at > until) { at = until; await worker.stop(); break; }
       at = next.at; timers.delete(next); next.callback(); await new Promise(resolve => setImmediate(resolve));
