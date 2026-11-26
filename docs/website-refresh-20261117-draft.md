@@ -12,4 +12,10 @@ The existing Follow route, Lock Screen Live Activity and social card retain thei
 
 Add Station still uses build 20261117225101. The separate By destination, Next departures, Duo and disruption-widget images retain their earlier versions. See website-refresh-20261117-assets.json for provenance. Paid Follow was exercised using a local StoreKit test transaction. Sustained background delivery, StandBy geometry and a paired Watch still require physical verification.
 
-This branch is a local website draft. Publication is a separate owner decision. Its service base includes code beyond the currently deployed production version. A website-only release must select the intended deployable revision and preserve production service configuration.
+This branch is a website source draft. Publication is a separate owner decision. Its service base includes code beyond the currently deployed production version. A website-only release must select the intended deployable revision and preserve production service configuration.
+
+## 26 November website review
+
+The homepage leads with station search and train countdowns and explains Scheduled times separately. Follow a Train describes supported route and stop information, with live progress and sharing qualified by the train evidence. The Lock Screen Live Activity has three free sessions. The separate Home Screen and Lock Screen widgets require Premium. The support page gives the matching setup, recovery and refresh instructions.
+
+The website branch incorporates service main at `cf694ba1a8371b9aaf1839a83b1563afcf5c59d5`. The website PR no longer changes service tests, runtime or configuration. The previous draft test changes remain in branch history. The release candidate reviewed for claims is iOS 1.2.6 build 20261122004457 from app PR 916. Asset provenance remains per image.

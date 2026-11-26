@@ -33,7 +33,6 @@ const homepageProductAssets = [
   'live-board-woodford-1-2-6-20261118110726-ed2e82e4',
   'by-destination-v1-2-20260905103957',
   'add-station-1-2-6-20261117225101',
-  'disruption-widget-v1-2-20260905103957',
   'next-departures-v1-2-20260905103957'
 ];
 
@@ -166,7 +165,7 @@ test('v1.2 support preserves widget recovery and explains added journeys', async
   assert.match(html, /named London Overground lines/i);
   assert.match(html, /Route context and live train information are separate/);
   assert.match(html, /Browser live tracking is not available/);
-  assert.match(html, /existing monthly, yearly or Lifetime purchase includes the new Premium features/);
+  assert.match(html, /existing monthly, yearly or Lifetime purchase includes these Premium features/);
   assert.match(html, /assets\/tubeboard-og-1-2-6-20261118001152\.png/);
   assert.doesNotMatch(html, /Apple TV|tvOS/i);
 });

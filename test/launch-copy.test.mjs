@@ -75,7 +75,7 @@ test('homepage and support agree on line coverage and current Premium continuity
     assert.ok(support.includes(line));
   }
   for (const { html } of pages) {
-    assert.match(html, /existing monthly, yearly or Lifetime purchase includes the new Premium features/);
+    assert.match(html, /existing monthly, yearly or Lifetime purchase includes (?:the new|these) Premium features/);
     assert.match(html, /Next departures within each direction|Next departures, ordered within each direction/);
     assert.match(html, /compatible watch face/);
     assert.doesNotMatch(html, /private universal-link|specific Premium train|non-scrolling stop sequence/);
