@@ -98,6 +98,7 @@ export function stationArrivalObservation(headers, now) {
 }
 
 export const STATION_ARRIVAL_ATTEMPT_FLOOR_MS = 30000;
+const STATION_ARRIVAL_REFRESH_INTERVAL_MS = 60000;
 function retryAfterDelay(value, now) {
   if (typeof value !== 'string') return 0;
   if (/^\d+$/.test(value.trim())) {
@@ -115,16 +116,16 @@ export class StationArrivalReader {
 
   observeNotBefore(url, notBefore, rateLimitedUntil = 0) {
     if (!Number.isFinite(notBefore) || notBefore <= 0) return;
-    const key = `station-arrivals:${url.href}`;
+    const key = `activity-live-source:${url.href}`;
     const entry = this.#entries.get(key) || { nextAttemptAt: 0, rateLimitedUntil: 0, promise: null };
     entry.nextAttemptAt = Math.max(entry.nextAttemptAt, notBefore);
     if (Number.isFinite(rateLimitedUntil)) entry.rateLimitedUntil = Math.max(entry.rateLimitedUntil, rateLimitedUntil);
     this.#entries.set(key, entry);
   }
 
-  read(url, { fetchImpl = fetch, signal, clock = () => Date.now(), publicResponses = new Map(), notBefore = 0, rateLimitedUntil = 0 } = {}) {
+  read(url, { fetchImpl = fetch, signal, clock = () => Date.now(), publicResponses = new Map(), notBefore = 0, rateLimitedUntil = 0, attemptFloorMs = STATION_ARRIVAL_ATTEMPT_FLOOR_MS } = {}) {
     signal?.throwIfAborted();
-    const key = `station-arrivals:${url.href}`;
+    const key = `activity-live-source:${url.href}`;
     const now = clock();
     for (const [other, entry] of this.#entries) if (!entry.promise && entry.nextAttemptAt <= now) this.#entries.delete(other);
     // A persisted cooldown is source/URL authority, including on a deferred
@@ -152,7 +153,7 @@ export class StationArrivalReader {
       publicResponses.set(key, deferred);
       return deferred;
     }
-    entry.nextAttemptAt = now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS;
+    entry.nextAttemptAt = now + attemptFloorMs;
     entry.promise = (async () => {
       try {
         let response = await fetchJsonResponse(url, fetchImpl, { signal, includeHeaders: true });
@@ -182,19 +183,61 @@ function nextStationArrivalRefresh(cache, now, notBefore, workerIntervalMs) {
   const source = cache.sources?.['station-arrivals'];
   const deadlines = (source?.events || []).map(e => e.expiresAt).filter(Number.isFinite);
   if (Number.isFinite(source?.expiresAt)) deadlines.push(source.expiresAt);
-  const expiry = deadlines.length ? Math.min(...deadlines) : null;
-  const target = expiry === null ? now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS : Math.min(now + workerIntervalMs, expiry - 15000);
-  return Math.max(notBefore, target);
+  const interval = Math.min(STATION_ARRIVAL_REFRESH_INTERVAL_MS, workerIntervalMs);
+  const beforeExpiry = deadlines.length ? Math.min(...deadlines) - 15000 : Infinity;
+  return Math.max(notBefore, Math.min(now + interval, beforeExpiry));
 }
 
-export async function refreshStationArrivals(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader) {
+export async function refreshStationArrivals(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader, sharedReadDue = false) {
   signal?.throwIfAborted();
-  if (previous.arrivalsRefreshAt > now) return mergeContexts(previous, {}, record, now);
+  if (!sharedReadDue && previous.arrivalsRefreshAt > now) return mergeContexts(previous, {}, record, now);
   const url = new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Arrivals`);
   if (config.tflAppKey) url.searchParams.set('app_key', config.tflAppKey);
   const response = await arrivalReader.read(url, { fetchImpl, signal, clock, publicResponses,
     notBefore: previous.arrivalsNotBefore, rateLimitedUntil: previous.arrivalsRateLimitedUntil });
   return mergeStationArrivalRead(record, previous, response, clock(), config.workerIntervalMs);
+}
+
+export function activityRailDeparturesURL(stationID, lineID, tflAppKey) {
+  const url = new URL(`https://api.tfl.gov.uk/StopPoint/${stationID}/ArrivalDepartures`);
+  url.searchParams.set('lineIds', lineID);
+  if (tflAppKey) url.searchParams.set('app_key', tflAppKey);
+  return url;
+}
+
+function readRailDepartures(url, previous, arrivalReader, options) {
+  return arrivalReader.read(url, { ...options, attemptFloorMs: STATION_ARRIVAL_REFRESH_INTERVAL_MS,
+    notBefore: previous.railDeparturesNotBefore, rateLimitedUntil: previous.railDeparturesRateLimitedUntil });
+}
+
+function railDepartureSource(record, response, now) {
+  const age = response.headers?.age;
+  if (!response.ok || response.status !== 200 || typeof age !== 'string' || !/^\d+$/.test(age.trim())) return undefined;
+  const events = parseRailDepartures(response.value, record, response.headers, response.completedAt);
+  if (events.length) return { observedAt: Math.max(...events.map(event => event.receivedAt)), events };
+  if (Array.isArray(response.value) && response.value.length === 0) {
+    const observation = httpObservation(response.headers, response.completedAt, 90000, { cacheRequired: true });
+    if (observation?.expiresAt > now) return { ...observation, events };
+  }
+}
+
+function railDepartureReceipt(record, previous, response, source, now) {
+  return {
+    railDepartureAttempt: boardSourceAttempt(response, source, previous.sources?.['rail-departures'],
+      previous.railDepartureAttempt, record, now),
+    railDeparturesNotBefore: response.nextAttemptAt,
+    railDeparturesRateLimitedUntil: response.rateLimitedUntil,
+  };
+}
+
+export async function refreshRailDepartures(record, previous, config, fetchImpl, now, signal, clock, publicResponses, arrivalReader, sharedReadDue = false) {
+  if (!STATION_BOARD_LINES.get(record.lineID)?.qualifiedRailDepartureSource || (!sharedReadDue && previous.railDeparturesNotBefore > now)) return previous;
+  const url = activityRailDeparturesURL(record.stationID, record.lineID, config.tflAppKey);
+  const response = await readRailDepartures(url, previous, arrivalReader, { fetchImpl, signal, clock, publicResponses });
+  const completedAt = clock();
+  const source = railDepartureSource(record, response, completedAt);
+  return mergeContexts(previous, { sources: source ? { 'rail-departures': source } : {},
+    ...railDepartureReceipt(record, previous, response, source, completedAt) }, record, completedAt);
 }
 
 function mergeStationArrivalRead(record, previous, response, now, workerIntervalMs) {
@@ -208,9 +251,12 @@ function mergeStationArrivalRead(record, previous, response, now, workerInterval
       sources['station-arrivals'] = { observedAt: events.length ? Math.max(...events.map(e => e.receivedAt)) : observation.observedAt, expiresAt: observation?.expiresAt, events };
     }
   }
-  const merged = mergeContexts(previous, { sources, arrivalsRateLimitedUntil: response.rateLimitedUntil }, record, now);
+  const stationArrivalAttempt = boardSourceAttempt(response, sources['station-arrivals'], previous.sources?.['station-arrivals'],
+    previous.stationArrivalAttempt, record, now);
+  const merged = mergeContexts(previous, { sources, stationArrivalAttempt, arrivalsRateLimitedUntil: response.rateLimitedUntil }, record, now);
   const notBefore = Math.max(previous.arrivalsNotBefore || 0, response.nextAttemptAt || now + STATION_ARRIVAL_ATTEMPT_FLOOR_MS);
-  return { ...merged, arrivalsNotBefore: notBefore, arrivalsRefreshAt: nextStationArrivalRefresh(merged, now, notBefore, workerIntervalMs) };
+  const nextRefresh = response.deferred ? notBefore : nextStationArrivalRefresh(merged, now, notBefore, workerIntervalMs);
+  return { ...merged, arrivalsNotBefore: notBefore, arrivalsRefreshAt: nextRefresh };
 }
 
 const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
@@ -270,12 +316,18 @@ export function parseStationArrivals(rows, record, headers, now) {
     const loop = Array.isArray(stops) && Number.isInteger(index) && index >= 0 && index < stops.length && stops[index] === record.stationID && stops.at(-1) === destination.stationID && index < stops.length - 1;
     const incoming = destination.stationID === record.stationID && !loop;
     return [event(record, 'station-arrivals', { id: `arrival:${hash(row)}`, kind: incoming ? 'incomingArrival' : 'throughArrival', destination: destination.stationName, destinationStationID: destination.stationID,
-      time: row.__unknownClock ? null : time, timeEvidence: row.__unknownClock ? null : 'arrivalPrediction', platform: row.__unknownPlatform ? null : usablePlatform(row.platformName), direction: row.__unknownPlatform ? null : publicDirection(row.platformName), providerDirection: text(row.direction), via: routeVia(row.towards, destination, record.lineID), receivedAt,
+      time: row.__unknownClock ? null : time, timeEvidence: row.__unknownClock ? null : 'arrivalPrediction', platform: row.__unknownPlatform ? null : usablePlatform(row.platformName), direction: row.__unknownPlatform ? null : publicDirection(row.platformName, row.direction), providerDirection: text(row.direction), via: routeVia(row.towards, destination, record.lineID), receivedAt,
       expiresAt: Math.min(observation.expiresAt, receivedAt + 120000) }, observation)];
   });
 }
 function usablePlatform(value) { const v = text(value); return v && !['unknown', 'platform unknown', 'tbc', '-'].includes(v.toLowerCase()) ? v : null; }
-function publicDirection(platform) { return /\b(northbound|southbound|eastbound|westbound)\b/i.exec(platform || '')?.[1] || null; }
+function publicDirection(...values) {
+  const labels = new Set([...values.join(' ').matchAll(/\b(?:(north|south|east|west)[\s-]*bound|(?:inner|outer)[\s-]+rail)\b/gi)]
+    .map(match => match[0].toLowerCase().replace(/[\s-]+/g, '').replace(/rail$/, ' rail')));
+  if (labels.size !== 1) return null;
+  const [label] = labels;
+  return label.replace(/\b\w/g, letter => letter.toUpperCase());
+}
 function routeVia(towards, destination, lineID) {
   if (!text(towards)) return null;
   const parts = towards.split(/ via /i);
@@ -425,6 +477,25 @@ function mergeStationArrivalSchedule(previous, incoming, sources) {
   return { arrivalsNotBefore, ...(Number.isFinite(due) ? { arrivalsRefreshAt: Math.max(arrivalsNotBefore, due) } : {}) };
 }
 
+function boardSourceAttempt(response, source, previousSource, previousAttempt, record, now) {
+  if (!Number.isFinite(response.completedAt) || response.deferred) return undefined;
+  const lastObservation = Math.max(previousSource?.observedAt ?? -Infinity, previousAttempt?.observedAt ?? -Infinity);
+  const fresh = response.ok && Number.isFinite(source?.observedAt) && source.observedAt <= now
+    && (source.events.length ? source.events.some(event => usable(event, record, now)) : source.expiresAt > now);
+  // A successful transport cannot clear an outage without new, usable source
+  // evidence. Keep the observation floor even after the source rows expire.
+  const advanced = fresh && source.observedAt > lastObservation;
+  const observedAt = advanced ? source.observedAt : lastObservation;
+  const failed = !fresh || !advanced && previousAttempt?.failed === true;
+  return { at: response.completedAt, failed, ...(Number.isFinite(observedAt) ? { observedAt } : {}) };
+}
+
+function retainBoardSourceAttempt(previous, incoming, now) {
+  return [previous, incoming].filter(attempt => typeof attempt?.failed === 'boolean'
+    && Number.isFinite(attempt.at) && attempt.at <= now)
+    .reduce((latest, attempt) => !latest || attempt.at >= latest.at ? attempt : latest, undefined);
+}
+
 export function mergeContexts(previous = {}, incoming = {}, record, now) {
   const rejections = [...(previous.rejections || []), ...(incoming.rejections || [])].filter(r =>
     retainedRejection(r, record, now) && ['publicationChanged', 'timetableChanged', 'unsupportedCalendar',
@@ -458,7 +529,15 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
   }
   const ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, incoming.ordinaryNotBefore || 0);
   const arrivalsRateLimitedUntil = Math.max(previous.arrivalsRateLimitedUntil || 0, incoming.arrivalsRateLimitedUntil || 0);
-  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null, ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}) };
+  const railDeparturesNotBefore = Math.max(previous.railDeparturesNotBefore || 0, incoming.railDeparturesNotBefore || 0);
+  const railDeparturesRateLimitedUntil = Math.max(previous.railDeparturesRateLimitedUntil || 0, incoming.railDeparturesRateLimitedUntil || 0);
+  const stationArrivalAttempt = retainBoardSourceAttempt(previous.stationArrivalAttempt, incoming.stationArrivalAttempt, now);
+  const railDepartureAttempt = retainBoardSourceAttempt(previous.railDepartureAttempt, incoming.railDepartureAttempt, now);
+  return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null,
+    ...(stationArrivalAttempt ? { stationArrivalAttempt } : {}), ...(railDepartureAttempt ? { railDepartureAttempt } : {}),
+    ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}),
+    ...(railDeparturesNotBefore ? { railDeparturesNotBefore } : {}),
+    ...(railDeparturesRateLimitedUntil > now ? { railDeparturesRateLimitedUntil } : {}) };
 }
 function selectionMatches(event, record) {
   if (record.selectionMode !== 'platform' && !record.platformID) return true;
@@ -493,6 +572,10 @@ export function retainsThroughArrival(through, candidates) {
     return through.timeEvidence === 'arrivalPrediction' && Number.isFinite(through.time) && Number.isFinite(departure.time) && through.time > departure.time;
   });
 }
+function atPlatformDestination(e) {
+  return e.kind === 'outgoingDestinationOnly' && e.time == null && e.timeEvidence == null
+    && /^(?:[0-9]+[a-z]?|[a-z])$/.test(text(e.platform)?.toLowerCase().replace(/^platform\s+/, '') || '');
+}
 export function selectEvents(cache, record, now, { retainingMaskedPlans = false, retainingPlannedAlternatives = false } = {}) {
   const proofs = retainAvailability(cache, {}, record, now);
   let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && proofs.some((p) => (!retainingMaskedPlans || p.plannedUnavailable === true && p.scheduledClockOnly !== true) && blocksScheduled(p, e.time, now))) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
@@ -520,8 +603,6 @@ export function selectEvents(cache, record, now, { retainingMaskedPlans = false,
   // Compact activities compare times across eligible outgoing platform groups.
   // Arrivals remain last; physical groups belong to the full app board.
   const category = (e) => ['incomingArrival', 'unverifiedArrival'].includes(e.kind) ? 1 : 0;
-  const atPlatformDestination = (e) => e.kind === 'outgoingDestinationOnly' && e.time == null && e.timeEvidence == null
-    && /^(?:[0-9]+[a-z]?|[a-z])$/.test(text(e.platform)?.toLowerCase().replace(/^platform\s+/, '') || '');
   return events.sort((a, b) => category(a) - category(b) || Number(atPlatformDestination(b)) - Number(atPlatformDestination(a)) || (a.time ?? Infinity) - (b.time ?? Infinity) || a.id.localeCompare(b.id));
 }
 export function countdown(event, now) {
@@ -562,8 +643,24 @@ export function compactEvents(events) {
   const source = compactPlanningSource(events);
   return events.filter((e) => !plannedSource(e) || plannedSource(e) === source);
 }
-export function buildStationBoardState(record, cache, now) {
+function prioritizePublicDirections(rows, record) {
+  if (record.selectionMode === 'platform' || record.platformID || regularOriginRule(record).physicalEnd) return rows;
+  const firstByDirection = new Map();
+  for (const [index, row] of rows.entries()) {
+    const direction = publicDirection(row.direction, row.platform, row.providerDirection);
+    if (direction && Number.isFinite(row.time) && ['outgoingDeparture', 'throughArrival'].includes(row.kind)
+        && !firstByDirection.has(direction)) firstByDirection.set(direction, index);
+  }
+  if (firstByDirection.size < 2) return rows;
+  const first = new Set(firstByDirection.values());
+  const atPlatformCount = rows.findIndex(row => !atPlatformDestination(row));
+  const prefixLength = first.size === 2 ? Math.min(atPlatformCount, 1) : atPlatformCount;
+  return [...rows.slice(0, prefixLength), ...[...first].map(index => rows[index]),
+    ...rows.slice(prefixLength).filter((_, index) => !first.has(index + prefixLength))];
+}
+export function buildStationBoardState(record, cache, now, { preserveLegacyOrder = false } = {}) {
   const capable = record.plannedPresentationVersion === 2;
+  const orderRows = rows => preserveLegacyOrder ? rows : prioritizePublicDirections(rows, record);
   const proofs = retainAvailability(cache, {}, record, now).filter((p) => p.closed || p.plannedUnavailable === true || p.scheduledClockOnly === true);
   let rows = selectEvents(cache, record, now, { retainingMaskedPlans: capable, retainingPlannedAlternatives: capable });
   const originalRows = rows;
@@ -575,7 +672,7 @@ export function buildStationBoardState(record, cache, now) {
     const orderedSources = sources.sort((a,b) => Number(b === chosen) - Number(a === chosen) || a.localeCompare(b));
     const groups = [...orderedSources, null].map((source) => {
       const group = rows.filter((e) => plannedSource(e) === source);
-      const useful = group.filter(eligible).slice(0, 3);
+      const useful = orderRows(group.filter(eligible)).slice(0, 3);
       return [...useful, ...group.filter((e) => !eligible(e)).slice(0, 3 - useful.length)];
     });
     let retained = groups.flat();
@@ -586,7 +683,7 @@ export function buildStationBoardState(record, cache, now) {
       retained = [...new Set(prioritized)].slice(0, 9);
     }
     const selected = new Set(retained); rows = rows.filter((e) => selected.has(e));
-  } else rows = compactEvents(rows.filter(eligible)).slice(0, 3);
+  } else rows = orderRows(compactEvents(rows.filter(eligible))).slice(0, 3);
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
   const origin = regularOriginRule(record);
@@ -600,7 +697,7 @@ export function buildStationBoardState(record, cache, now) {
   const observedAt = () => {
     // Derive the visible board clock after selection and the compact limit.
     // Masked alternatives, status and a cache-only dispatch cannot renew it.
-    const clocks = compactEvents(rows.filter(eligible)).slice(0, 3)
+    const clocks = orderRows(compactEvents(rows.filter(eligible))).slice(0, 3)
       .filter((row) => row.kind !== 'unverifiedArrival')
       .map((row) => row.receivedAt).filter(Number.isFinite);
     const explicitEmpty = cache.sources?.['station-arrivals'];
@@ -662,7 +759,7 @@ export function buildStationBoardState(record, cache, now) {
     return state;
   }
   delete state.plannedAvailability;
-  pack([], originalRows.filter(e => !planned(e)).slice(0, 3));
+  pack([], orderRows(originalRows.filter(e => !planned(e))).slice(0, 3));
   return state;
 }
 
@@ -782,7 +879,10 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     ? arrivalReader.read(arrivalsURL, { fetchImpl, signal, clock, publicResponses,
       notBefore: previous.arrivalsNotBefore, rateLimitedUntil: previous.arrivalsRateLimitedUntil })
     : request(arrivalsURL).catch(() => ({ ok: false }));
-  const railTask = rail ? request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/ArrivalDepartures?lineIds=${record.lineID}`)).catch(() => ({ ok: false })) : Promise.resolve({ ok: false });
+  const railURL = rail ? activityRailDeparturesURL(record.stationID, record.lineID, config.tflAppKey) : null;
+  const railTask = railURL ? (arrivalReader
+    ? readRailDepartures(railURL, previous, arrivalReader, { fetchImpl, signal, clock, publicResponses })
+    : request(railURL)) : Promise.resolve({ ok: false });
   const [service, station] = await Promise.all([
     request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Status?detail=true`), 'GET', false, true),
     request(new URL(`https://api.tfl.gov.uk/StopPoint/${record.stationID}/Disruption?getFamily=true&includeRouteBlockedStops=true&flattenResponse=true`))
@@ -806,9 +906,11 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     if (events.length || observation && observation.expiresAt > completedAt) sources[source] = { ...(observation ? { expiresAt: observation.expiresAt } : {}), observedAt: events.length ? Math.max(...events.map((e) => e.receivedAt)) : observation.observedAt, events };
   };
   if (arrivals.ok && arrivals.status === 200) add('station-arrivals', parseStationArrivals(arrivals.value, record, arrivals.headers, arrivals.completedAt), Array.isArray(arrivals.value) && arrivals.value.length === 0 ? stationEmptyObservation(arrivals.headers, arrivals.completedAt) : null);
-  if (departures.ok) add('rail-departures', parseRailDepartures(departures.value, record, departures.headers, departures.completedAt), Array.isArray(departures.value) && departures.value.length === 0 ? httpObservation(departures.headers, departures.completedAt, 90000, { cacheRequired: true }) : null);
+  const railSource = railDepartureSource(record, departures, completedAt);
+  if (railSource) sources['rail-departures'] = railSource;
   if (journey.ok) add('journey-planner', parseJourney(journey.value, record, journey.headers, journeyDepartAt, journey.completedAt, actualRequestAt));
-  const selected = selectEvents({ sources }, record, completedAt);
+  const retainedRail = departures.deferred ? previous.sources?.['rail-departures'] : null;
+  const selected = selectEvents({ sources: retainedRail ? { ...sources, 'rail-departures': retainedRail } : sources }, record, completedAt);
   const usefulRail = selected.some((e) => e.sourceID === 'rail-departures' && e.kind === 'outgoingDeparture');
   const through = selected.some((e) => e.kind === 'throughArrival');
   const rawRows = Array.isArray(arrivals.value) ? arrivals.value.filter((row) => objectRow(row) && row.naptanId === record.stationID && row.lineId === record.lineID) : [];
@@ -934,7 +1036,9 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
 
   // Availability masks presentation. It never destroys the original source
   // context or creates a permanent publication-style closure rejection.
-  let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
+  const railReceipt = railDepartureReceipt(record, previous, departures, railSource, applicabilityAt);
+  let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, ...railReceipt,
+    nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
   if (ordinaryBoard && ordinaryNotBefore > applicabilityAt) merged.ordinaryNotBefore = ordinaryNotBefore;
   if (arrivalReader) merged = mergeStationArrivalRead(record, merged, arrivals, applicabilityAt, config.workerIntervalMs);
   return publicationAuthorityStore ? applyPublicationAuthority(merged, publicationAuthorityStore.publicationAuthority()) : merged;

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { STATION_BOARD_LINES, STATION_BOARD_STATIONS, validBoard, httpObservation, stationArrivalObservation, StationArrivalReader, refreshStationArrivals, londonClock, londonLocal, journeyURL, parseJourney, parseRailDepartures, parseStationArrivals, parseDestinationFacts, mergeContexts, selectEvents, countdown, nextBoundary, buildStationBoardState, refreshStationBoard } from '../server/station-board-v2.js';
-import { pushLiveActivityUpdate, stationBoardContentDigest, validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, getStationArrivalsRefreshDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
+import { pushLiveActivityUpdate, stationBoardContentDigest, validateTokenPayload, LiveActivityStore, loadConfig, runLiveActivityWorkerCycle, buildApnsPayload, getRolloverDelayMs, getLiveSourceRefreshDelayMs, LIVE_ACTIVITY_LINES } from '../server/live-activity.js';
 import { SerialWorker } from '../server/worker-lifecycle.js';
 const now = Date.parse('2026-10-01T13:00:00Z');
 const record = { activityID: 'synthetic-v2', installID: 'synthetic-install', stationID: '940GZZLUEGW', lineID: 'northern', selectionMode: 'allPlatforms', pushTokenHex: 'abcd'.repeat(16), tokenUpdatedAt: new Date(now).toISOString(), appBundleID: 'OllyJ.My-Train-Times', appVersion: '1.0', buildNumber: '1', environment: 'sandbox', contentStateContract: 'station-board-v2', plannedPresentationVersion: 2 };
@@ -562,7 +562,7 @@ test('UF276 durable retention shortens a source deadline without undoing its adm
   assert.equal(retained.arrivalsNotBefore, now + 30000);
   const loaded = new LiveActivityStore(store.filePath); await loaded.load();
   assert.equal(loaded.state.records[0].stationBoardCache.arrivalsRefreshAt, now + 45000);
-  assert.equal(getStationArrivalsRefreshDelayMs(retained, new Date(now + 1000)), 44000);
+  assert.equal(getLiveSourceRefreshDelayMs(retained, new Date(now + 1000)), 44000);
 });
 
 test('UF276 station complete-empty uses strict HTTP authority and failure cannot clear a live source', async (t) => {
@@ -588,6 +588,572 @@ test('UF276 station complete-empty uses strict HTTP authority and failure cannot
   let calls = 0;
   const blocked = await refreshStationArrivals(record, { ...cache, arrivalsRefreshAt: at }, loadConfig({}), async (...args) => { calls++; return fetchImpl(...args); }, at, null, () => at, new Map(), new StationArrivalReader());
   assert.equal(calls, 0); assert.equal(blocked.sources['station-arrivals'].observedAt, emptyObservedAt);
+});
+
+test('active typed boards share minute reads and publish newer qualified observations of the same train', async (t) => {
+  const store = await temporaryStore(t);
+  const second = { ...record, activityID: 'minute-second', installID: 'minute-second-install' };
+  await store.upsertToken(second, new Date(now));
+  const config = loadConfig({});
+  const reads = [], supplemental = [], pushes = [];
+  let at = now, observedAt = now;
+  const fetchImpl = async url => {
+    const path = new URL(url).pathname;
+    if (path.startsWith('/StopPoint/') && path.endsWith('/Arrivals')) {
+      reads.push(at);
+      return new Response(JSON.stringify([arrival({
+        id: 'same-train', timestamp: new Date(observedAt).toISOString(),
+        expectedArrival: new Date(now + 300000).toISOString(),
+      })]), { headers: headers(at) });
+    }
+    supplemental.push(path);
+    return new Response(JSON.stringify([]), { headers: headers(at) });
+  };
+  const cycle = (options = {}) => runLiveActivityWorkerCycle({ store, config, now: new Date(at),
+    clock: () => at, fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload); }, logger, ...options });
+
+  await cycle();
+  const initial = pushes[0].aps['content-state'];
+  assert.ok(initial.arrivals.length);
+  assert.equal(pushes.length, 2);
+  const supplementalCount = supplemental.length;
+  for (const registration of store.state.records) {
+    assert.equal(getLiveSourceRefreshDelayMs(registration.stationBoardCache, new Date(now)), 60000);
+  }
+
+  at = now + 59999;
+  await cycle({ sourceOnly: true });
+  assert.deepEqual(reads, [now]);
+
+  at = observedAt = now + 60000;
+  await cycle(); // A coalesced full trigger must still read when supplemental sources are not due.
+  assert.deepEqual(reads, [now, at]);
+  assert.equal(supplemental.length, supplementalCount);
+  assert.equal(pushes.length, 4);
+  const renewed = pushes[2].aps['content-state'];
+  assert.equal(renewed.arrivals[0].expectedArrival, initial.arrivals[0].expectedArrival);
+  assert.equal(renewed.updatedAt - initial.updatedAt, 60);
+  assert.equal(renewed.arrivals[0].expiresAt - initial.arrivals[0].expiresAt, 60);
+
+  at = now + 120000;
+  await cycle({ sourceOnly: true });
+  assert.deepEqual(reads, [now, now + 60000, at]);
+  assert.equal(pushes.length, 4, 'a repeated provider timestamp cannot renew the board');
+
+  for (const registration of [record, second]) {
+    await store.deactivate(registration.activityID, registration.environment, 'synthetic-stop', new Date(at));
+  }
+  at = now + 180000;
+  await cycle({ sourceOnly: true });
+  assert.equal(reads.length, 3, 'inactive registrations admit no source work');
+});
+
+test('a rider joining just before a station refresh shares the new observation with an earlier rider', async t => {
+  const store = await temporaryStore(t);
+  let at = now;
+  const reads = [], recipients = [];
+  const fetchImpl = async url => {
+    let rows = [];
+    if (new URL(url).pathname.endsWith('/Arrivals') && new URL(url).pathname.startsWith('/StopPoint/')) {
+      reads.push(at);
+      rows = [arrival({ timestamp: new Date(at).toISOString(), expectedArrival: new Date(now + 300000).toISOString() })];
+    }
+    return new Response(JSON.stringify(rows), { headers: headers(at) });
+  };
+  const cycle = () => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at),
+    clock: () => at, fetchImpl, pushImpl: async r => { recipients.push(r.activityID); }, logger });
+  await cycle();
+  at += 59000;
+  await store.upsertToken({ ...record, activityID: 'late-rider', installID: 'new-install' }, new Date(at));
+  await cycle();
+  assert.deepEqual(reads, [now, at]);
+  assert.deepEqual(recipients, [record.activityID, record.activityID, 'late-rider']);
+  assert.ok(store.state.records.every(r => r.stationBoardCache.sources['station-arrivals'].observedAt === at));
+});
+
+test('a newer retained observation can renew the clock with an unchanged content digest', async (t) => {
+  const store = await temporaryStore(t);
+  const event = row({ sourceID: 'station-arrivals', kind: 'throughArrival', timeEvidence: 'arrivalPrediction',
+    time: now + 240000, expiresAt: now + 150000 });
+  const pushes = [];
+  const cycle = at => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+    cacheOnly: true, fetchImpl: async () => assert.fail('cache boundary must not read the network'),
+    pushImpl: async (_, payload) => { pushes.push(payload.aps['content-state']); }, logger });
+
+  await store.retainStationBoard(record.activityID, record.environment, cacheOf(event), new Date(now));
+  await cycle(now);
+  const digest = store.state.records[0].lastBoardContentDigest;
+  assert.equal(pushes.length, 1);
+
+  const later = now + 60000;
+  await store.retainStationBoard(record.activityID, record.environment, cacheOf({ ...event, receivedAt: later }), new Date(later));
+  await cycle(later);
+  assert.equal(store.state.records[0].lastBoardContentDigest, digest);
+  assert.equal(pushes.length, 2);
+  assert.equal(pushes[1].updatedAt - pushes[0].updatedAt, 60);
+  await cycle(later + 1000);
+  assert.equal(pushes.length, 2);
+});
+
+test('provider-wide failures prevent an early empty push while the last live ETA is future', async (t) => {
+  for (const failure of [429, 503, 'timeout']) {
+    const store = await temporaryStore(t);
+    let at = now, outcome = 'live';
+    const pushes = [], boundaries = [];
+    const fetchImpl = async url => {
+      if (outcome === 'timeout') throw new DOMException('Synthetic source deadline', 'TimeoutError');
+      if (Number.isInteger(outcome)) return new Response(null, { status: outcome });
+      const path = new URL(url).pathname;
+      const arrivals = outcome === 'live' && path.startsWith('/StopPoint/') && path.endsWith('/Arrivals')
+        ? [arrival({ expectedArrival: new Date(now + (failure === 429 ? 600000 : 300000)).toISOString() })] : [];
+      return new Response(JSON.stringify(arrivals), { headers: headers(at) });
+    };
+    const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+      fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger,
+      scheduleRolloverPush: (_, state) => boundaries.push(state.nextBoardBoundaryAt), ...options });
+
+    await cycle();
+    const initial = pushes[0]['content-state'];
+    assert.ok(initial.arrivals.length, String(failure));
+    at = now + 90000;
+    outcome = failure;
+    await cycle();
+    assert.equal(pushes.length, 1, String(failure));
+    assert.equal(store.state.records[0].stationBoardCache.sources['station-arrivals'].observedAt, now);
+
+    at = now + 120000;
+    await cycle({ cacheOnly: true });
+    assert.equal(pushes.length, 1, 'expired source evidence is never republished or replaced by a waiting payload');
+    assert.equal(pushes[0]['stale-date'], (now + 120000) / 1000);
+    assert.equal(store.state.records[0].stationBoardCache.sources['station-arrivals'], undefined);
+    assert.equal(boundaries.at(-1), now + (failure === 429 ? 300000 : 300001));
+
+    if (failure !== 429) {
+      at = now + 300001;
+      await cycle({ cacheOnly: true });
+      assert.equal(pushes.length, 2);
+      assert.deepEqual(pushes[1]['content-state'].arrivals, []);
+      assert.equal(pushes[1]['content-state'].updatedAt, initial.updatedAt, 'elapsed ETA can signal waiting with the original clock');
+    }
+
+    at = now + 390000;
+    outcome = 'empty';
+    await cycle({ sourceOnly: true });
+    assert.equal(pushes.length, failure === 429 ? 2 : 3, String(failure));
+    const empty = pushes.at(-1)['content-state'];
+    assert.deepEqual(empty.arrivals, []);
+    assert.equal(empty.updatedAt - initial.updatedAt, 390, 'a qualified complete empty reaches the board before any remaining ETA');
+  }
+});
+
+test('upgrade preserves only the future ETAs proved by the last payload accepted from the old service', async t => {
+  const registration = { ...record, stationID: '940GZZLUCTN' };
+  const trains = [180000, 210000, 240000, 300000].map((offset, index) => row({
+    stationID: registration.stationID, id: `train-${index}`, sourceID: 'station-arrivals',
+    kind: 'throughArrival', timeEvidence: 'arrivalPrediction', time: now + offset,
+    direction: index === 3 ? 'Northbound' : 'Southbound',
+  }));
+  const cache = cacheOf(...trains);
+  const sent = buildStationBoardState(registration, cache, now, { preserveLegacyOrder: true });
+  assert.deepEqual(sent.arrivals.map(row => row.id), ['train-0', 'train-1', 'train-2']);
+  assert.deepEqual(buildStationBoardState(registration, cache, now).arrivals.map(row => row.id),
+    ['train-0', 'train-3', 'train-1']);
+  const { aps } = buildApnsPayload(sent, new Date(now));
+
+  for (const hasExactEvidence of [true, false]) {
+    let store = await temporaryStore(t, registration);
+    await store.retainStationBoard(registration.activityID, registration.environment, cache, new Date(now));
+    await store.markPushed(registration.activityID, registration.environment, {
+      emptyArrivals: false, contentState: sent,
+      contentDigest: hasExactEvidence ? stationBoardContentDigest(sent) : 'a'.repeat(64),
+      boardDelivery: { nextAt: trains[0].time, staleAt: aps['stale-date'] * 1000, context: 'prior', closed: false },
+    }, new Date(now));
+    const pushes = [];
+    const cycle = (at, options = {}) => runLiveActivityWorkerCycle({
+      store, config: loadConfig({}), now: new Date(at), clock: () => at,
+      fetchImpl: async () => new Response(null, { status: 503 }),
+      pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger, ...options,
+    });
+
+    // Upgrade with the original rows already expired, but still present in the
+    // previous service's durable cache. Failed transport never advances their clocks.
+    await cycle(now + 120000, { sourceOnly: true });
+    assert.equal(store.state.records[0].stationBoardCache.sources['station-arrivals'], undefined);
+    if (!hasExactEvidence) {
+      assert.deepEqual(pushes.map(push => push['content-state'].arrivals), [[]]);
+      continue;
+    }
+    assert.equal(pushes.length, 0);
+    assert.deepEqual(store.state.records[0].lastBoardDelivery.liveRows, sent.arrivals);
+    assert.equal(store.state.records[0].lastBoardDelivery.staleAt, aps['stale-date'] * 1000);
+
+    store = new LiveActivityStore(store.filePath);
+    await cycle(trains[2].time, { cacheOnly: true });
+    assert.deepEqual(pushes.map(push => push['content-state'].arrivals), [[sent.arrivals[2]]]);
+    assert.equal(pushes[0]['stale-date'], aps['stale-date']);
+    await cycle(trains[2].time + 1, { cacheOnly: true });
+    assert.deepEqual(pushes.map(push => push['content-state'].arrivals), [[sent.arrivals[2]], []]);
+    assert.ok(pushes.every(push => push['content-state'].updatedAt === sent.updatedAt));
+  }
+});
+
+test('an outage retires each delivered ETA on cache-only boundaries without renewing its source', async t => {
+  const stationID = '940GZZLUWOF';
+  const store = await temporaryStore(t, { ...record, stationID, lineID: 'central' });
+  const pushes = [], boundaries = [];
+  const etaOffsets = [180000, 210000, 240000];
+  let at = now, requests = 0;
+  const fetchImpl = async url => {
+    requests++;
+    const path = new URL(url).pathname;
+    if (at > now) return new Response(null, { status: 503 });
+    const rows = path === `/StopPoint/${stationID}/Arrivals` ? etaOffsets.map((offset, index) => ({
+      id: `woodford-outage-${index}`, lineId: 'central', naptanId: stationID,
+      destinationName: 'Epping', destinationNaptanId: '940GZZLUEPG',
+      platformName: 'Eastbound - Platform 3', expectedArrival: new Date(now + offset).toISOString(),
+      timestamp: new Date(now).toISOString(),
+    })) : [];
+    return new Response(JSON.stringify(rows), { headers: headers(at) });
+  };
+  const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+    fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger,
+    scheduleRolloverPush: (_, state) => boundaries.push(state.nextBoardBoundaryAt), ...options });
+
+  await cycle();
+  assert.equal(pushes.length, 1);
+  const initial = pushes[0]['content-state'];
+  assert.equal(initial.arrivals.length, 3);
+  at += 60000;
+  await cycle({ sourceOnly: true });
+  assert.equal(pushes.length, 1);
+  const afterFailure = requests;
+
+  at = now + 120000;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 1);
+  assert.equal(boundaries.at(-1), now + etaOffsets[0] + 1);
+  for (const [index, offset] of etaOffsets.entries()) {
+    at = now + offset + 1;
+    await cycle({ cacheOnly: true });
+    assert.equal(pushes.length, index + 2);
+    const rollover = pushes.at(-1);
+    assert.deepEqual(rollover['content-state'].arrivals, initial.arrivals.slice(index + 1));
+    assert.equal(rollover['content-state'].updatedAt, initial.updatedAt);
+    if (index < etaOffsets.length - 1) {
+      assert.equal(rollover['stale-date'], pushes[0]['stale-date']);
+      assert.equal(boundaries.at(-1), now + etaOffsets[index + 1] + 1);
+    }
+    at += 1000;
+    await cycle({ cacheOnly: true });
+    assert.equal(pushes.length, index + 2);
+  }
+  assert.equal(requests, afterFailure);
+});
+
+test('a sleeping Activity gets one cache-only warning at five minutes while unavailable ETAs remain future', async t => {
+  let store = await temporaryStore(t);
+  let at = now, requests = 0;
+  const pushes = [], boundaries = [];
+  const fetchImpl = async url => {
+    requests++;
+    if (at > now) return new Response(null, { status: 503 });
+    const rows = new URL(url).pathname === `/StopPoint/${record.stationID}/Arrivals`
+      ? [arrival({ expectedArrival: new Date(now + 420000).toISOString() })] : [];
+    return new Response(JSON.stringify(rows), { headers: headers(at) });
+  };
+  const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+    fetchImpl, pushImpl: async (_, payload, _config, { priority }) => { pushes.push({ ...payload.aps, priority }); }, logger,
+    scheduleRolloverPush: (_, state) => boundaries.push(state.nextBoardBoundaryAt), ...options });
+
+  await cycle();
+  at = now + 60000;
+  await cycle({ sourceOnly: true });
+  const afterFailure = requests;
+
+  at = now + 120000;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 1);
+  assert.equal(boundaries.at(-1), now + 300000);
+
+  at = now + 299999;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 1);
+  store = new LiveActivityStore(store.filePath);
+  await store.load();
+  at = now + 300000;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 2);
+  assert.equal(pushes[1].timestamp, now / 1000 + 300);
+  assert.equal(pushes[1].priority, '10');
+  assert.equal(pushes[1]['stale-date'], pushes[0]['stale-date']);
+  assert.equal(pushes[1]['content-state'].updatedAt, pushes[0]['content-state'].updatedAt);
+  assert.deepEqual(pushes[1]['content-state'].arrivals, pushes[0]['content-state'].arrivals);
+  assert.equal(store.state.records[0].lastBoardDelivery.delayedWarningSent, true);
+  assert.equal(boundaries.at(-1), now + 420001);
+
+  store = new LiveActivityStore(store.filePath);
+  await store.load();
+  at = now + 360000;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 2);
+  at = now + 420001;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 3);
+  assert.deepEqual(pushes[2]['content-state'].arrivals, []);
+  assert.equal(requests, afterFailure);
+});
+
+test('stale and malformed HTTP 200 reads cannot erase a delivered future ETA at source expiry', async t => {
+  for (const invalid of ['stale', 'malformed']) {
+    const store = await temporaryStore(t);
+    const pushes = [];
+    let at = now;
+    const fetchImpl = async url => {
+      if (!new URL(url).pathname.endsWith('/Arrivals')) return new Response('[]', { headers: headers(at) });
+      if (at === now) return new Response(JSON.stringify([arrival({
+        expectedArrival: new Date(now + 300000).toISOString()
+      })]), { headers: headers(at) });
+      return invalid === 'stale'
+        ? new Response('[]', { headers: headers(at, 151) })
+        : new Response('{"invalid":"arrivals shape"}', { headers: headers(at) });
+    };
+    const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at),
+      clock: () => at, fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger, ...options });
+
+    await cycle();
+    assert.equal(pushes[0]['content-state'].arrivals.length, 1);
+    at += 60000;
+    await cycle({ sourceOnly: true });
+    assert.deepEqual(store.state.records[0].stationBoardCache.stationArrivalAttempt,
+      { at, failed: true, observedAt: now }, invalid);
+
+    at = now + 120000;
+    await cycle({ cacheOnly: true });
+    assert.equal(pushes.length, 1, invalid);
+    assert.equal(store.state.records[0].stationBoardCache.sources['station-arrivals'], undefined);
+    assert.equal(pushes[0]['stale-date'], (now + 120000) / 1000);
+  }
+});
+
+test('a qualified older cached response cannot clear a station arrival failure', async t => {
+  const store = await temporaryStore(t);
+  const pushes = [];
+  let at = now;
+  const estimatedArrival = new Date(now + 300000).toISOString();
+  const fetchImpl = async url => {
+    if (!new URL(url).pathname.endsWith('/Arrivals')) return new Response('[]', { headers: headers(at) });
+    if (at === now + 60000) return new Response(null, { status: 404 });
+    if (at > now + 120000) return new Response('[]', { headers: headers(at) });
+    const observed = at === now ? now : now - 5000;
+    return new Response(JSON.stringify([arrival({
+      timestamp: new Date(observed).toISOString(), timing: { read: new Date(observed).toISOString() },
+      expectedArrival: estimatedArrival,
+    })]), { headers: headers(observed) });
+  };
+  const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at),
+    clock: () => at, fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger, ...options });
+
+  await cycle();
+  at = now + 60000;
+  await cycle({ sourceOnly: true });
+  assert.equal(store.state.records[0].stationBoardCache.stationArrivalAttempt.failed, true);
+
+  at = now + 105000;
+  await cycle({ sourceOnly: true });
+  const cache = store.state.records[0].stationBoardCache;
+  assert.equal(cache.sources['station-arrivals'].observedAt, now);
+  assert.deepEqual(cache.stationArrivalAttempt, { at, failed: true, observedAt: now });
+
+  at = now + 120000;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 1);
+  at = now + 135000;
+  await cycle({ sourceOnly: true });
+  assert.deepEqual(store.state.records[0].stationBoardCache.stationArrivalAttempt,
+    { at, failed: false, observedAt: at });
+  assert.deepEqual(pushes.at(-1)['content-state'].arrivals, []);
+  assert.equal(pushes.at(-1)['content-state'].updatedAt - pushes[0]['content-state'].updatedAt, 135);
+});
+
+test('a qualified station closure supersedes a future ETA during a source outage', async (t) => {
+  const store = await temporaryStore(t);
+  const pushes = [];
+  let at = now;
+  const fetchImpl = async url => {
+    const path = new URL(url).pathname;
+    if (at > now && path.endsWith('/Arrivals')) return new Response(null, { status: 503 });
+    const rows = path.startsWith('/StopPoint/') && path.endsWith('/Arrivals')
+      ? [arrival({ expectedArrival: new Date(now + 300000).toISOString() })]
+      : at === now + 180000 && path.endsWith('/Disruption') ? [{
+        stationAtcoCode: record.stationID, type: 'StationClosure',
+        fromDate: new Date(now + 150000).toISOString(), toDate: new Date(now + 600000).toISOString(),
+      }] : [];
+    return new Response(JSON.stringify(rows), { headers: headers(at) });
+  };
+  const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+    fetchImpl, pushImpl: async (_, payload, _config, { priority }) => { pushes.push({ payload, priority }); }, logger, ...options });
+
+  await cycle();
+  assert.ok(pushes[0].payload.aps['content-state'].arrivals.length);
+  at = now + 90000;
+  await cycle();
+  at = now + 120000;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 1);
+  at = now + 180000;
+  await cycle();
+  assert.equal(pushes.length, 2);
+  assert.deepEqual(pushes[1].payload.aps['content-state'].arrivals, []);
+  assert.equal(pushes[1].priority, '10');
+});
+
+test('a failed rail departure read keeps the delivered ETA hold across a service restart', async (t) => {
+  const stationID = '910GSHENFLD';
+  let store = await temporaryStore(t, { ...record, stationID, lineID: 'elizabeth' });
+  const pushes = [];
+  let at = now, railFailure = false;
+  const fetchImpl = async url => {
+    const isRail = new URL(url).pathname.endsWith('/ArrivalDepartures');
+    if (isRail && railFailure) return new Response(null, { status: 503 });
+    const rows = isRail ? [{
+      naptanId: stationID, destinationName: 'Liverpool Street', destinationNaptanId: '910GLIVSTLL',
+      departureStatus: 'OnTime', estimatedTimeOfDeparture: new Date(now + 240000).toISOString(), platformName: '2',
+    }] : [];
+    return new Response(JSON.stringify(rows), { headers: headers(at) });
+  };
+  const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+    fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger, ...options });
+
+  await cycle();
+  assert.equal(pushes[0]['content-state'].arrivals[0].timeEvidence, 'estimatedDeparture');
+  assert.equal(pushes[0]['stale-date'], (now + 90000) / 1000);
+  at = now + 90000;
+  railFailure = true;
+  await cycle();
+  assert.equal(pushes.length, 1);
+  assert.equal(store.state.records[0].stationBoardCache.sources['rail-departures'], undefined);
+
+  store = new LiveActivityStore(store.filePath);
+  await store.load();
+  at = now + 239999;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 1);
+  at = now + 240001;
+  await cycle({ cacheOnly: true });
+  assert.equal(pushes.length, 2);
+  assert.deepEqual(pushes[1]['content-state'].arrivals, []);
+});
+
+test('partial rail responses and invalid Age headers cannot clear a future ETA in either worker path', async t => {
+  const stationID = '910GSHENFLD';
+  for (const sourceOnly of [false, true]) {
+    for (const invalid of [{ status: 206, age: '0' }, { status: 200, age: '' }, { status: 200, age: '0.5' }]) {
+      const store = await temporaryStore(t, { ...record, stationID, lineID: 'elizabeth' });
+      const pushes = [];
+      let at = now;
+      const fetchImpl = async url => {
+        if (!new URL(url).pathname.endsWith('/ArrivalDepartures')) {
+          return new Response('[]', { headers: headers(at) });
+        }
+        if (at === now + 90000) {
+          return new Response('[]', { status: invalid.status, headers: { ...headers(at), age: invalid.age } });
+        }
+        const departures = at === now ? [{
+          naptanId: stationID, destinationName: 'Liverpool Street', destinationNaptanId: '910GLIVSTLL',
+          departureStatus: 'OnTime', estimatedTimeOfDeparture: new Date(now + 240000).toISOString(), platformName: '2',
+        }] : [];
+        return new Response(JSON.stringify(departures), { headers: headers(at) });
+      };
+      const cycle = options => runLiveActivityWorkerCycle({
+        store, config: loadConfig({}), now: new Date(at), clock: () => at, fetchImpl, logger,
+        pushImpl: async (_, payload) => { pushes.push(payload.aps); }, ...options,
+      });
+
+      await cycle();
+      const original = pushes[0];
+      assert.equal(original['content-state'].arrivals[0].timeEvidence, 'estimatedDeparture');
+      at = now + 90000;
+      await cycle({ sourceOnly });
+      assert.deepEqual(store.state.records[0].stationBoardCache.railDepartureAttempt,
+        { at, failed: true, observedAt: now });
+      assert.equal(pushes.length, 1);
+      assert.equal(original['stale-date'], at / 1000);
+
+      at = now + 150000;
+      await cycle({ sourceOnly: true });
+      assert.deepEqual(store.state.records[0].stationBoardCache.railDepartureAttempt,
+        { at, failed: false, observedAt: at });
+      assert.deepEqual(pushes.map(push => push['content-state'].arrivals.length), [1, 0]);
+    }
+  }
+});
+
+test('active rail boards share minute reads independently of the supplemental cycle and survive durable backoff', async (t) => {
+  for (const failure of [429, 503]) {
+    const stationID = '910GSHENFLD';
+    const railBoard = { ...record, stationID, lineID: 'elizabeth' };
+    let store = await temporaryStore(t, railBoard);
+    await store.upsertToken({ ...railBoard, activityID: 'second-rail', installID: 'second-rail' }, new Date(now));
+    await store.upsertToken({ ...record, activityID: 'unrelated-tube', installID: 'unrelated-tube' }, new Date(now));
+
+    let at = now, railFailure = null;
+    const railReads = [], supplemental = [], pushes = [];
+    const fetchImpl = async url => {
+      const { pathname, searchParams } = new URL(url);
+      if (pathname.endsWith('/ArrivalDepartures')) {
+        railReads.push(at);
+        assert.equal(pathname, `/StopPoint/${stationID}/ArrivalDepartures`);
+        assert.equal(searchParams.get('lineIds'), 'elizabeth');
+        if (railFailure) return new Response(null, { status: railFailure, headers: { 'Retry-After': '420' } });
+        return new Response(JSON.stringify([{
+          id: 'stable-estimate', naptanId: stationID, destinationName: 'Liverpool Street', destinationNaptanId: '910GLIVSTLL',
+          departureStatus: 'OnTime', estimatedTimeOfDeparture: new Date(now + 900000).toISOString(), platformName: '2',
+        }]), { headers: headers(at) });
+      }
+      if (!pathname.startsWith('/StopPoint/') || !pathname.endsWith('/Arrivals')) supplemental.push(at);
+      return new Response(JSON.stringify([]), { headers: headers(at, 0, 120) });
+    };
+    const cycle = (offset, options) => {
+      at = now + offset;
+      return runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+        fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps['content-state']); }, logger, ...options });
+    };
+    await cycle(0);
+    assert.deepEqual(railReads, [now]);
+    const railState = pushes.find(state => state.arrivals.some(row => row.timeEvidence === 'estimatedDeparture'));
+    assert.ok(railState);
+    const stored = store.state.records.find(r => r.activityID === railBoard.activityID);
+    assert.equal(getLiveSourceRefreshDelayMs({ railDeparturesNotBefore: stored.stationBoardCache.railDeparturesNotBefore }, new Date(now)), 60000);
+    const firstSupplementCount = supplemental.length;
+    await cycle(60000, { sourceOnly: true });
+    assert.deepEqual(railReads, [now, now + 60000]);
+    assert.equal(supplemental.length, firstSupplementCount);
+    assert.ok(pushes.some(state => state.updatedAt === railState.updatedAt + 60
+      && state.arrivals.some(row => row.timeEvidence === 'estimatedDeparture')));
+    await cycle(90000);
+    assert.equal(railReads.length, 2, 'the earlier minute read also fences the full refresh');
+    assert.ok(supplemental.length > firstSupplementCount);
+    railFailure = failure;
+    await cycle(120000, { sourceOnly: true });
+    assert.equal(railReads.length, 3);
+    const retryOffset = 120000 + (failure === 429 ? 420000 : 120000);
+    await store.deactivate(railBoard.activityID, railBoard.environment, 'synthetic-stop', new Date(at));
+    await store.deactivate('second-rail', railBoard.environment, 'synthetic-stop', new Date(at));
+    store = new LiveActivityStore(store.filePath);
+    await store.load();
+    assert.equal(store.railDepartureAdmissionFloors(at)[0].notBefore, now + retryOffset);
+    await store.upsertToken({ ...railBoard, activityID: 'new-rail', installID: 'new-rail' }, new Date(at + 1));
+    await cycle(retryOffset - 1);
+    assert.equal(railReads.length, 3, 'a restart plus new registration cannot bypass the shared URL floor');
+    railFailure = null;
+    await cycle(retryOffset, { sourceOnly: true });
+    assert.equal(railReads.length, 4);
+    for (const registration of store.state.records) {
+      await store.deactivate(registration.activityID, registration.environment, 'synthetic-stop', new Date(at));
+    }
+    await cycle(retryOffset + 60000);
+    assert.equal(railReads.length, 4);
+  }
 });
 
 test('UF276 thirty-minute source renewals share requests across registrations without extra supplemental reads', async (t) => {
@@ -753,7 +1319,7 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
         try {
           await runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at, signal, ...mode, fetchImpl,
             pushImpl: async (_, payload) => { await latency(1000, signal); delivered.push({ at, payload }); return { status: 200 }; },
-            scheduleSourceRefresh: (r, cache, current, interval) => worker.scheduleRerun(`${r.activityID}:source`, getStationArrivalsRefreshDelayMs(cache, current, interval), { sourceOnly: true }),
+            scheduleSourceRefresh: (r, cache, current, interval) => worker.scheduleRerun(`${r.activityID}:source`, getLiveSourceRefreshDelayMs(cache, current, interval), { sourceOnly: true }),
             scheduleRolloverPush: (r, state, current, interval) => worker.scheduleRerun(`${r.activityID}:cache`, getRolloverDelayMs(state, current, interval), { cacheOnly: true }), logger });
         } finally { active--; currentCycle = undefined; }
       }
