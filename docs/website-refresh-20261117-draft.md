@@ -8,9 +8,9 @@ This copy prepares the station → train destination → departure-time story fo
 
 The home page hero shows Woodford’s predicted Central line departures on platforms 2 and 3. The PNG is the original iPhone simulator capture from the ordinary Release build 20261118110726, version 1.2.6, at source ed2e82e43f17d999941dc13eba679b5937e8b13e. The WebP copy has identical decoded RGB pixels.
 
-The existing Follow route, Lock Screen Live Activity and social card retain their independent capture provenance in build 20261118001152. The paired iPad and iPhone storefront images and seven en-GB metadata fields are in the private release evidence directory.
+The Follow section uses a controlled Woodford route on iPhone simulator from local build 20261121233653. The social card retains its separate capture provenance in build 20261118001152. The earlier Lock Screen asset is retained in source. The paired iPad and iPhone storefront images and seven en-GB metadata fields are in the private release evidence directory.
 
-Add Station still uses build 20261117225101. The separate By destination, Next departures, Duo and disruption-widget images retain their earlier versions. See website-refresh-20261117-assets.json for provenance. Paid Follow was exercised using a local StoreKit test transaction. Sustained background delivery, StandBy geometry and a paired Watch still require physical verification.
+Add Station still uses build 20261117225101. Home shows saved Leyton and recent Brixton in a raw native iPhone 17 Pro Max simulator capture from 1.2.6 (20261121142731), using a controlled saved and recent station setup. Both new PNGs are original captures and the WebP versions preserve their pixels. By destination and Next departures retain earlier captures. See website-refresh-20261117-assets.json for provenance. Paid Follow was exercised using a local StoreKit test transaction. Sustained background delivery, StandBy geometry and a paired Watch still require physical verification.
 
 This branch is a website source draft. Publication is a separate owner decision. Its service base includes code beyond the currently deployed production version. A website-only release must select the intended deployable revision and preserve production service configuration.
 

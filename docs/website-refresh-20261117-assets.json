@@ -101,9 +101,7 @@
     "remainingEarlierAssets": [
       "Add Station",
       "By destination",
-      "Duo",
-      "Next departures",
-      "Disruption Widget"
+      "Next departures"
     ]
   },
   "finalSourceHero": {
@@ -124,5 +122,37 @@
     "webpSHA256": "9e8ee979ef35eac1e37015b06573bc890b0f8ba3e77658228a7bce2569a2b483",
     "normalizedDecodedPixelSHA256": "4db0e5cb79beb751b360fe5d6e39c919da8638c7b015689d8093242a7d975f0b",
     "capture": "Ordinary Release on iPhone 17 Pro Max simulator, dark appearance, standard Large text, naturally timed. Woodford, Central line, three westbound Platform 2 and seven eastbound Platform 3 predicted rows, Central severe-delay advisory."
+  },
+  "stationHomeCapture": {
+    "stem": "saved-home-1-2-6-20261121142731",
+    "version": "1.2.6",
+    "build": "20261121142731",
+    "sourceCommit": "1d768faa94d51069ccf3385bb438bfcae06395c8",
+    "sourceWithinTubeBoardReleaseEvidence": "20261121-release-journeys/home/current-store-draft/native-link/phone/saved-home.png",
+    "provenanceReceipt": "20261121-release-journeys/home/current-store-draft/native-link/phone/capture-receipt.json",
+    "size": [
+      1320,
+      2868
+    ],
+    "pngSHA256": "9e6269a2c84c3f75a2d087dca04be2ef96baf0002316697169734168f19ffa8a",
+    "webpSHA256": "d668902fc6450378aa1687caed8528abd7a566d668b2215ce662d378daa6b70f",
+    "normalizedDecodedPixelSHA256": "61fbb79c85e6a0e4690010f9e09ae473abddb88497a59fdd3050848ef5e48ce4",
+    "capture": "Native iPhone 17 Pro Max simulator Home with controlled saved Leyton and recent Brixton. Original capture PNG and pixel-identical WebP."
+  },
+  "followCapture": {
+    "stem": "follow-train-1-2-6-20261121233653",
+    "version": "1.2.6",
+    "build": "20261121233653",
+    "sourceCommit": "3fb0d60ec97d48f1d0fae676e5978aea67431dd7",
+    "sourceWithinTubeBoardReleaseEvidence": "20261121-countdowns-origins/native/targeted_app_3fb0d60e/attachments/0A6632D3-C44C-48E2-B809-5381D97AD7D7.png",
+    "provenanceReceipt": "20261121-countdowns-origins/native/targeted_app_3fb0d60e/readout.md",
+    "size": [
+      1320,
+      2868
+    ],
+    "pngSHA256": "43c1d1b21458c9a9a7f414c0b4b1604786f40207fb8e4755c8c069ea6f0a740d",
+    "webpSHA256": "22c1e96b93bf73a90c66c07cf1f86801b0cc8fc3b61805bb22cda8a348c11db6",
+    "normalizedDecodedPixelSHA256": "3e65403249f51f8c01b2d15d31bd38e8e82150eead23f90e9d0f658d83560e8f",
+    "capture": "Native iPhone simulator Premium Follow fixture, with a Central line train approaching Woodford towards Ealing Broadway. Original capture PNG and pixel-identical WebP."
   }
 }
