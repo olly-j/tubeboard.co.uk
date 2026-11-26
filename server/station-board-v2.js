@@ -80,6 +80,9 @@ function ordinaryReceipt(response) {
   return observation ? { observation } : { retryable: true };
 }
 
+// Row IDs bind the service day, booked minute and complete ordered call path.
+const ordinaryWorkingKeys = events => canonical(events.map(e => e.id).sort());
+
 function ordinaryContext(previous, events, source, signature, record, now) {
   if (!events.length) return null;
   const proof = { signature, observedAt: source.observedAt };
@@ -92,14 +95,13 @@ function ordinaryContext(previous, events, source, signature, record, now) {
   const earlierProof = previous.evidence?.ordinaryTimetable;
   if (earlierProof && earlierProof.signature !== signature) return null;
 
-  // Row IDs bind the service day, booked minute and complete ordered call path.
-  // A pre-upgrade cache has no whole-day proof; qualify its remaining overlap
-  // before carrying the new timetable identity forward.
+  // A legacy cache proves only its retained overlap. An equal or older
+  // receipt cannot confer authority on the unobserved rest of the day.
   const retainedByID = new Map(retained.map(e => [e.id, e]));
   if (!earlierProof) {
     const lastRetainedTime = Math.max(...retained.map(e => e.time));
-    const keys = rows => canonical(rows.map(e => e.id).sort());
-    if (keys(retained) !== keys(events.filter(e => e.time <= lastRetainedTime))) return null;
+    if (ordinaryWorkingKeys(retained) !== ordinaryWorkingKeys(events.filter(e => e.time <= lastRetainedTime))) return null;
+    context.evidence = { ordinaryOverlap: true };
   }
 
   proof.observedAt = Math.max(earlierProof?.observedAt ?? -Infinity, source.observedAt);
@@ -585,9 +587,9 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       if (!events.length && !(Array.isArray(context.events) && context.events.length === 0 && (normalized === 'rail-departures' || normalized === 'station-arrivals' && Number.isFinite(context.expiresAt) && context.expiresAt > context.observedAt && context.expiresAt <= context.observedAt + 120000 || normalized === 'timetable' && context.qualificationOrigin === 'server' && context.expiresAt > now))) continue;
       const earlierProof = old?.evidence?.ordinaryTimetable;
       const renewedRegular = normalized === 'regular-timetable' && old && context.observedAt === old.observedAt
-        && context.evidence?.ordinaryTimetable
-        && (!earlierProof || earlierProof.signature === context.evidence.ordinaryTimetable.signature)
-        && context.expiresAt > (old.expiresAt ?? Math.max(...old.events.map(e => e.expiresAt)));
+        && context.expiresAt > (old.expiresAt ?? Math.max(...old.events.map(e => e.expiresAt)))
+        && (earlierProof ? earlierProof.signature === context.evidence?.ordinaryTimetable?.signature
+          : context.evidence?.ordinaryOverlap === true && ordinaryWorkingKeys(old.events) === ordinaryWorkingKeys(events));
       if (!old || context.observedAt > old.observedAt || renewedRegular) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }

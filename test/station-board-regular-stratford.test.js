@@ -285,29 +285,73 @@ test('an unchanged observed timetable keeps supplying its rolling tail past the 
   assert.ok(f.push.at(-1).arrivals.some(row => row.plannedSourceID === 'regular-timetable'));
 });
 
-test('a legacy Edgware cache establishes whole-day proof only after exact overlap qualification', async t => {
+async function legacyEdgware(t) {
   const f = await activeEdgware(t);
   await f.cycle(0, capturedAt);
   const persisted = JSON.parse(fs.readFileSync(f.filename, 'utf8'));
   const original = regular(persisted.records[0].stationBoardCache);
   delete original.evidence;
   delete original.expiresAt;
-  const initialIDs = new Set(original.events.map(row => row.id));
   fs.writeFileSync(f.filename, JSON.stringify(persisted));
   f.restart();
+  return { ...f, originalEvents: original.events };
+}
 
+test('legacy Edgware overlap cannot authorize a changed tail until a newer provider observation', async t => {
+  const f = await legacyEdgware(t);
+  const initialIDs = new Set(f.originalEvents.map(row => row.id));
+  const at = label => Date.parse('2026-11-26T' + label + ':00Z');
+  assert.ok(!f.originalEvents.some(row => row.time === at('17:37')), 'the old horizon did not establish this working');
+
+  const changed = structuredClone(edgware.body);
+  const shifted = changed.timetable.routes.flatMap(route => route.schedules)
+    .flatMap(schedule => schedule.knownJourneys).find(row => row.hour === '17' && row.minute === '37');
+  assert.ok(shifted);
+  shifted.minute = '38';
   const olderObservation = capturedAt - 60000;
-  await f.cycle(450000, olderObservation);
+  await f.cycle(450000, olderObservation, changed);
   const first = regular(await f.current(capturedAt + 450000));
-  assert.equal(first.evidence.ordinaryTimetable.observedAt, olderObservation);
   assert.ok(first.events.length && first.events.every(row => initialIDs.has(row.id)
     && row.receivedAt === capturedAt && row.expiresAt === capturedAt + 1050000));
 
-  await f.cycle(900000, olderObservation);
+  await f.cycle(900000, capturedAt, changed);
   const next = regular(await f.current(capturedAt + 900000));
-  assert.ok(next.events.some(row => initialIDs.has(row.id) && row.receivedAt === capturedAt));
-  assert.ok(next.events.some(row => !initialIDs.has(row.id) && row.receivedAt === olderObservation));
-  assert.ok(next.events.every(row => row.expiresAt === capturedAt + 1500000));
+  assert.ok(!next.events.some(row => row.time === at('17:38')), 'matching legacy overlap must not authorize the shifted unknown working');
+  assert.ok(next.events.length && next.events.every(row => initialIDs.has(row.id)
+    && row.receivedAt === capturedAt && row.expiresAt === capturedAt + 1500000));
+  assert.equal(next.evidence?.ordinaryTimetable, undefined);
+
+  const newerObservation = capturedAt + 1350000;
+  await f.cycle(1350000, newerObservation);
+  const confirmed = regular(await f.current(newerObservation));
+  assert.equal(confirmed.evidence.ordinaryTimetable.observedAt, newerObservation);
+  assert.ok(confirmed.events.some(row => row.time === at('17:37') && row.receivedAt === newerObservation));
+  assert.ok(!confirmed.events.some(row => row.time === at('17:38')));
+
+  await f.cycle(1800000, newerObservation);
+  const renewed = regular(await f.current(capturedAt + 1800000));
+  const lastConfirmed = Math.max(...confirmed.events.map(row => row.time));
+  assert.ok(renewed.events.some(row => row.time > lastConfirmed && row.receivedAt === newerObservation));
+});
+
+test('a current HTTP receipt can start a new whole-day context after legacy workings expire', async t => {
+  const f = await legacyEdgware(t);
+  const olderObservation = capturedAt - 60000;
+  await f.cycle(450000, olderObservation);
+  const cutoff = capturedAt + 1050000;
+  assert.equal(regular(await f.current(capturedAt + 450000)).expiresAt, cutoff);
+  await f.cycle(1050000, olderObservation, edgware.body, true);
+  assert.equal(regular(await f.current(cutoff)), undefined);
+  f.restart();
+  const readAt = cutoff + 1000;
+  await f.cycle(1051000, olderObservation);
+  const confirmed = regular(await f.current(readAt));
+  assert.equal(confirmed.observedAt, olderObservation);
+  assert.equal(confirmed.evidence.ordinaryTimetable.observedAt, olderObservation);
+  assert.ok(confirmed.events.length && confirmed.events.every(row => row.time >= readAt
+    && row.receivedAt === olderObservation && row.expiresAt === readAt + 600000));
+  assert.ok(confirmed.events.some(row => !f.originalEvents.some(prior => prior.id === row.id)));
+  assert.ok(f.push.at(-1).arrivals.some(row => row.plannedSourceID === 'regular-timetable'));
 });
 
 // Original 26 November TfL headers and SHA-256s. The station timetables
