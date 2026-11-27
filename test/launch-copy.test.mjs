@@ -47,7 +47,8 @@ test('launch schema and visible links identify the same existing app without cha
   for (const match of home.matchAll(/href="(https:\/\/apps.apple.com[^\"]+)"/g)) {
     assert.equal(match[1], appStoreURL);
   }
-  assert.ok(app.featureList.some((feature) => /Premium Follow a Train/.test(feature)));
+  assert.ok(app.featureList.includes('Premium routes and known stops, with sharing for identifiable live Underground trains'));
+  assert.ok(app.featureList.includes('Countdowns for available live predictions'));
   assert.ok(app.featureList.some((feature) => /London Overground/.test(feature)));
   assert.ok(app.featureList.some((feature) => /By destination/.test(feature)));
   assert.ok(app.featureList.some((feature) => /Apple Watch.*widgets/.test(feature)));
@@ -74,7 +75,7 @@ test('homepage and support agree on line coverage and current Premium continuity
     assert.ok(support.includes(line));
   }
   for (const { html } of pages) {
-    assert.match(html, /existing monthly, yearly or Lifetime purchase includes the new Premium features/);
+    assert.match(html, /existing monthly, yearly or Lifetime purchase includes (?:the new|these) Premium features/);
     assert.match(html, /Next departures within each direction|Next departures, ordered within each direction/);
     assert.match(html, /compatible watch face/);
     assert.doesNotMatch(html, /private universal-link|specific Premium train|non-scrolling stop sequence/);
@@ -92,15 +93,21 @@ test('support distinguishes route context, live proof, onward workings and brows
   assert.doesNotMatch(support, /never misses|guaranteed|track every train/i);
 });
 
-test('social preview copy and current-source assets match across cards', () => {
+test('social cards use neutral product copy and preserve held asset and release gates', async () => {
   const ogTitle = home.match(/property="og:title" content="([^"]+)"/)?.[1];
   const twitterTitle = home.match(/name="twitter:title" content="([^"]+)"/)?.[1];
   const ogDescription = home.match(/property="og:description" content="([^"]+)"/)?.[1];
   const twitterDescription = home.match(/name="twitter:description" content="([^"]+)"/)?.[1];
   assert.equal(ogTitle, twitterTitle);
   assert.equal(ogDescription, twitterDescription);
-  assert.match(ogTitle, /1\.2/);
+  assert.equal(ogTitle, 'TubeBoard: your station and your next train');
+  assert.doesNotMatch(ogTitle, /TubeBoard \d|coming soon|awaiting/i);
+  assert.doesNotMatch(home, />New in (?:TubeBoard|version|1\.)|Coming in 1\.2\.3/);
+  const draft = await fs.readFile(new URL('../docs/website-refresh-20261117-draft.md', import.meta.url), 'utf8');
+  assert.match(draft, /Status: draft source, not public-ready/);
+  assert.match(draft, /build 20261117225101/);
+  assert.match(home, /assets\/product\/add-station-1-2-6-20261117225101\.png/);
   assert.match(home, /TB-088 release gate/);
-  assert.match(home, /tubeboard-og-v1-2-20260905103957\.png/);
+  assert.match(home, /tubeboard-og-1-2-6-20261118001152\.png/);
   assert.doesNotMatch(home, /v1-1-20260825/);
 });
