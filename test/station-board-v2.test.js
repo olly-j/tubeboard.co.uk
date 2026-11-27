@@ -19,6 +19,27 @@ function journey(overrides = {}, stationID = record.stationID, lineID = record.l
 async function temporaryStore(t, registration = record, registeredAt = now) { const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-v2-')); t.after(() => fs.rm(dir, { recursive: true, force: true })); const store = new LiveActivityStore(path.join(dir, 'records.json')); await store.upsertToken(registration, new Date(registeredAt)); return store; }
 const logger = { info() {}, warn() {}, error() {} };
 
+test('a dated destination replaces a conflicting single regular origin call in the push', () => {
+  const scoped = { ...record, stationID: '940GZZLUUPM', lineID: 'district', supportsRegularTimetable: true };
+  const local = { stationID: scoped.stationID, lineID: scoped.lineID, time: now + 180000, nextScheduledStopID: '940GZZLUUPB' };
+  const regular = row({ ...local, sourceID: 'regular-timetable', id: 'usual', providerDirection: null,
+    destination: 'Richmond', destinationStationID: '940GZZLURMD', expiresAt: now + 600000 });
+  const dated = row({ ...local, id: 'dated', destination: 'Parsons Green', destinationStationID: '940GZZLUPSG' });
+  const ids = (...rows) => selectEvents(cacheOf(...rows), scoped, now).map(e => e.id).sort();
+  assert.deepEqual(ids(regular, dated), ['dated']);
+  assert.deepEqual(ids(regular), ['usual']);
+  assert.deepEqual(buildStationBoardState(scoped, cacheOf(regular, dated), now).arrivals.map(e => e.destination), ['Parsons Green']);
+  const later = { ...regular, id: 'later', time: now + 480000, destination: 'Ealing Broadway', destinationStationID: '940GZZLUEBY' };
+  const retained = mergeContexts({}, cacheOf(regular, dated, later), scoped, now);
+  assert.deepEqual(selectEvents(retained, scoped, dated.expiresAt).map(e => e.id), ['later']);
+  assert.deepEqual(ids(regular, dated, { ...regular, id: 'another', destination: 'Wimbledon', destinationStationID: '940GZZLUWIM' }),
+    ['another', 'dated', 'usual']);
+  for (const distinct of [{ ...regular, time: regular.time + 60000 }, { ...regular, nextScheduledStopID: undefined },
+    { ...regular, nextScheduledStopID: '940GZZLUUPY' }, { ...regular, platform: 'Platform 1' }]) {
+    assert.deepEqual(ids(distinct, dated), ['dated','usual']);
+  }
+});
+
 test('all19 exact catalogue boards negotiate v2 while v1 allowlist remains17', () => {
   assert.equal(STATION_BOARD_LINES.size, 19); assert.equal(LIVE_ACTIVITY_LINES.size, 17);
   for (const [lineID, line] of STATION_BOARD_LINES) {

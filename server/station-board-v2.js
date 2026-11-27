@@ -556,6 +556,13 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       if (!old || context.observedAt > old.observedAt) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }
+  const usual = sources['regular-timetable'], dated = sources['journey-planner'];
+  if (usual && dated && supportsRegularOrigin(record)) {
+    const rule = regularOriginRule(record);
+    const starts = dated.events.filter(e => rule.physicalEnd || hasExclusiveStartingCall(e, rule));
+    const superseded = supersededRegularDestinations([...usual.events, ...starts]);
+    if (superseded.size) usual.events = usual.events.filter(e => !superseded.has(e));
+  }
   const ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, incoming.ordinaryNotBefore || 0);
   const arrivalsRateLimitedUntil = Math.max(previous.arrivalsRateLimitedUntil || 0, incoming.arrivalsRateLimitedUntil || 0);
   const railDeparturesNotBefore = Math.max(previous.railDeparturesNotBefore || 0, incoming.railDeparturesNotBefore || 0);
@@ -605,6 +612,34 @@ function atPlatformDestination(e) {
   return e.kind === 'outgoingDestinationOnly' && e.time == null && e.timeEvidence == null
     && /^(?:[0-9]+[a-z]?|[a-z])$/.test(text(e.platform)?.toLowerCase().replace(/^platform\s+/, '') || '');
 }
+function supersededRegularDestinations(events) {
+  const regular = events.filter(e => plannedSource(e) === 'regular-timetable');
+  const dated = events.filter(e => plannedSource(e) === 'journey-planner');
+  const superseded = new Set();
+  if (!regular.length || !dated.length) return superseded;
+  // The record has already scoped the station and line. One usual departure
+  // to this next stop can be replaced by a differently advertised dated one.
+  const slots = new Map();
+  for (const row of [...regular, ...dated]) {
+    if (!text(row.nextScheduledStopID) || row.nextScheduledStopID === row.stationID) continue;
+    const slot = row.time + '/' + row.nextScheduledStopID;
+    if (!slots.has(slot)) slots.set(slot, { usual: [], dated: [] });
+    const group = slots.get(slot);
+    if (row.sourceID === 'regular-timetable') group.usual.push(row);
+    else group.dated.push(row);
+  }
+  for (const { usual, dated } of slots.values()) {
+    if (usual.length !== 1 || !dated.length) continue;
+    const [row] = usual;
+    // The recurring adapter supplies neither a platform nor a direction.
+    // Leave any more specific boarding evidence to its own selection.
+    if (row.platform || row.direction || row.providerDirection || !row.destinationStationID) continue;
+    if (dated.every(other => other.destinationStationID && other.destinationStationID !== row.destinationStationID)) {
+      superseded.add(row);
+    }
+  }
+  return superseded;
+}
 export function selectEvents(cache, record, now, { retainingMaskedPlans = false, retainingPlannedAlternatives = false } = {}) {
   const proofs = retainAvailability(cache, {}, record, now);
   let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && proofs.some((p) => (!retainingMaskedPlans || p.plannedUnavailable === true && p.scheduledClockOnly !== true) && blocksScheduled(p, e.time, now))) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
@@ -621,7 +656,9 @@ export function selectEvents(cache, record, now, { retainingMaskedPlans = false,
   }
   const regularAnswers = events.filter(e => e.sourceID !== 'regular-timetable' && ['outgoingDeparture', 'throughArrival'].includes(e.kind)
     && Number.isFinite(e.time) && e.time <= now + 3600000);
+  const superseded = supersededRegularDestinations(events);
   events = events.filter(e => e.sourceID !== 'regular-timetable' || (record.supportsRegularTimetable === true
+    && !superseded.has(e)
     && !regularAnswers.some(other =>
       (!retainingPlannedAlternatives || !plannedSource(other) || other.expiresAt >= e.expiresAt)
       && (!other.destinationStationID || other.destinationStationID === e.destinationStationID)
@@ -1108,7 +1145,8 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
               ? STATION_BOARD_STATIONS.get(firstCall)?.stationName : null;
             return [event(record, 'regular-timetable', { id: 'regular:' + hash([row.civilDay, row.key]), destinationStationID,
               destination: STATION_BOARD_STATIONS.get(destinationStationID).stationName, kind: 'outgoingDeparture',
-              time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, via: bank ? 'Bank' : cross ? 'Charing Cross' : loopVia }, source)];
+              time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, nextScheduledStopID: firstCall,
+              via: bank ? 'Bank' : cross ? 'Charing Cross' : loopVia }, source)];
           });
           add('regular-timetable', events);
         }
