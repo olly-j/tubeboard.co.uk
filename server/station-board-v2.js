@@ -80,6 +80,38 @@ function ordinaryReceipt(response) {
   return observation ? { observation } : { retryable: true };
 }
 
+// Row IDs bind the service day, booked minute and complete ordered call path.
+const ordinaryWorkingKeys = events => canonical(events.map(e => e.id).sort());
+
+function ordinaryContext(previous, events, source, signature, record, now) {
+  if (!events.length) return null;
+  const proof = { signature, observedAt: source.observedAt };
+  const context = { observedAt: source.observedAt, expiresAt: source.expiresAt, events,
+    evidence: { ordinaryTimetable: proof } };
+  const retained = (previous?.events || []).filter(e => usable(e, record, now));
+  if (!retained.length || source.observedAt > previous.observedAt) return context;
+  if (source.expiresAt <= Math.max(...retained.map(e => e.expiresAt))) return null;
+
+  const earlierProof = previous.evidence?.ordinaryTimetable;
+  if (earlierProof && earlierProof.signature !== signature) return null;
+
+  // A legacy cache proves only its retained overlap. An equal or older
+  // receipt cannot confer authority on the unobserved rest of the day.
+  const retainedByID = new Map(retained.map(e => [e.id, e]));
+  if (!earlierProof) {
+    const lastRetainedTime = Math.max(...retained.map(e => e.time));
+    if (ordinaryWorkingKeys(retained) !== ordinaryWorkingKeys(events.filter(e => e.time <= lastRetainedTime))) return null;
+    context.evidence = { ordinaryOverlap: true };
+  }
+
+  proof.observedAt = Math.max(earlierProof?.observedAt ?? -Infinity, source.observedAt);
+  context.observedAt = previous.observedAt;
+  context.events = (earlierProof ? events : events.filter(e => retainedByID.has(e.id))).map(e => ({
+    ...e, receivedAt: retainedByID.get(e.id)?.receivedAt ?? proof.observedAt,
+  }));
+  return context;
+}
+
 export function validBoard(stationID, lineID) { return STATION_BOARD_STATIONS.get(stationID)?.lineIDs.includes(lineID) === true; }
 function lineStations(lineID) { return [...STATION_BOARD_STATIONS.values()].filter((station) => station.lineIDs.includes(lineID)); }
 function named(name, lineID) {
@@ -553,7 +585,12 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       // A complete station empty keeps its original ordering floor after HTTP
       // expiry; it is not current evidence and cannot resurrect older rows.
       if (!events.length && !(Array.isArray(context.events) && context.events.length === 0 && (normalized === 'rail-departures' || normalized === 'station-arrivals' && Number.isFinite(context.expiresAt) && context.expiresAt > context.observedAt && context.expiresAt <= context.observedAt + 120000 || normalized === 'timetable' && context.qualificationOrigin === 'server' && context.expiresAt > now))) continue;
-      if (!old || context.observedAt > old.observedAt) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
+      const earlierProof = old?.evidence?.ordinaryTimetable;
+      const renewedRegular = normalized === 'regular-timetable' && old && context.observedAt === old.observedAt
+        && context.expiresAt > (old.expiresAt ?? Math.max(...old.events.map(e => e.expiresAt)))
+        && (earlierProof ? earlierProof.signature === context.evidence?.ordinaryTimetable?.signature
+          : context.evidence?.ordinaryOverlap === true && ordinaryWorkingKeys(old.events) === ordinaryWorkingKeys(events));
+      if (!old || context.observedAt > old.observedAt || renewedRegular) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }
   const usual = sources['regular-timetable'], dated = sources['journey-planner'];
@@ -1087,12 +1124,16 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     const board = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity }, record, applicabilityAt);
     const eligible = selectEvents(board, record, applicabilityAt);
     const upcoming = eligible.filter(e => Number.isFinite(e.time) && e.time >= applicabilityAt && e.time <= applicabilityAt + 3600000);
-    // Retain an already-qualified regular context even when today's dated
-    // answer masks it. An alternate must use its own original expiry.
+    // Allow the ordinary cycle to requalify before expiry even if the next
+    // full cycle is skipped. London midnight ends the current service day.
+    const renewBy = applicabilityAt + 2 * config.workerIntervalMs;
+    const dayEnd = midnight(applicabilityAt);
     const retainedRegular = board.sources['regular-timetable']?.events.some(e =>
-      e.time <= applicabilityAt + 3600000 && !currentProofs.some(p => blocksScheduled(p, e.time, applicabilityAt)));
+      e.time <= applicabilityAt + 3600000 && (e.expiresAt > renewBy || e.expiresAt === dayEnd)
+      && !currentProofs.some(p => blocksScheduled(p, e.time, applicabilityAt)));
     const hasIncoming = terminalEvidence || upcoming.some(e => e.kind === 'incomingArrival');
     needsOrdinary = !retainedRegular && !upcoming.some(e => {
+      if (e.sourceID === 'regular-timetable') return false;
       if (e.kind === 'throughArrival') return originRule.physicalEnd && !hasIncoming;
       if (e.kind !== 'outgoingDeparture') return false;
       // A short-lived Journey can still benefit from retained regular
@@ -1135,8 +1176,8 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
         const source = { ...receipt.observation,
           expiresAt: Math.min(receipt.observation.expiresAt, root.observation.expiresAt, rootCompletedAt + 600000, midnight(at)) };
         if (day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd && !calendar.bankHolidayDates.includes(day)) {
-          const rows = regularTimetableWindow(direct.value, record, originRule, calendar, at, midnight(at));
-          const events = rows.flatMap(row => {
+          const dayRows = regularTimetableWindow(direct.value, record, originRule, calendar, at, midnight(at));
+          const events = dayRows.flatMap(row => {
             const destinationStationID = row.path.at(-1);
             const hhmm = [Math.floor(row.minute / 60), row.minute % 60].map(x => String(x).padStart(2, '0')).join(':');
             const time = londonClock(row.civilDay + 'T' + hhmm + ':00');
@@ -1152,7 +1193,9 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
               time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, nextScheduledStopID: firstCall,
               via: bank ? 'Bank' : cross ? 'Charing Cross' : loopVia }, source)];
           });
-          add('regular-timetable', events);
+          const signature = hash([day, dayRows.map(row => row.civilDay === day ? row.key : row.civilDay + '|' + row.key).sort()]);
+          const context = ordinaryContext(previous.sources?.['regular-timetable'], events, source, signature, record, at);
+          if (context) sources['regular-timetable'] = context;
         }
       } catch { /* The next normal worker cycle can recheck; the source does not become live. */ }
     }
