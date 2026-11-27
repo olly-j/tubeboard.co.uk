@@ -359,6 +359,23 @@ for (const emptyProfile of [false, true]) {
   });
 }
 
+test('unrecognised timetable paths cannot withdraw a verified board or block its recovery', async t => {
+  const f = await activeEdgware(t);
+  const unrecognised = structuredClone(edgware.body);
+  for (const route of unrecognised.timetable.routes) {
+    for (const interval of route.stationIntervals) interval.intervals.at(-1).stopId = 'unknown';
+  }
+  await f.cycle(0, capturedAt);
+  const first = regular(await f.current(capturedAt));
+  await f.cycle(450000, capturedAt + 450000, unrecognised);
+  const kept = regular(await f.current(capturedAt + 450000));
+  assert.equal(kept.observedAt, first.observedAt);
+  assert.equal(kept.expiresAt, first.expiresAt);
+  assert.ok(kept.events.length);
+  await f.cycle(600000, capturedAt);
+  assert.ok(regular(await f.current(capturedAt + 600000)).events.length);
+});
+
 test('a worker crossing 23:00 renews the same body and keeps its first train past the original expiry', async t => {
   const firstRead = Date.parse('2026-11-27T22:55:00Z');
   const f = await initialDisplayFixture(t);

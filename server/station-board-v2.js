@@ -1189,7 +1189,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
         const source = { ...receipt.observation,
           expiresAt: Math.min(receipt.observation.expiresAt, root.observation.expiresAt, rootCompletedAt + 600000, midnight(at)) };
         if (day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd && !calendar.bankHolidayDates.includes(day)) {
-          const dayRows = regularTimetableWindow(direct.value, record, originRule, calendar, at, midnight(at));
+          const { rows: dayRows, complete } = regularTimetableWindow(direct.value, record, originRule, calendar, at, midnight(at));
           const events = dayRows.flatMap(row => {
             const destinationStationID = row.path.at(-1);
             const hhmm = [Math.floor(row.minute / 60), row.minute % 60].map(x => String(x).padStart(2, '0')).join(':');
@@ -1210,7 +1210,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
           const signature = hash([direct.value.direction ?? null, direct.value.timetable]);
           // A successfully parsed, unscoped physical-end timetable can withdraw
           // its own former bookings even when the active profile now lists none.
-          const completeOrigin = originRule.physicalEnd && !url.searchParams.has('direction');
+          const completeOrigin = complete && originRule.physicalEnd && !url.searchParams.has('direction');
           if (events.length || completeOrigin) {
             const context = ordinaryContext(previous.sources?.['regular-timetable'], events, source, signature, record, at);
             if (context) sources['regular-timetable'] = context;

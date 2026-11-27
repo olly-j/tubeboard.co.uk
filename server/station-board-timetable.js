@@ -337,6 +337,7 @@ export function regularTimetableWindow(response, record, originRule, calendar, a
     && !calendar.bankHolidayDates.includes(day);
   const lookAhead = nextMidnight <= at + 3600000 && ordinary(tomorrow);
   const rows = [];
+  const window = { rows, complete: true };
   const extended = new Set();
   function append(row, civilDay) {
     const minute = row.minute % 1440;
@@ -349,29 +350,30 @@ export function regularTimetableWindow(response, record, originRule, calendar, a
     rows.push({ ...row, minute, civilDay });
   }
   if (ordinary(yesterday)) {
-    for (const row of regularTimetableJourneys(response, record, originRule, yesterday, { previousDay: true })) {
+    for (const row of regularTimetableJourneys(response, record, originRule, yesterday, { previousDay: true, window })) {
       if (row.minute >= 1440) append(row, today);
     }
   }
-  for (const row of regularTimetableJourneys(response, record, originRule, today)) {
+  for (const row of regularTimetableJourneys(response, record, originRule, today, { window })) {
     if (row.minute < 1440) append(row, today);
     else if (lookAhead && row.minute < 1500) append(row, tomorrow);
   }
   if (lookAhead) {
     let early;
     try {
-      early = regularTimetableJourneys(response, record, originRule, tomorrow);
+      early = regularTimetableJourneys(response, record, originRule, tomorrow, { window });
     } catch (error) {
       // An unusable following profile cannot withdraw qualified trains from today's service.
       if (!error.timetableReason) throw error;
-      return rows;
+      window.complete = false;
+      return window;
     }
     for (const row of early) if (row.minute < 60) append(row, tomorrow);
   }
-  return rows;
+  return window;
 }
 
-export function regularTimetableJourneys(response, record, originRule, serviceDate, { previousDay = false } = {}) {
+export function regularTimetableJourneys(response, record, originRule, serviceDate, { previousDay = false, window } = {}) {
   const { stationID, lineID } = record;
   responseShape(response);
   if (response.lineId.toLowerCase() !== lineID || response.timetable.departureStopId.toUpperCase() !== stationID) fail('wrongBoard');
@@ -382,7 +384,9 @@ export function regularTimetableJourneys(response, record, originRule, serviceDa
   if (active.length !== 1) fail('unsupportedCalendar');
   return profileJourneys(response, active[0]).filter(row => {
     const firstCall = row.path.find(stop => stop !== stationID);
-    return firstCall && (originRule.physicalEnd || originRule.exclusiveFirstCalls.includes(firstCall))
+    const qualified = firstCall && (originRule.physicalEnd || originRule.exclusiveFirstCalls.includes(firstCall))
       && (row.path.at(-1) !== stationID || lineID === 'circle') && row.path.every(stop => validBoard(stop, lineID));
+    if (!qualified && window) window.complete = false;
+    return qualified;
   });
 }
