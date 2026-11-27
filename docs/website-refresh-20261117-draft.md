@@ -6,7 +6,7 @@ This copy prepares the station → train destination → departure-time story fo
 
 ## Current release candidate
 
-The homepage shows eight Central line countdowns at Leyton, split by platform. Home shows a one-tap return to Brixton and saved Leyton. Follow shows train 021 at Liverpool Street towards Epping. All three are native captures from the iPhone 15 Pro simulator on build 1.2.6 (20261126221539), using controlled station and train data. The PNGs are original frames. Each WebP matches its decoded RGB pixels. The [asset manifest](website-refresh-20261117-assets.json) records the source and receipt for each image.
+The homepage shows eight Central line countdowns at Leyton, split by platform. Home shows a one-tap return to Brixton and saved Leyton. Follow shows train 021 at Liverpool Street towards Epping. All three are native captures from the iPhone 15 Pro simulator on build 1.2.6 (20261127000202), using controlled station and train data. The PNGs are original frames. Each WebP matches its decoded RGB pixels. The [asset manifest](website-refresh-20261117-assets.json) records the source and receipt for each image.
 
 Add Station still uses build 20261117225101. By destination and Next departures retain their earlier capture identities. The social card comes from build 20261118001152. The separate Lock Screen and device storefront captures are kept with the app release evidence. The earlier paid Follow check used a local StoreKit transaction. Background delivery and physical Watch behaviour have their own release checks.
 
