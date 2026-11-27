@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
 import os from "node:os";
@@ -142,6 +143,9 @@ test('the regular push board carries the next countdowns across London midnight 
   const fresh = selectEvents(await board(midnight), record, midnight);
   assert.deepEqual(fresh.slice(0, 3).map(row => row.id), rows.map(row => row.id));
   assert.equal(timetableReads, 2);
+  const pathKey = route.stationIntervals.find(interval => Number(interval.id) === sample.intervalId).intervals.map(stop => stop.stopId).join('>');
+  const legacyID = 'regular:' + createHash('sha256').update(JSON.stringify(['2026-11-28', '1441|' + pathKey])).digest('hex');
+  assert.equal(fresh[0].id, legacyID, 'a stored 24:01 working from the deployed service still matches');
 
   route.schedules[1].knownJourneys.unshift(journey('00', '01'));
   const overlap = selectEvents(await board(before), record, before);

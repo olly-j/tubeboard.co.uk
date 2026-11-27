@@ -346,7 +346,7 @@ export function regularTimetableWindow(response, record, originRule, calendar, a
     // that same service in the following profile using its civil clock.
     if (row.minute >= 1440) extended.add(occurrence);
     else if (extended.has(occurrence)) return;
-    rows.push({ ...row, minute, key: working, civilDay });
+    rows.push({ ...row, minute, civilDay });
   }
   if (ordinary(yesterday)) {
     for (const row of regularTimetableJourneys(response, record, originRule, yesterday, { previousDay: true })) {
