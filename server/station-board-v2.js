@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { parseBoundedJSON } from './bounded-json.js';
 import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation, regularTimetableWindow, validatedPublicationProof } from './station-board-timetable.js';
 import fs from 'node:fs';
-import { retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability, containsServiceClosed, knownNonClosure, activeClosure, expiredBarrier, completePlannedApplicability } from './station-board-availability.js';
+import { replacementFrequencyWithdrawal, retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability, containsServiceClosed, knownNonClosure, activeClosure, expiredBarrier, completePlannedApplicability } from './station-board-availability.js';
 import { fetchJsonResponse } from './notification-transport.js';
 
 export const STATION_BOARD_CONTRACT = 'station-board-v2';
@@ -1061,7 +1061,11 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   }
   const originRule = regularOriginRule(record);
   const ordinaryBoard = supportsRegularOrigin(record);
-  const withdrawal = ordinaryBoard ? datedWithdrawal(journey, record, journeyDepartAt, actualRequestAt, applicabilityAt) : null;
+  const dated = ordinaryBoard ? datedWithdrawal(journey, record, journeyDepartAt, actualRequestAt, applicabilityAt) : null;
+  const amended = ordinaryBoard && service.ok
+    ? replacementFrequencyWithdrawal(service.value, record, serviceObservation, applicabilityAt, londonClock, authority) : null;
+  const withdrawal = dated && amended
+    ? (dated.regularWithdrawalUntil >= amended.regularWithdrawalUntil ? dated : amended) : dated || amended;
   const currentProofs = retainAvailability(previous, { availabilityProofs }, record, applicabilityAt);
   // A station-family response can describe closures on other modes and name
   // this line as a diversion. Only qualified controls for the selected board
