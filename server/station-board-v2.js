@@ -1189,15 +1189,22 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
         const source = { ...receipt.observation,
           expiresAt: Math.min(receipt.observation.expiresAt, root.observation.expiresAt, rootCompletedAt + 600000, midnight(at)) };
         if (day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd && !calendar.bankHolidayDates.includes(day)) {
-          const { rows: dayRows, complete } = regularTimetableWindow(direct.value, record, originRule, calendar, at, midnight(at));
-          const events = dayRows.flatMap(row => {
+          const timetable = regularTimetableWindow(direct.value, record, originRule, calendar, at, midnight(at));
+          const events = timetable.rows.flatMap(row => {
             const destinationStationID = row.path.at(-1);
             const hhmm = [Math.floor(row.minute / 60), row.minute % 60].map(x => String(x).padStart(2, '0')).join(':');
             const time = londonClock(row.civilDay + 'T' + hhmm + ':00');
-            if (!(time >= at && time <= at + 3600000 && source.expiresAt > at)) return [];
+            if (!Number.isFinite(time)) {
+              timetable.complete = false;
+              return [];
+            }
+            if (time < at || time > at + 3600000) return [];
             const bank = record.lineID === 'northern' && row.path.includes('940GZZLUBNK');
             const cross = record.lineID === 'northern' && row.path.includes('940GZZLUCHX');
-            if (bank && cross) return [];
+            if (bank && cross) {
+              timetable.complete = false;
+              return [];
+            }
             const firstCall = row.path.find(stop => stop !== record.stationID);
             const loopVia = record.lineID === 'circle' && destinationStationID === record.stationID
               ? STATION_BOARD_STATIONS.get(firstCall)?.stationName : null;
@@ -1210,7 +1217,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
           const signature = hash([direct.value.direction ?? null, direct.value.timetable]);
           // A successfully parsed, unscoped physical-end timetable can withdraw
           // its own former bookings even when the active profile now lists none.
-          const completeOrigin = complete && originRule.physicalEnd && !url.searchParams.has('direction');
+          const completeOrigin = timetable.complete && originRule.physicalEnd && !url.searchParams.has('direction');
           if (events.length || completeOrigin) {
             const context = ordinaryContext(previous.sources?.['regular-timetable'], events, source, signature, record, at);
             if (context) sources['regular-timetable'] = context;
