@@ -678,12 +678,13 @@ function supersededRegularDestinations(events) {
     else group.dated.push(row);
   }
   for (const { usual, dated } of slots.values()) {
-    if (usual.length !== 1 || !dated.length) continue;
-    const [row] = usual;
+    if (usual.length !== 1 || dated.length !== 1) continue;
+    const [row] = usual, [datedRow] = dated;
+    if (row.via && datedRow.via && key(row.via) !== key(datedRow.via)) continue;
     // The recurring adapter supplies neither a platform nor a direction.
     // Leave any more specific boarding evidence to its own selection.
     if (row.platform || row.direction || row.providerDirection || !row.destinationStationID) continue;
-    if (dated.every(other => other.destinationStationID && other.destinationStationID !== row.destinationStationID)) {
+    if (datedRow.destinationStationID && datedRow.destinationStationID !== row.destinationStationID) {
       superseded.add(row);
     }
   }
@@ -1207,7 +1208,9 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
           });
           // Compare the qualified source independently of the rolling hour and London date.
           const signature = hash([direct.value.direction ?? null, direct.value.timetable]);
-          const completeOrigin = originRule.physicalEnd && !url.searchParams.has('direction') && dayRows.length > 0;
+          // A successfully parsed, unscoped physical-end timetable can withdraw
+          // its own former bookings even when the active profile now lists none.
+          const completeOrigin = originRule.physicalEnd && !url.searchParams.has('direction');
           if (events.length || completeOrigin) {
             const context = ordinaryContext(previous.sources?.['regular-timetable'], events, source, signature, record, at);
             if (context) sources['regular-timetable'] = context;

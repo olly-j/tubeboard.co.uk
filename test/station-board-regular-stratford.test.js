@@ -340,22 +340,24 @@ test('a previously rejected older timetable stays rejected through expiry and a 
   assert.ok(regular(await f.current(capturedAt + 1250000)).events.length > 0);
 });
 
-test('a newer qualified timetable withdrawing every upcoming booking cannot be undone by another edge', async t => {
-  const f = await activeEdgware(t);
-  const changed = structuredClone(edgware.body);
-  for (const route of changed.timetable.routes) {
-    for (const schedule of route.schedules) schedule.knownJourneys = schedule.knownJourneys.map(row => ({ ...row, hour: '20' }));
-  }
-  await f.cycle(0, capturedAt);
-  assert.ok(f.push.at(-1).arrivals.length);
-  await f.cycle(450000, capturedAt + 450000, changed);
-  assert.deepEqual(f.push.at(-1).arrivals, []);
-  f.restart();
-  await f.cycle(600000, capturedAt);
-  assert.deepEqual(f.push.at(-1).arrivals, []);
-  await f.cycle(710000, capturedAt + 710000);
-  assert.ok(f.push.at(-1).arrivals.some(row => row.plannedSourceID === 'regular-timetable'));
-});
+for (const emptyProfile of [false, true]) {
+  test(`a newer ${emptyProfile ? 'empty profile' : 'timetable with later bookings'} withdraws the last countdown through restart`, async t => {
+    const f = await activeEdgware(t);
+    const changed = structuredClone(edgware.body);
+    for (const route of changed.timetable.routes) {
+      for (const schedule of route.schedules) schedule.knownJourneys = emptyProfile ? [] : schedule.knownJourneys.map(row => ({ ...row, hour: '20' }));
+    }
+    await f.cycle(0, capturedAt);
+    assert.ok(f.push.at(-1).arrivals.length);
+    await f.cycle(450000, capturedAt + 450000, changed);
+    assert.deepEqual(f.push.at(-1).arrivals, []);
+    f.restart();
+    await f.cycle(600000, capturedAt);
+    assert.deepEqual(f.push.at(-1).arrivals, []);
+    await f.cycle(710000, capturedAt + 710000);
+    assert.ok(f.push.at(-1).arrivals.some(row => row.plannedSourceID === 'regular-timetable'));
+  });
+}
 
 test('a worker crossing 23:00 renews the same body and keeps its first train past the original expiry', async t => {
   const firstRead = Date.parse('2026-11-27T22:55:00Z');

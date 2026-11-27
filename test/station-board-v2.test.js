@@ -43,6 +43,19 @@ test('a dated destination replaces a conflicting single regular origin call in t
   }
 });
 
+test('a dated working cannot withdraw an independent branch or an ambiguous simultaneous working', () => {
+  const scope = { ...record, supportsRegularTimetable: true };
+  const slot = { time: now + 180000, nextScheduledStopID: '940GZZLUBTK' };
+  const usual = row({ ...slot, sourceID: 'regular-timetable', id: 'regular-bank', providerDirection: null, via: 'Bank', expiresAt: now + 600000 });
+  const dated = row({ ...slot, id: 'dated-cross', destination: 'Kennington', destinationStationID: '940GZZLUKNG', via: 'Charing Cross' });
+  const alsoDated = { ...dated, id: 'dated-second', destination: 'Archway', destinationStationID: '940GZZLUACY' };
+  for (const datedRows of [[dated], [{ ...dated, via: null }, { ...alsoDated, via: null }]]) {
+    const cache = mergeContexts({}, cacheOf(usual, ...datedRows), scope, now);
+    assert.ok(selectEvents(cache, scope, now).some(e => e.id === usual.id));
+    assert.deepEqual(selectEvents(cache, scope, dated.expiresAt).map(e => e.id), [usual.id]);
+  }
+});
+
 test('all19 exact catalogue boards negotiate v2 while v1 allowlist remains17', () => {
   assert.equal(STATION_BOARD_LINES.size, 19); assert.equal(LIVE_ACTIVITY_LINES.size, 17);
   for (const [lineID, line] of STATION_BOARD_LINES) {
