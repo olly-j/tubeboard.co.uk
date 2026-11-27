@@ -32,6 +32,9 @@ test('a dated destination replaces a conflicting single regular origin call in t
   const later = { ...regular, id: 'later', time: now + 480000, destination: 'Ealing Broadway', destinationStationID: '940GZZLUEBY' };
   const retained = mergeContexts({}, cacheOf(regular, dated, later), scoped, now);
   assert.deepEqual(selectEvents(retained, scoped, dated.expiresAt).map(e => e.id), ['later']);
+  const renewalAt = dated.expiresAt + 1000;
+  const renewed = mergeContexts(retained, cacheOf({ ...regular, receivedAt: renewalAt }, { ...later, receivedAt: renewalAt }), scoped, renewalAt);
+  assert.deepEqual(selectEvents(renewed, scoped, renewalAt).map(e => e.id), ['later'], 'a renewed regular timetable cannot undo a dated destination change');
   assert.deepEqual(ids(regular, dated, { ...regular, id: 'another', destination: 'Wimbledon', destinationStationID: '940GZZLUWIM' }),
     ['another', 'dated', 'usual']);
   for (const distinct of [{ ...regular, time: regular.time + 60000 }, { ...regular, nextScheduledStopID: undefined },

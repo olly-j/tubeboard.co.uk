@@ -337,8 +337,16 @@ export function regularTimetableWindow(response, record, originRule, calendar, a
     && !calendar.bankHolidayDates.includes(day);
   const lookAhead = nextMidnight <= at + 3600000 && ordinary(tomorrow);
   const rows = [];
+  const extended = new Set();
   function append(row, civilDay) {
-    rows.push({ ...row, minute: row.minute % 1440, civilDay });
+    const minute = row.minute % 1440;
+    const working = String(minute).padStart(4, '0') + '|' + row.path.join('>');
+    const occurrence = civilDay + '|' + working;
+    // Extended clocks are visited first for each civil date. TfL can repeat
+    // that same service in the following profile using its civil clock.
+    if (row.minute >= 1440) extended.add(occurrence);
+    else if (extended.has(occurrence)) return;
+    rows.push({ ...row, minute, key: working, civilDay });
   }
   if (ordinary(yesterday)) {
     for (const row of regularTimetableJourneys(response, record, originRule, yesterday, { previousDay: true })) {

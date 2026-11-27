@@ -143,6 +143,9 @@ test('the regular push board carries the next countdowns across London midnight 
   assert.deepEqual(fresh.slice(0, 3).map(row => row.id), rows.map(row => row.id));
   assert.equal(timetableReads, 2);
 
+  route.schedules[1].knownJourneys.unshift(journey('00', '01'));
+  const overlap = selectEvents(await board(before), record, before);
+  assert.deepEqual(overlap.map(row => row.id), rows.map(row => row.id), '24:01 and 00:01 on the same route are one countdown');
   route.schedules.pop();
   assert.deepEqual(selectEvents(await board(before), record, before).map(row => (row.time - before) / 60000), [8, 18]);
   route.schedules[0].name = 'Thursday';
@@ -310,6 +313,66 @@ test('an active Edgware timetable renews its on-wire validity before expiry afte
     assert.equal(clockLabel(replaced.arrivals[0]), '16:55');
     assert.ok(!replaced.arrivals.some(row => clockLabel(row) === '16:54'));
   }
+});
+
+test('a previously rejected older timetable stays rejected through expiry and a store restart', async t => {
+  const f = await activeEdgware(t);
+  const older = structuredClone(edgware.body);
+  const shifted = older.timetable.routes.flatMap(route => route.schedules)
+    .flatMap(schedule => schedule.knownJourneys).find(row => row.hour === '16' && row.minute === '54');
+  shifted.minute = '55';
+  await f.cycle(0, capturedAt);
+  await f.cycle(450000, capturedAt - 60000, older);
+  await f.cycle(600000, capturedAt, edgware.body, true);
+  f.restart();
+  for (const [offset, observation] of [[601000, capturedAt - 60000], [700000, capturedAt]]) {
+    await f.cycle(offset, observation, older);
+    const cache = await f.current(capturedAt + offset);
+    assert.deepEqual(selectEvents(cache, { ...record, lineID: 'northern', stationID: '940GZZLUEGW' }, capturedAt + offset), []);
+  }
+  await f.cycle(800000, capturedAt - 60000);
+  assert.ok(f.push.at(-1).arrivals.some(row => clockLabel(row) === '16:54'));
+  await f.cycle(1250000, capturedAt + 1250000, older);
+  assert.ok(regular(await f.current(capturedAt + 1250000)).events.length > 0);
+});
+
+test('a newer qualified timetable withdrawing every upcoming booking cannot be undone by another edge', async t => {
+  const f = await activeEdgware(t);
+  const changed = structuredClone(edgware.body);
+  for (const route of changed.timetable.routes) {
+    for (const schedule of route.schedules) schedule.knownJourneys = schedule.knownJourneys.map(row => ({ ...row, hour: '20' }));
+  }
+  await f.cycle(0, capturedAt);
+  assert.ok(f.push.at(-1).arrivals.length);
+  await f.cycle(450000, capturedAt + 450000, changed);
+  assert.deepEqual(f.push.at(-1).arrivals, []);
+  f.restart();
+  await f.cycle(600000, capturedAt);
+  assert.deepEqual(f.push.at(-1).arrivals, []);
+  await f.cycle(710000, capturedAt + 710000);
+  assert.ok(f.push.at(-1).arrivals.some(row => row.plannedSourceID === 'regular-timetable'));
+});
+
+test('a worker crossing 23:00 renews the same body and keeps its first train past the original expiry', async t => {
+  const firstRead = Date.parse('2026-11-27T22:55:00Z');
+  const f = await initialDisplayFixture(t);
+  const body = structuredClone(timetable);
+  const route = body.timetable.routes[0];
+  const schedule = route.schedules[0];
+  const booked = (hour, minute) => ({ ...schedule.knownJourneys[0], hour, minute });
+  route.schedules = [
+    { ...schedule, name: 'Friday', knownJourneys: [booked('23','10'), booked('23','35'), booked('24','01')] },
+    { ...schedule, name: 'Saturday', knownJourneys: [booked('00','01')] },
+  ];
+  await f.register({ ...f.payload, initialRegularDisplayUntil: undefined, tokenUpdatedAt: new Date(firstRead).toISOString() }, firstRead);
+  for (const offset of [0, 420000, 600000]) {
+    const at = firstRead + offset;
+    await f.cycle(at, async url => new URL(url).pathname === direct
+      ? reply(body, { ...headers, Date: new Date(at).toUTCString(), Age: String(offset / 1000) }) : allOutage(), offset === 600000);
+  }
+  const rows = f.push.at(-1).arrivals;
+  assert.deepEqual(rows.map(clockLabel), ['23:10', '23:35', '00:01']);
+  assert.ok(rows.every(row => row.expiresAt === swifts(firstRead + 1020000)));
 });
 
 test('an unchanged observed timetable keeps supplying its rolling tail past the initial hour', async t => {

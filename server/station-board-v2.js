@@ -84,15 +84,14 @@ function ordinaryReceipt(response) {
 const ordinaryWorkingKeys = events => canonical(events.map(e => e.id).sort());
 
 function ordinaryContext(previous, events, source, signature, record, now) {
-  if (!events.length) return null;
+  if (source.expiresAt <= now) return null;
   const proof = { signature, observedAt: source.observedAt };
   const context = { observedAt: source.observedAt, expiresAt: source.expiresAt, events,
     evidence: { ordinaryTimetable: proof } };
   const retained = (previous?.events || []).filter(e => usable(e, record, now));
-  if (!retained.length || source.observedAt > previous.observedAt) return context;
+  const earlierProof = previous?.evidence?.ordinaryTimetable;
+  if ((!earlierProof && !retained.length) || source.observedAt > previous.observedAt) return context;
   if (source.expiresAt <= Math.max(...retained.map(e => e.expiresAt))) return null;
-
-  const earlierProof = previous.evidence?.ordinaryTimetable;
   if (earlierProof && earlierProof.signature !== signature) return null;
 
   // A legacy cache proves only its retained overlap. An equal or older
@@ -584,7 +583,11 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       const events = (context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && availabilityProofs.some((p) => p.plannedUnavailable === true && p.scheduledClockOnly !== true && blocksScheduled(p, e.time, now))) && !markers.some((r) => rejectionInvalidates(r, e, record, now)));
       // A complete station empty keeps its original ordering floor after HTTP
       // expiry; it is not current evidence and cannot resurrect older rows.
-      if (!events.length && !(Array.isArray(context.events) && context.events.length === 0 && (normalized === 'rail-departures' || normalized === 'station-arrivals' && Number.isFinite(context.expiresAt) && context.expiresAt > context.observedAt && context.expiresAt <= context.observedAt + 120000 || normalized === 'timetable' && context.qualificationOrigin === 'server' && context.expiresAt > now))) continue;
+      // A qualified timetable can be re-read from another edge for up to 12 hours.
+      // Keep its ordering evidence even while there are no countdowns to display.
+      const keepTimetableProof = normalized === 'regular-timetable' && context.evidence?.ordinaryTimetable
+        && context.observedAt + 43200000 > now;
+      if (!events.length && !keepTimetableProof && !(Array.isArray(context.events) && context.events.length === 0 && (normalized === 'rail-departures' || normalized === 'station-arrivals' && Number.isFinite(context.expiresAt) && context.expiresAt > context.observedAt && context.expiresAt <= context.observedAt + 120000 || normalized === 'timetable' && context.qualificationOrigin === 'server' && context.expiresAt > now))) continue;
       const earlierProof = old?.evidence?.ordinaryTimetable;
       const renewedRegular = normalized === 'regular-timetable' && old && context.observedAt === old.observedAt
         && context.expiresAt > (old.expiresAt ?? Math.max(...old.events.map(e => e.expiresAt)))
@@ -593,13 +596,21 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       if (!old || context.observedAt > old.observedAt || renewedRegular) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }
+  const withdrawnRegular = new Map();
+  for (const cache of [previous, incoming]) {
+    for (const { id, time } of cache.withdrawnRegular || []) {
+      if (time >= now && time <= now + 3600000) withdrawnRegular.set(id, time);
+    }
+  }
   const usual = sources['regular-timetable'], dated = sources['journey-planner'];
   if (usual && dated && supportsRegularOrigin(record)) {
     const rule = regularOriginRule(record);
     const starts = dated.events.filter(e => rule.physicalEnd || hasExclusiveStartingCall(e, rule));
     const superseded = supersededRegularDestinations([...usual.events, ...starts]);
-    if (superseded.size) usual.events = usual.events.filter(e => !superseded.has(e));
+    for (const row of superseded) withdrawnRegular.set(row.id, row.time);
   }
+  // A fresh read of the ordinary timetable cannot undo a dated change to this train.
+  if (usual && withdrawnRegular.size) usual.events = usual.events.filter(row => !withdrawnRegular.has(row.id));
   const ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, incoming.ordinaryNotBefore || 0);
   const arrivalsRateLimitedUntil = Math.max(previous.arrivalsRateLimitedUntil || 0, incoming.arrivalsRateLimitedUntil || 0);
   const railDeparturesNotBefore = Math.max(previous.railDeparturesNotBefore || 0, incoming.railDeparturesNotBefore || 0);
@@ -607,6 +618,7 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
   const stationArrivalAttempt = retainBoardSourceAttempt(previous.stationArrivalAttempt, incoming.stationArrivalAttempt, now);
   const railDepartureAttempt = retainBoardSourceAttempt(previous.railDepartureAttempt, incoming.railDepartureAttempt, now);
   return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null,
+    ...(withdrawnRegular.size ? { withdrawnRegular: Array.from(withdrawnRegular, ([id, time]) => ({ id, time })) } : {}),
     ...(stationArrivalAttempt ? { stationArrivalAttempt } : {}), ...(railDepartureAttempt ? { railDepartureAttempt } : {}),
     ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}),
     ...(railDeparturesNotBefore ? { railDeparturesNotBefore } : {}),
@@ -1193,9 +1205,13 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
               time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, nextScheduledStopID: firstCall,
               via: bank ? 'Bank' : cross ? 'Charing Cross' : loopVia }, source)];
           });
-          const signature = hash([day, dayRows.map(row => row.civilDay === day ? row.key : row.civilDay + '|' + row.key).sort()]);
-          const context = ordinaryContext(previous.sources?.['regular-timetable'], events, source, signature, record, at);
-          if (context) sources['regular-timetable'] = context;
+          // Compare the qualified source independently of the rolling hour and London date.
+          const signature = hash([direct.value.direction ?? null, direct.value.timetable]);
+          const completeOrigin = originRule.physicalEnd && !url.searchParams.has('direction') && dayRows.length > 0;
+          if (events.length || completeOrigin) {
+            const context = ordinaryContext(previous.sources?.['regular-timetable'], events, source, signature, record, at);
+            if (context) sources['regular-timetable'] = context;
+          }
         }
       } catch { /* The next normal worker cycle can recheck; the source does not become live. */ }
     }
