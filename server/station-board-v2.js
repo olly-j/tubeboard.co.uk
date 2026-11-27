@@ -2,7 +2,7 @@ import { applyPublicationAuthority } from './station-board-publication.js';
 import { readPublicationAsset } from './timetable-publication-resource.js';
 import crypto from 'node:crypto';
 import { parseBoundedJSON } from './bounded-json.js';
-import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation, regularTimetableJourneys, validatedPublicationProof } from './station-board-timetable.js';
+import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation, regularTimetableWindow, validatedPublicationProof } from './station-board-timetable.js';
 import fs from 'node:fs';
 import { replacementFrequencyWithdrawal, retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability, containsServiceClosed, knownNonClosure, activeClosure, expiredBarrier, completePlannedApplicability } from './station-board-availability.js';
 import { fetchJsonResponse } from './notification-transport.js';
@@ -78,6 +78,37 @@ function ordinaryReceipt(response) {
   if (typeof age !== 'string' || !/^\d+$/.test(age.trim())) return {};
   const observation = httpObservation(response.headers, response.completedAt, 43200000, { cacheRequired: true });
   return observation ? { observation } : { retryable: true };
+}
+
+// Row IDs bind the service day, booked minute and complete ordered call path.
+const ordinaryWorkingKeys = events => canonical(events.map(e => e.id).sort());
+
+function ordinaryContext(previous, events, source, signature, record, now) {
+  if (source.expiresAt <= now) return null;
+  const proof = { signature, observedAt: source.observedAt };
+  const context = { observedAt: source.observedAt, expiresAt: source.expiresAt, events,
+    evidence: { ordinaryTimetable: proof } };
+  const retained = (previous?.events || []).filter(e => usable(e, record, now));
+  const earlierProof = previous?.evidence?.ordinaryTimetable;
+  if ((!earlierProof && !retained.length) || source.observedAt > previous.observedAt) return context;
+  if (source.expiresAt <= Math.max(...retained.map(e => e.expiresAt))) return null;
+  if (earlierProof && earlierProof.signature !== signature) return null;
+
+  // A legacy cache proves only its retained overlap. An equal or older
+  // receipt cannot confer authority on the unobserved rest of the day.
+  const retainedByID = new Map(retained.map(e => [e.id, e]));
+  if (!earlierProof) {
+    const lastRetainedTime = Math.max(...retained.map(e => e.time));
+    if (ordinaryWorkingKeys(retained) !== ordinaryWorkingKeys(events.filter(e => e.time <= lastRetainedTime))) return null;
+    context.evidence = { ordinaryOverlap: true };
+  }
+
+  proof.observedAt = Math.max(earlierProof?.observedAt ?? -Infinity, source.observedAt);
+  context.observedAt = previous.observedAt;
+  context.events = (earlierProof ? events : events.filter(e => retainedByID.has(e.id))).map(e => ({
+    ...e, receivedAt: retainedByID.get(e.id)?.receivedAt ?? proof.observedAt,
+  }));
+  return context;
 }
 
 export function validBoard(stationID, lineID) { return STATION_BOARD_STATIONS.get(stationID)?.lineIDs.includes(lineID) === true; }
@@ -552,10 +583,34 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
       const events = (context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && availabilityProofs.some((p) => p.plannedUnavailable === true && p.scheduledClockOnly !== true && blocksScheduled(p, e.time, now))) && !markers.some((r) => rejectionInvalidates(r, e, record, now)));
       // A complete station empty keeps its original ordering floor after HTTP
       // expiry; it is not current evidence and cannot resurrect older rows.
-      if (!events.length && !(Array.isArray(context.events) && context.events.length === 0 && (normalized === 'rail-departures' || normalized === 'station-arrivals' && Number.isFinite(context.expiresAt) && context.expiresAt > context.observedAt && context.expiresAt <= context.observedAt + 120000 || normalized === 'timetable' && context.qualificationOrigin === 'server' && context.expiresAt > now))) continue;
-      if (!old || context.observedAt > old.observedAt) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
+      // A qualified timetable can be re-read from another edge for up to 12 hours.
+      // Keep its ordering evidence even while there are no countdowns to display.
+      const keepTimetableProof = normalized === 'regular-timetable' && context.evidence?.ordinaryTimetable
+        && context.observedAt + 43200000 > now;
+      if (!events.length && !keepTimetableProof && !(Array.isArray(context.events) && context.events.length === 0 && (normalized === 'rail-departures' || normalized === 'station-arrivals' && Number.isFinite(context.expiresAt) && context.expiresAt > context.observedAt && context.expiresAt <= context.observedAt + 120000 || normalized === 'timetable' && context.qualificationOrigin === 'server' && context.expiresAt > now))) continue;
+      const earlierProof = old?.evidence?.ordinaryTimetable;
+      const renewedRegular = normalized === 'regular-timetable' && old && context.observedAt === old.observedAt
+        && context.expiresAt > (old.expiresAt ?? Math.max(...old.events.map(e => e.expiresAt)))
+        && (earlierProof ? earlierProof.signature === context.evidence?.ordinaryTimetable?.signature
+          : context.evidence?.ordinaryOverlap === true && ordinaryWorkingKeys(old.events) === ordinaryWorkingKeys(events));
+      if (!old || context.observedAt > old.observedAt || renewedRegular) sources[normalized] = { observedAt: context.observedAt, events, ...(context.expiresAt === undefined ? {} : { expiresAt: context.expiresAt }), ...(context.evidence ? { evidence: context.evidence, qualificationOrigin: context.qualificationOrigin } : {}) };
     }
   }
+  const withdrawnRegular = new Map();
+  for (const cache of [previous, incoming]) {
+    for (const { id, time } of cache.withdrawnRegular || []) {
+      if (time >= now && time <= now + 3600000) withdrawnRegular.set(id, time);
+    }
+  }
+  const usual = sources['regular-timetable'], dated = sources['journey-planner'];
+  if (usual && dated && supportsRegularOrigin(record)) {
+    const rule = regularOriginRule(record);
+    const starts = dated.events.filter(e => rule.physicalEnd || hasExclusiveStartingCall(e, rule));
+    const superseded = supersededRegularDestinations([...usual.events, ...starts]);
+    for (const row of superseded) withdrawnRegular.set(row.id, row.time);
+  }
+  // A fresh read of the ordinary timetable cannot undo a dated change to this train.
+  if (usual && withdrawnRegular.size) usual.events = usual.events.filter(row => !withdrawnRegular.has(row.id));
   const ordinaryNotBefore = Math.max(previous.ordinaryNotBefore || 0, incoming.ordinaryNotBefore || 0);
   const arrivalsRateLimitedUntil = Math.max(previous.arrivalsRateLimitedUntil || 0, incoming.arrivalsRateLimitedUntil || 0);
   const railDeparturesNotBefore = Math.max(previous.railDeparturesNotBefore || 0, incoming.railDeparturesNotBefore || 0);
@@ -563,6 +618,7 @@ export function mergeContexts(previous = {}, incoming = {}, record, now) {
   const stationArrivalAttempt = retainBoardSourceAttempt(previous.stationArrivalAttempt, incoming.stationArrivalAttempt, now);
   const railDepartureAttempt = retainBoardSourceAttempt(previous.railDepartureAttempt, incoming.railDepartureAttempt, now);
   return { sources, rejections: markers, closureSources, availabilityProofs, publicationIdentity, nextRefreshAt: Math.max(previous.nextRefreshAt || 0, incoming.nextRefreshAt || 0), ...mergeStationArrivalSchedule(previous, incoming, sources), status: incoming.status || previous.status || null,
+    ...(withdrawnRegular.size ? { withdrawnRegular: Array.from(withdrawnRegular, ([id, time]) => ({ id, time })) } : {}),
     ...(stationArrivalAttempt ? { stationArrivalAttempt } : {}), ...(railDepartureAttempt ? { railDepartureAttempt } : {}),
     ...(ordinaryNotBefore > now ? { ordinaryNotBefore } : {}), ...(arrivalsRateLimitedUntil > now ? { arrivalsRateLimitedUntil } : {}),
     ...(railDeparturesNotBefore ? { railDeparturesNotBefore } : {}),
@@ -605,6 +661,35 @@ function atPlatformDestination(e) {
   return e.kind === 'outgoingDestinationOnly' && e.time == null && e.timeEvidence == null
     && /^(?:[0-9]+[a-z]?|[a-z])$/.test(text(e.platform)?.toLowerCase().replace(/^platform\s+/, '') || '');
 }
+function supersededRegularDestinations(events) {
+  const regular = events.filter(e => plannedSource(e) === 'regular-timetable');
+  const dated = events.filter(e => plannedSource(e) === 'journey-planner');
+  const superseded = new Set();
+  if (!regular.length || !dated.length) return superseded;
+  // The record has already scoped the station and line. One usual departure
+  // to this next stop can be replaced by a differently advertised dated one.
+  const slots = new Map();
+  for (const row of [...regular, ...dated]) {
+    if (!text(row.nextScheduledStopID) || row.nextScheduledStopID === row.stationID) continue;
+    const slot = row.time + '/' + row.nextScheduledStopID;
+    if (!slots.has(slot)) slots.set(slot, { usual: [], dated: [] });
+    const group = slots.get(slot);
+    if (row.sourceID === 'regular-timetable') group.usual.push(row);
+    else group.dated.push(row);
+  }
+  for (const { usual, dated } of slots.values()) {
+    if (usual.length !== 1 || dated.length !== 1) continue;
+    const [row] = usual, [datedRow] = dated;
+    if (row.via && datedRow.via && key(row.via) !== key(datedRow.via)) continue;
+    // The recurring adapter supplies neither a platform nor a direction.
+    // Leave any more specific boarding evidence to its own selection.
+    if (row.platform || row.direction || row.providerDirection || !row.destinationStationID) continue;
+    if (datedRow.destinationStationID && datedRow.destinationStationID !== row.destinationStationID) {
+      superseded.add(row);
+    }
+  }
+  return superseded;
+}
 export function selectEvents(cache, record, now, { retainingMaskedPlans = false, retainingPlannedAlternatives = false } = {}) {
   const proofs = retainAvailability(cache, {}, record, now);
   let events = Object.values(cache.sources || {}).flatMap((context) => context.events || []).filter((e) => usable(e, record, now) && !(planned(e) && proofs.some((p) => (!retainingMaskedPlans || p.plannedUnavailable === true && p.scheduledClockOnly !== true) && blocksScheduled(p, e.time, now))) && selectionMatches(e, record) && !(cache.rejections || []).some((r) => rejectionInvalidates(r, e, record, now)));
@@ -621,7 +706,9 @@ export function selectEvents(cache, record, now, { retainingMaskedPlans = false,
   }
   const regularAnswers = events.filter(e => e.sourceID !== 'regular-timetable' && ['outgoingDeparture', 'throughArrival'].includes(e.kind)
     && Number.isFinite(e.time) && e.time <= now + 3600000);
+  const superseded = supersededRegularDestinations(events);
   events = events.filter(e => e.sourceID !== 'regular-timetable' || (record.supportsRegularTimetable === true
+    && !superseded.has(e)
     && !regularAnswers.some(other =>
       (!retainingPlannedAlternatives || !plannedSource(other) || other.expiresAt >= e.expiresAt)
       && (!other.destinationStationID || other.destinationStationID === e.destinationStationID)
@@ -1050,12 +1137,16 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     const board = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity }, record, applicabilityAt);
     const eligible = selectEvents(board, record, applicabilityAt);
     const upcoming = eligible.filter(e => Number.isFinite(e.time) && e.time >= applicabilityAt && e.time <= applicabilityAt + 3600000);
-    // Retain an already-qualified regular context even when today's dated
-    // answer masks it. An alternate must use its own original expiry.
+    // Allow the ordinary cycle to requalify before expiry even if the next
+    // full cycle is skipped. London midnight ends the current service day.
+    const renewBy = applicabilityAt + 2 * config.workerIntervalMs;
+    const dayEnd = midnight(applicabilityAt);
     const retainedRegular = board.sources['regular-timetable']?.events.some(e =>
-      e.time <= applicabilityAt + 3600000 && !currentProofs.some(p => blocksScheduled(p, e.time, applicabilityAt)));
+      e.time <= applicabilityAt + 3600000 && (e.expiresAt > renewBy || e.expiresAt === dayEnd)
+      && !currentProofs.some(p => blocksScheduled(p, e.time, applicabilityAt)));
     const hasIncoming = terminalEvidence || upcoming.some(e => e.kind === 'incomingArrival');
     needsOrdinary = !retainedRegular && !upcoming.some(e => {
+      if (e.sourceID === 'regular-timetable') return false;
       if (e.kind === 'throughArrival') return originRule.physicalEnd && !hasIncoming;
       if (e.kind !== 'outgoingDeparture') return false;
       // A short-lived Journey can still benefit from retained regular
@@ -1098,28 +1189,39 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
         const source = { ...receipt.observation,
           expiresAt: Math.min(receipt.observation.expiresAt, root.observation.expiresAt, rootCompletedAt + 600000, midnight(at)) };
         if (day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd && !calendar.bankHolidayDates.includes(day)) {
-          const yesterday = new Date(Date.parse(day + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10);
-          const previousDay = yesterday >= calendar.holidayCoverageStart && !calendar.bankHolidayDates.includes(yesterday);
-          const rowsToday = regularTimetableJourneys(direct.value, record, originRule, day)
-            .filter(row => row.minute < 1440);
-          const carriedRows = previousDay ? regularTimetableJourneys(direct.value, record, originRule, yesterday, { previousDay: true })
-            .filter(row => row.minute >= 1440).map(row => ({ ...row, minute: row.minute - 1440 })) : [];
-          const events = [...carriedRows, ...rowsToday].flatMap(row => {
+          const timetable = regularTimetableWindow(direct.value, record, originRule, calendar, at, midnight(at));
+          const events = timetable.rows.flatMap(row => {
             const destinationStationID = row.path.at(-1);
             const hhmm = [Math.floor(row.minute / 60), row.minute % 60].map(x => String(x).padStart(2, '0')).join(':');
-            const time = londonClock(day + 'T' + hhmm + ':00');
-            if (!(time >= at && time <= at + 3600000 && source.expiresAt > at)) return [];
+            const time = londonClock(row.civilDay + 'T' + hhmm + ':00');
+            if (!Number.isFinite(time)) {
+              timetable.complete = false;
+              return [];
+            }
+            if (time < at || time > at + 3600000) return [];
             const bank = record.lineID === 'northern' && row.path.includes('940GZZLUBNK');
             const cross = record.lineID === 'northern' && row.path.includes('940GZZLUCHX');
-            if (bank && cross) return [];
+            if (bank && cross) {
+              timetable.complete = false;
+              return [];
+            }
             const firstCall = row.path.find(stop => stop !== record.stationID);
             const loopVia = record.lineID === 'circle' && destinationStationID === record.stationID
               ? STATION_BOARD_STATIONS.get(firstCall)?.stationName : null;
-            return [event(record, 'regular-timetable', { id: 'regular:' + hash([day, row.key]), destinationStationID,
+            return [event(record, 'regular-timetable', { id: 'regular:' + hash([row.civilDay, row.key]), destinationStationID,
               destination: STATION_BOARD_STATIONS.get(destinationStationID).stationName, kind: 'outgoingDeparture',
-              time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, via: bank ? 'Bank' : cross ? 'Charing Cross' : loopVia }, source)];
+              time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, nextScheduledStopID: firstCall,
+              via: bank ? 'Bank' : cross ? 'Charing Cross' : loopVia }, source)];
           });
-          add('regular-timetable', events);
+          // Compare the qualified source independently of the rolling hour and London date.
+          const signature = hash([direct.value.direction ?? null, direct.value.timetable]);
+          // A successfully parsed, unscoped physical-end timetable can withdraw
+          // its own former bookings even when the active profile now lists none.
+          const completeOrigin = timetable.complete && originRule.physicalEnd && !url.searchParams.has('direction');
+          if (events.length || completeOrigin) {
+            const context = ordinaryContext(previous.sources?.['regular-timetable'], events, source, signature, record, at);
+            if (context) sources['regular-timetable'] = context;
+          }
         }
       } catch { /* The next normal worker cycle can recheck; the source does not become live. */ }
     }

@@ -327,7 +327,53 @@ const ordinaryWeekdays = new Map([
   ['Saturdays and Public Holidays', [7]],
 ]);
 
-export function regularTimetableJourneys(response, record, originRule, serviceDate, { previousDay = false } = {}) {
+// A service-day clock of 24:05 and a civil clock of 00:05 both refer to the following
+// morning. Keep the original journey key and the civil departure date for push identity.
+export function regularTimetableWindow(response, record, originRule, calendar, at, nextMidnight) {
+  const today = londonLocal(at).slice(0, 10);
+  const yesterday = civilNext(today, -1);
+  const tomorrow = civilNext(today, 1);
+  const ordinary = day => day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd
+    && !calendar.bankHolidayDates.includes(day);
+  const lookAhead = nextMidnight <= at + 3600000 && ordinary(tomorrow);
+  const rows = [];
+  const window = { rows, complete: true };
+  const extended = new Set();
+  function append(row, civilDay) {
+    const minute = row.minute % 1440;
+    const working = String(minute).padStart(4, '0') + '|' + row.path.join('>');
+    const occurrence = civilDay + '|' + working;
+    // Extended clocks are visited first for each civil date. TfL can repeat
+    // that same service in the following profile using its civil clock.
+    if (row.minute >= 1440) extended.add(occurrence);
+    else if (extended.has(occurrence)) return;
+    rows.push({ ...row, minute, civilDay });
+  }
+  if (ordinary(yesterday)) {
+    for (const row of regularTimetableJourneys(response, record, originRule, yesterday, { previousDay: true, window })) {
+      if (row.minute >= 1440) append(row, today);
+    }
+  }
+  for (const row of regularTimetableJourneys(response, record, originRule, today, { window })) {
+    if (row.minute < 1440) append(row, today);
+    else if (lookAhead && row.minute < 1500) append(row, tomorrow);
+  }
+  if (lookAhead) {
+    let early;
+    try {
+      early = regularTimetableJourneys(response, record, originRule, tomorrow, { window });
+    } catch (error) {
+      // An unusable following profile cannot withdraw qualified trains from today's service.
+      if (!error.timetableReason) throw error;
+      window.complete = false;
+      return window;
+    }
+    for (const row of early) if (row.minute < 60) append(row, tomorrow);
+  }
+  return window;
+}
+
+export function regularTimetableJourneys(response, record, originRule, serviceDate, { previousDay = false, window } = {}) {
   const { stationID, lineID } = record;
   responseShape(response);
   if (response.lineId.toLowerCase() !== lineID || response.timetable.departureStopId.toUpperCase() !== stationID) fail('wrongBoard');
@@ -338,7 +384,9 @@ export function regularTimetableJourneys(response, record, originRule, serviceDa
   if (active.length !== 1) fail('unsupportedCalendar');
   return profileJourneys(response, active[0]).filter(row => {
     const firstCall = row.path.find(stop => stop !== stationID);
-    return firstCall && (originRule.physicalEnd || originRule.exclusiveFirstCalls.includes(firstCall))
+    const qualified = firstCall && (originRule.physicalEnd || originRule.exclusiveFirstCalls.includes(firstCall))
       && (row.path.at(-1) !== stationID || lineID === 'circle') && row.path.every(stop => validBoard(stop, lineID));
+    if (!qualified && window) window.complete = false;
+    return qualified;
   });
 }
