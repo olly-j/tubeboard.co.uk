@@ -2,7 +2,7 @@ import { applyPublicationAuthority } from './station-board-publication.js';
 import { readPublicationAsset } from './timetable-publication-resource.js';
 import crypto from 'node:crypto';
 import { parseBoundedJSON } from './bounded-json.js';
-import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation, regularTimetableJourneys, validatedPublicationProof } from './station-board-timetable.js';
+import { selectedTimetableEntry, qualifyTimetable, timetableHTTPObservation, regularTimetableWindow, validatedPublicationProof } from './station-board-timetable.js';
 import fs from 'node:fs';
 import { retainAvailability, legacyClosureSources, blocksScheduled, availabilityBoundaries, qualifyAvailability, wireAvailability, containsServiceClosed, knownNonClosure, activeClosure, expiredBarrier, completePlannedApplicability } from './station-board-availability.js';
 import { fetchJsonResponse } from './notification-transport.js';
@@ -1094,16 +1094,11 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
         const source = { ...receipt.observation,
           expiresAt: Math.min(receipt.observation.expiresAt, root.observation.expiresAt, rootCompletedAt + 600000, midnight(at)) };
         if (day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd && !calendar.bankHolidayDates.includes(day)) {
-          const yesterday = new Date(Date.parse(day + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10);
-          const previousDay = yesterday >= calendar.holidayCoverageStart && !calendar.bankHolidayDates.includes(yesterday);
-          const rowsToday = regularTimetableJourneys(direct.value, record, originRule, day)
-            .filter(row => row.minute < 1440);
-          const carriedRows = previousDay ? regularTimetableJourneys(direct.value, record, originRule, yesterday, { previousDay: true })
-            .filter(row => row.minute >= 1440).map(row => ({ ...row, minute: row.minute - 1440 })) : [];
-          const events = [...carriedRows, ...rowsToday].flatMap(row => {
+          const rows = regularTimetableWindow(direct.value, record, originRule, calendar, at, midnight(at));
+          const events = rows.flatMap(row => {
             const destinationStationID = row.path.at(-1);
             const hhmm = [Math.floor(row.minute / 60), row.minute % 60].map(x => String(x).padStart(2, '0')).join(':');
-            const time = londonClock(day + 'T' + hhmm + ':00');
+            const time = londonClock(row.civilDay + 'T' + hhmm + ':00');
             if (!(time >= at && time <= at + 3600000 && source.expiresAt > at)) return [];
             const bank = record.lineID === 'northern' && row.path.includes('940GZZLUBNK');
             const cross = record.lineID === 'northern' && row.path.includes('940GZZLUCHX');
@@ -1111,7 +1106,7 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
             const firstCall = row.path.find(stop => stop !== record.stationID);
             const loopVia = record.lineID === 'circle' && destinationStationID === record.stationID
               ? STATION_BOARD_STATIONS.get(firstCall)?.stationName : null;
-            return [event(record, 'regular-timetable', { id: 'regular:' + hash([day, row.key]), destinationStationID,
+            return [event(record, 'regular-timetable', { id: 'regular:' + hash([row.civilDay, row.key]), destinationStationID,
               destination: STATION_BOARD_STATIONS.get(destinationStationID).stationName, kind: 'outgoingDeparture',
               time, timeEvidence: 'scheduledDeparture', platform: null, direction: null, via: bank ? 'Bank' : cross ? 'Charing Cross' : loopVia }, source)];
           });

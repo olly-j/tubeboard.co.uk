@@ -114,6 +114,43 @@ test('the regular capability is true-only on a qualified typed registration', ()
   assert.equal(validateTokenPayload({ ...registration, supportsRegularTimetable: undefined }, new Date(now)).value.supportsRegularTimetable, undefined);
 });
 
+test('the regular push board carries the next countdowns across London midnight with fresh authority', async () => {
+  const before = Date.parse('2026-11-27T23:53:00Z');
+  const midnight = Date.parse('2026-11-28T00:00:00Z');
+  const body = structuredClone(timetable);
+  const route = body.timetable.routes[0];
+  const sample = route.schedules[0].knownJourneys[0];
+  const journey = (hour, minute) => ({ ...sample, hour, minute });
+  route.schedules = [
+    { ...route.schedules[0], name: 'Friday', knownJourneys: [journey('24', '01'), journey('24', '11'), journey('24', '54')] },
+    { ...route.schedules[0], name: 'Saturday', knownJourneys: [journey('00', '15')] },
+  ];
+  let timetableReads = 0;
+  async function board(at) {
+    const fetch = async url => {
+      if (new URL(url).pathname !== direct) return new Response(null, { status: 503 });
+      timetableReads++;
+      return reply(body, { ...headers, Date: new Date(at).toUTCString(), Age: '0' });
+    };
+    return refreshStationBoard(record, {}, config, fetch, at, null);
+  }
+  const initial = await board(before);
+  const rows = selectEvents(initial, record, before);
+  assert.deepEqual(rows.map(row => (row.time - before) / 60000), [8, 18, 22]);
+  assert.ok(rows.every(row => row.timeEvidence === 'scheduledDeparture' && row.expiresAt === midnight));
+  assert.equal(selectEvents(initial, record, midnight).length, 0);
+  const fresh = selectEvents(await board(midnight), record, midnight);
+  assert.deepEqual(fresh.slice(0, 3).map(row => row.id), rows.map(row => row.id));
+  assert.equal(timetableReads, 2);
+
+  route.schedules.pop();
+  assert.deepEqual(selectEvents(await board(before), record, before).map(row => (row.time - before) / 60000), [8, 18]);
+  route.schedules[0].name = 'Thursday';
+  route.schedules[0].knownJourneys.unshift(journey('23', '57'));
+  const christmasEve = Date.parse('2026-12-24T23:53:00Z');
+  assert.deepEqual(selectEvents(await board(christmasEve), record, christmasEve).map(row => (row.time - christmasEve) / 60000), [4]);
+});
+
 test('the generated origin map replays Epping, Edgware and the proved Edgware Road starting path', async () => {
   const captures = JSON.parse(fs.readFileSync(new URL('./fixtures/regular-timetable-additional-origins.json', import.meta.url)));
   const at = Date.parse('2026-11-21T19:47:00Z');

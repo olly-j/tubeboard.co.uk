@@ -327,6 +327,42 @@ const ordinaryWeekdays = new Map([
   ['Saturdays and Public Holidays', [7]],
 ]);
 
+// A service-day clock of 24:05 and a civil clock of 00:05 both refer to the following
+// morning. Keep the original journey key and the civil departure date for push identity.
+export function regularTimetableWindow(response, record, originRule, calendar, at, nextMidnight) {
+  const today = londonLocal(at).slice(0, 10);
+  const yesterday = civilNext(today, -1);
+  const tomorrow = civilNext(today, 1);
+  const ordinary = day => day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd
+    && !calendar.bankHolidayDates.includes(day);
+  const lookAhead = nextMidnight <= at + 3600000 && ordinary(tomorrow);
+  const rows = [];
+  function append(row, civilDay) {
+    rows.push({ ...row, minute: row.minute % 1440, civilDay });
+  }
+  if (ordinary(yesterday)) {
+    for (const row of regularTimetableJourneys(response, record, originRule, yesterday, { previousDay: true })) {
+      if (row.minute >= 1440) append(row, today);
+    }
+  }
+  for (const row of regularTimetableJourneys(response, record, originRule, today)) {
+    if (row.minute < 1440) append(row, today);
+    else if (lookAhead && row.minute < 1500) append(row, tomorrow);
+  }
+  if (lookAhead) {
+    let early;
+    try {
+      early = regularTimetableJourneys(response, record, originRule, tomorrow);
+    } catch (error) {
+      // An unusable following profile cannot withdraw qualified trains from today's service.
+      if (!error.timetableReason) throw error;
+      return rows;
+    }
+    for (const row of early) if (row.minute < 60) append(row, tomorrow);
+  }
+  return rows;
+}
+
 export function regularTimetableJourneys(response, record, originRule, serviceDate, { previousDay = false } = {}) {
   const { stationID, lineID } = record;
   responseShape(response);
