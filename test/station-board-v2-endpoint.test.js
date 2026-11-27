@@ -12,6 +12,7 @@ test('actual local HTTP endpoint preserves v1 and negotiates all19 v2 boards wit
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tb-v2-http-'));
   // Preserve the real HTTP route but choose its test clock independently of CI.
   const anchor = Date.parse('2026-11-17T12:49:59.500Z');
+  t.mock.timers.enable({ apis: ['Date'], now: anchor });
   const clockSetup = `import { mock } from 'node:test'; mock.timers.enable({ apis: ['Date'], now: ${anchor} });`;
   const testClock = `data:text/javascript,${encodeURIComponent(clockSetup)}`;
   const child = spawn(process.execPath, ['--import', testClock, 'server/index.js'], { cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH, PORT: '0', LIVE_ACTIVITY_WORKER_ENABLED: 'false', DISRUPTION_ALERT_WORKER_ENABLED: 'false', TUBEBOARD_STATUS_MONITOR_ENABLED: 'false', LIVE_ACTIVITY_DATA_FILE: path.join(directory, 'activities.json'), DISRUPTION_ALERT_DATA_FILE: path.join(directory, 'alerts.json') }, stdio: ['ignore', 'pipe', 'pipe'] });

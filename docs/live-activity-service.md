@@ -76,6 +76,27 @@ When JavaScript is unavailable, the static page cannot validate the fragment
 but provides a clearly scoped iPhone/iPad App Store next step. No cookie,
 analytics, account, recipient-tracking or server-side journey state is added.
 
+For TB-085, the typed board keeps a qualified timed departure ahead of
+optional clockless platform destinations when the compact row limit or APNs
+budget would otherwise remove every departure clock. If repacking is needed,
+the complete timed context and its availability proofs must still fit before
+any planned row can be sent. The existing overflow fallback remains in force
+when that condition fails.
+
+A regular refresh of an active all-platform board eligible for the current
+typed timetable contract can report `station-board-departures-missing` to
+the service logger when a freshly qualified timed departure is absent from
+the offered board. Confirmation needs an independent provider clock after
+the next ordinary refresh. Cached boundaries, scoped closures and active
+provider cooldowns supply no confirmation. The worker logs
+`station-board-departures-recovered` when a later fresh board offers a usable
+departure from the source that survived packing. An APNs failure or a
+superseded registration supplies no incident transition. The in-process
+history uses station, line and APNs environment.
+The messages contain no rider or registration identifier. This measures the
+server's offered content and adds no requests, timers or notification
+destination. Restarting the service resets the observation history.
+
 When an app-selected duration elapses, the worker completes the existing
 pause-then-end transition before generic maximum-lifetime expiry, including
 when the ten-minute pause grace crosses the eight-hour ceiling. Existing APNs
@@ -541,6 +562,15 @@ acknowledgement records that transition across restarts. A fresh complete empty,
 withdrawal, disruption, or closure can supersede the held snapshot. The warning
 and routine renewals are delivery opportunities, with no guarantee the phone
 receives each update.
+
+At the original station-arrival expiry boundary, the same hold applies when
+the last qualified generation has expired before another source observation
+can replace it. A repeated HTTP 200 with the same provider timestamp leaves
+the generation unchanged. This prevents an empty update solely because a
+cache-only boundary fell between reads. The hold uses only future rows from
+the last delivered board and yields to qualified replacements, including a
+complete empty response. The original observation, source expiry, and
+TfL request schedule stay intact.
 
 The existing machine, volume and worker serve these opportunities. Before
 expiry or full-cycle effects, a healthy station can move from roughly one

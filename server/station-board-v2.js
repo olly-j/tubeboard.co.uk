@@ -51,6 +51,35 @@ function hasExclusiveStartingCall(event, rule) {
   return rule.exclusiveFirstCalls.includes(first);
 }
 
+function ordinaryDirection(body, record, path) {
+  const options = body?.disambiguation?.disambiguationOptions;
+  if (!Array.isArray(options) || !options.every(option =>
+    typeof option?.description === 'string' && typeof option.uri === 'string')) return null;
+  const origin = key(STATION_BOARD_STATIONS.get(record.stationID)?.stationName);
+  if (!origin) return null;
+  const matching = options.filter(option => {
+    const ends = option.description.split(' - ').map(key);
+    return ends.length === 2 && ends[0] === origin && ends[1] && ends[1] !== origin;
+  });
+  const uris = new Set(matching.map(option => option.uri));
+  return uris.size === 1
+    ? ['inbound', 'outbound'].find(direction => uris.has(path + '?direction=' + direction)) ?? null
+    : null;
+}
+
+function ordinaryReceipt(response) {
+  if (!response.ok || response.status !== 200) return {};
+  const { age, date, 'cache-control': cacheControl } = response.headers;
+  const maxAge = /(?:^|,)\s*max-age=(\d+)/i.exec(cacheControl || '');
+  const apparentAge = response.completedAt - Date.parse(date);
+  if (!maxAge || Number(maxAge[1]) <= 0 || Number(maxAge[1]) > 43200
+    || !Number.isFinite(apparentAge) || apparentAge < -5000) return {};
+  if (age === undefined) return { retryable: apparentAge <= 43200000 };
+  if (typeof age !== 'string' || !/^\d+$/.test(age.trim())) return {};
+  const observation = httpObservation(response.headers, response.completedAt, 43200000, { cacheRequired: true });
+  return observation ? { observation } : { retryable: true };
+}
+
 export function validBoard(stationID, lineID) { return STATION_BOARD_STATIONS.get(stationID)?.lineIDs.includes(lineID) === true; }
 function lineStations(lineID) { return [...STATION_BOARD_STATIONS.values()].filter((station) => station.lineIDs.includes(lineID)); }
 function named(name, lineID) {
@@ -658,7 +687,7 @@ function prioritizePublicDirections(rows, record) {
   return [...rows.slice(0, prefixLength), ...[...first].map(index => rows[index]),
     ...rows.slice(prefixLength).filter((_, index) => !first.has(index + prefixLength))];
 }
-export function buildStationBoardState(record, cache, now, { preserveLegacyOrder = false } = {}) {
+export function buildStationBoardState(record, cache, now, { preserveLegacyOrder = false, observeDepartures } = {}) {
   const capable = record.plannedPresentationVersion === 2;
   const orderRows = rows => preserveLegacyOrder ? rows : prioritizePublicDirections(rows, record);
   const proofs = retainAvailability(cache, {}, record, now).filter((p) => p.closed || p.plannedUnavailable === true || p.scheduledClockOnly === true);
@@ -667,12 +696,38 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
   const sources = [...new Set(rows.map(plannedSource).filter(Boolean))];
   const retainsContexts = capable && (proofs.length > 0 || sources.length > 1);
   const eligible = (e) => !planned(e) || !proofs.some((p) => blocksScheduled(p, e.time, now));
+  const eligibleRows = rows.filter(eligible);
+  const chosen = compactPlanningSource(eligibleRows);
+  const timedBoardable = (e) => Number.isFinite(e.time) && e.time >= now && e.time <= now + 3600000
+    && (e.kind === 'outgoingDeparture' || e.kind === 'throughArrival' && e.timeEvidence === 'arrivalPrediction');
+  const preferredSource = (e) => !plannedSource(e) || plannedSource(e) === chosen;
+  const offersDeparture = (e) => timedBoardable(e) && eligible(e) && preferredSource(e);
+  const compactRows = (ordered) => {
+    const leading = ordered.slice(0, 3);
+    if (leading.some(offersDeparture)) return leading;
+    const departure = ordered.find(offersDeparture);
+    return departure ? [...leading.slice(0, 2), departure] : leading;
+  };
+  const displayedRows = () => orderRows(compactEvents(rows.filter(eligible))).slice(0, 3);
+  const finish = () => {
+    if (observeDepartures) {
+      const displayed = displayedRows();
+      const offered = displayed.some(offersDeparture);
+      // Recovery must cite the offered source, not a candidate that packing
+      // dropped. A miss instead cites the eligible source that lost its clock.
+      const qualified = (offered ? displayed : eligibleRows).find(e => offersDeparture(e)
+        && e.receivedAt === cache.sources?.[sourceKey(e.sourceID)]?.observedAt);
+      observeDepartures(qualified && {
+        source: sourceKey(qualified.sourceID), observedAt: qualified.receivedAt, offered,
+      });
+    }
+    return state;
+  };
   if (retainsContexts) {
-    const chosen = compactPlanningSource(rows.filter(eligible));
     const orderedSources = sources.sort((a,b) => Number(b === chosen) - Number(a === chosen) || a.localeCompare(b));
     const groups = [...orderedSources, null].map((source) => {
       const group = rows.filter((e) => plannedSource(e) === source);
-      const useful = orderRows(group.filter(eligible)).slice(0, 3);
+      const useful = compactRows(orderRows(group.filter(eligible)));
       return [...useful, ...group.filter((e) => !eligible(e)).slice(0, 3 - useful.length)];
     });
     let retained = groups.flat();
@@ -682,8 +737,14 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
       const prioritized = [...active, ...independent, ...groups.flat()];
       retained = [...new Set(prioritized)].slice(0, 9);
     }
-    const selected = new Set(retained); rows = rows.filter((e) => selected.has(e));
-  } else rows = orderRows(compactEvents(rows.filter(eligible))).slice(0, 3);
+    const selected = new Set(retained);
+    if (retained.some(offersDeparture)) {
+      // The client sorts known platform facts ahead of clocks across source
+      // groups. Reserve one of its three rows for a boardable countdown.
+      for (const fact of retained.filter(atPlatformDestination).slice(2)) selected.delete(fact);
+    }
+    rows = rows.filter((e) => selected.has(e));
+  } else rows = compactRows(orderRows(eligibleRows.filter(preferredSource)));
   const status = cache.status?.expiresAt > now ? cache.status : null;
   const evidence = { incomingArrival: 'reportedIncomingArrival', throughArrival: 'throughArrivalPrediction', unverifiedArrival: 'unverified', outgoingDestinationOnly: 'destinationOnly' };
   const origin = regularOriginRule(record);
@@ -697,7 +758,7 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
   const observedAt = () => {
     // Derive the visible board clock after selection and the compact limit.
     // Masked alternatives, status and a cache-only dispatch cannot renew it.
-    const clocks = orderRows(compactEvents(rows.filter(eligible))).slice(0, 3)
+    const clocks = displayedRows()
       .filter((row) => row.kind !== 'unverifiedArrival')
       .map((row) => row.receivedAt).filter(Number.isFinite);
     const explicitEmpty = cache.sources?.['station-arrivals'];
@@ -728,9 +789,9 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
   state.nextBoardBoundaryAt = nextBoundary(cache, record, now);
   const fits = () => Buffer.byteLength(JSON.stringify(state)) <= 3500
     && Buffer.byteLength(JSON.stringify({ aps: { timestamp: Math.floor(now / 1000), event: 'update', 'content-state': Object.fromEntries(Object.entries(state).filter(([k]) => k !== 'nextBoardBoundaryAt')), 'stale-date': Math.floor((state.staleAt * 1000 + APPLE_EPOCH) / 1000) } })) <= 4096;
-  if (fits()) return state;
+  if (fits()) return finish();
   state.statusReason = null;
-  if (fits()) return state;
+  if (fits()) return finish();
 
   const selectedRows = rows;
   const outgoing = selectedRows.filter(e => planned(e) || ['outgoingDeparture', 'outgoingDestinationOnly'].includes(e.kind)
@@ -756,11 +817,21 @@ export function buildStationBoardState(record, cache, now, { preserveLegacyOrder
   updateRows(outgoing);
   if (fits()) {
     pack(outgoing, selectedRows);
-    return state;
+    return finish();
+  }
+  // Untimed destination facts are optional when packing the complete timed
+  // context. Keep every timed alternative and its availability proofs together.
+  const timedContext = outgoing.filter(e => e.kind !== 'outgoingDestinationOnly');
+  if (timedContext.length < outgoing.length && timedContext.some(offersDeparture)) {
+    updateRows(timedContext);
+    if (fits()) {
+      pack(timedContext, selectedRows);
+      return finish();
+    }
   }
   delete state.plannedAvailability;
-  pack([], orderRows(originalRows.filter(e => !planned(e))).slice(0, 3));
-  return state;
+  pack([], compactRows(orderRows(originalRows.filter(e => !planned(e)))));
+  return finish();
 }
 
 function immutable(value) {
@@ -810,10 +881,10 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
   // Legacy per-record corroboration must inspect its original context even when
   // persistent HEAD authority removes that context before other source awaits.
   const legacyPublicationContext = record.timetablePublicationAuthorityVersion === 1 ? null : previous.sources?.timetable;
-  const request = (inputURL, method = 'GET', boundedTT = false, lineStatusReadback = false, ordinary = false) => {
+  const request = (inputURL, method = 'GET', boundedTT = false, lineStatusReadback = false, ordinary = null) => {
     const url = new URL(inputURL);
     if (config.tflAppKey && url.hostname === 'api.tfl.gov.uk') url.searchParams.set('app_key', config.tflAppKey);
-    const requestKey = `${method}:${url.href}`;
+    const requestKey = ordinary ? `${method}:${url.href}:ordinary:${ordinary}` : `${method}:${url.href}`;
     if (!publicResponses.has(requestKey)) {
       // Insert before awaiting. The missing-Age retry, whole-body deadline
       // and size limit belong to this one public request, including failures.
@@ -822,7 +893,10 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
           // Match the APP's official publication/TT/Status readback: one UUID belongs
           // to this canonical shared request, not to each consumer or retry.
           if (boundedTT && !ordinary || lineStatusReadback || method === 'HEAD' && url.href === 'https://tfl.gov.uk/tfl/syndication/feeds/journey-planner-timetables.zip') url.searchParams.set('tb085', crypto.randomUUID());
-          const options = { signal, includeHeaders: true, method, ...(boundedTT ? { bodyLimitBytes: 2000000, decodeJSON: bytes => parseBoundedJSON(bytes) } : {}) };
+          const options = { signal, includeHeaders: true, method,
+            ...(boundedTT ? { bodyLimitBytes: 2000000, decodeJSON: bytes => parseBoundedJSON(bytes) } : {}),
+            ...(ordinary ? { redirect: 'error' } : {}),
+            ...(ordinary === 'revalidate' ? { cacheControl: 'no-cache, max-age=0' } : {}) };
           let response = await fetchJsonResponse(url, fetchImpl, options);
           if (!ordinary && response.ok && response.headers.age === undefined) response = await fetchJsonResponse(url, fetchImpl, options);
           const completedAt = clock();
@@ -988,18 +1062,38 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
     });
   }
   if (needsOrdinary) {
-    const direct = await request(new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Timetable/${record.stationID}`), 'GET', true, false, true);
-    ordinaryNotBefore = direct.completedAt + (direct.status === 429
-      ? Math.max(300000, retryAfterDelay(direct.retryAfter, direct.completedAt)) : config.workerIntervalMs);
-    if (direct.ok && direct.status === 200) {
+    const url = new URL(`https://api.tfl.gov.uk/Line/${record.lineID}/Timetable/${record.stationID}`);
+    const readOrdinary = async (mode) => {
+      const response = await request(url, 'GET', true, false, mode);
+      ordinaryNotBefore = response.completedAt + (response.status === 429
+        ? Math.max(300000, retryAfterDelay(response.retryAfter, response.completedAt)) : config.workerIntervalMs);
+      return response;
+    };
+    let direct = await readOrdinary('standard');
+    let rootCompletedAt = direct.completedAt;
+    let root = ordinaryReceipt(direct);
+    let receipt = root;
+    // The one remaining read can revalidate an expired root or resolve a
+    // qualified direction menu. Neither follow-up can spend another read.
+    if (root.retryable) {
+      direct = await readOrdinary('revalidate');
+      rootCompletedAt = direct.completedAt;
+      root = receipt = ordinaryReceipt(direct);
+    } else if (root.observation && !direct.value?.timetable) {
+      const direction = ordinaryDirection(direct.value, record, url.pathname);
+      if (direction) {
+        url.searchParams.set('direction', direction);
+        direct = await readOrdinary('standard');
+        receipt = direct.value?.direction === direction ? ordinaryReceipt(direct) : {};
+      }
+    }
+    if (receipt.observation && root.observation && direct.value?.timetable) {
       try {
         const calendar = validatedPublicationProof(await readPublicationAsset('788955e868b7ae85219db15b4e05c2f187bdf3be1767f16b1c369b60dea08ad7'));
         const at = clock(), day = londonLocal(at).slice(0, 10);
-        const age = direct.headers?.age, maxAge = /(?:^|,)\s*max-age=(\d+)/i.exec(direct.headers?.['cache-control'] || '');
-        const source = typeof age === 'string' && /^\d+$/.test(age.trim()) && maxAge && Number(maxAge[1]) <= 43200
-          ? httpObservation(direct.headers, direct.completedAt, 43200000, { cacheRequired: true }) : null;
-        if (source && day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd && !calendar.bankHolidayDates.includes(day)) {
-          source.expiresAt = Math.min(source.expiresAt, direct.completedAt + 600000, midnight(at));
+        const source = { ...receipt.observation,
+          expiresAt: Math.min(receipt.observation.expiresAt, root.observation.expiresAt, rootCompletedAt + 600000, midnight(at)) };
+        if (day >= calendar.holidayCoverageStart && day <= calendar.holidayCoverageEnd && !calendar.bankHolidayDates.includes(day)) {
           const yesterday = new Date(Date.parse(day + 'T12:00:00Z') - 86400000).toISOString().slice(0, 10);
           const previousDay = yesterday >= calendar.holidayCoverageStart && !calendar.bankHolidayDates.includes(yesterday);
           const rowsToday = regularTimetableJourneys(direct.value, record, originRule, day)
@@ -1026,21 +1120,23 @@ export async function refreshStationBoard(record, previous, config, fetchImpl, n
       } catch { /* The next normal worker cycle can recheck; the source does not become live. */ }
     }
   }
+  // An ordinary receipt can be newer than the pre-request admission clock.
+  const boardAt = needsOrdinary ? clock() : applicabilityAt;
   let status = null;
   if (service.ok) {
     const observed = httpObservation(service.headers, service.completedAt, 120000);
 
     const details = Array.isArray(service.value) && service.value.length === 1 && service.value[0].id === record.lineID ? service.value[0].lineStatuses : null;
-    if (observed && observed.expiresAt > applicabilityAt && Array.isArray(details) && details.length && details.every((d) => objectRow(d) && Number.isInteger(d.statusSeverity))) status = { label: details[0].statusSeverityDescription || 'Status unavailable', reason: details[0].reason || null, isDisrupted: details.some((d) => d.statusSeverity !== 10), expiresAt: observed.expiresAt };
+    if (observed && observed.expiresAt > boardAt && Array.isArray(details) && details.length && details.every((d) => objectRow(d) && Number.isInteger(d.statusSeverity))) status = { label: details[0].statusSeverityDescription || 'Status unavailable', reason: details[0].reason || null, isDisrupted: details.some((d) => d.statusSeverity !== 10), expiresAt: observed.expiresAt };
   }
 
   // Availability masks presentation. It never destroys the original source
   // context or creates a permanent publication-style closure rejection.
-  const railReceipt = railDepartureReceipt(record, previous, departures, railSource, applicabilityAt);
+  const railReceipt = railDepartureReceipt(record, previous, departures, railSource, boardAt);
   let merged = mergeContexts(previous, { sources, rejections, availabilityProofs, publicationIdentity, status, ...railReceipt,
-    nextRefreshAt: now + config.workerIntervalMs }, record, applicabilityAt);
-  if (ordinaryBoard && ordinaryNotBefore > applicabilityAt) merged.ordinaryNotBefore = ordinaryNotBefore;
-  if (arrivalReader) merged = mergeStationArrivalRead(record, merged, arrivals, applicabilityAt, config.workerIntervalMs);
+    nextRefreshAt: now + config.workerIntervalMs }, record, boardAt);
+  if (ordinaryBoard && ordinaryNotBefore > boardAt) merged.ordinaryNotBefore = ordinaryNotBefore;
+  if (arrivalReader) merged = mergeStationArrivalRead(record, merged, arrivals, boardAt, config.workerIntervalMs);
   return publicationAuthorityStore ? applyPublicationAuthority(merged, publicationAuthorityStore.publicationAuthority()) : merged;
 }
 

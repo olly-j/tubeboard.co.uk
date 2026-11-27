@@ -150,6 +150,192 @@ test('the payload budget keeps complete outgoing contexts and never promotes a s
   assert.equal(afterExpiry.arrivals[0].expiresAt, packed.arrivals[1].expiresAt);
 });
 
+test('optional platform destinations cannot crowd out complete timed departure evidence', () => {
+  const scoped = { ...record, supportsRegularTimetable: true };
+  const id = (prefix, n) => `${prefix}:${String(n).repeat(64)}`;
+  const plan = row({ id: id('journey', 0), time: now + 120000, expiresAt: now + 150000 });
+  const destinations = [1, 2, 3].map(n => row({ id: id('destination', n), sourceID: 'at-station-destination',
+    kind: 'outgoingDestinationOnly', platform: `Platform ${n}`, time: null, timeEvidence: null }));
+  const cache = cacheOf(plan, ...destinations);
+  assert.ok(buildStationBoardState(scoped, cache, now).arrivals.some(item => item.id === plan.id));
+
+  const closureWindows = Array.from({ length: 28 }, (_, n) => ({
+    validFrom: now + 160000 + n * 14000, validUntil: now + 165000 + n * 14000,
+  }));
+  cache.availabilityProofs = [{ stationID: scoped.stationID, lineID: scoped.lineID, sourceScope: 'lineStatus',
+    closed: false, scheduledClockOnly: true, observedAt: now, expiresAt: now + 120000, closureWindows }];
+  let projection;
+  const state = buildStationBoardState(scoped, cache, now, { observeDepartures: value => { projection = value; } });
+  assert.ok(state.arrivals.some(item => item.id === plan.id));
+  assert.equal(state.plannedAvailability.proofs[0].closureWindows.length, 28);
+  assert.equal(state.arrivals.filter(item => item.timeEvidence === 'destinationOnly').length, 2);
+  assert.deepEqual(projection, { source: 'journey-planner', observedAt: now, offered: true });
+  assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(state, new Date(now)))) <= 4096);
+});
+
+test('three platform facts leave room on the compact board for a dated train and its availability', () => {
+  const scoped = { ...record, supportsRegularTimetable: true };
+  const plan = row({ id: 'dated', time: now + 90000 });
+  const facts = [1, 2, 3].map(n => row({ id: `fact-${n}`, sourceID: 'at-station-destination',
+    kind: 'outgoingDestinationOnly', platform: `Platform ${n}`, time: null, timeEvidence: null,
+    receivedAt: now - 15000 }));
+  const proof = { stationID: scoped.stationID, lineID: scoped.lineID, sourceScope: 'lineStatus',
+    closed: false, scheduledClockOnly: true, observedAt: now, expiresAt: now + 120000 };
+  const render = closureWindows => {
+    let observation;
+    const state = buildStationBoardState(scoped, { ...cacheOf(plan, ...facts),
+      availabilityProofs: [{ ...proof, closureWindows }] }, now, {
+      observeDepartures: value => { observation = value; },
+    });
+    return { state, observation };
+  };
+  const open = render([{ validFrom: now + 160000, validUntil: now + 190000 }]);
+  assert.deepEqual(open.state.arrivals.slice(0, 3).map(item => item.id), ['fact-1', 'fact-2', 'dated']);
+  assert.equal(open.state.updatedAt, (now - 978307200000) / 1000);
+  assert.equal(open.state.plannedAvailability.proofs.length, 1);
+  assert.deepEqual(open.observation, { source: 'journey-planner', observedAt: now, offered: true });
+
+  const closed = render([{ validFrom: now + 60000, validUntil: now + 120000 }]);
+  assert.deepEqual(closed.state.arrivals.slice(0, 3).map(item => item.id), facts.map(item => item.id));
+  assert.equal(closed.state.plannedAvailability.proofs.length, 1);
+  assert.equal(closed.observation, undefined);
+});
+
+test('a timed live departure survives optional platform facts with retained controls and overflow fallback', () => {
+  const scoped = { ...record, supportsRegularTimetable: true };
+  const arrivals = parseStationArrivals([arrival()], scoped, headers(), now);
+  assert.equal(arrivals[0]?.kind, 'throughArrival');
+  const facts = [1, 2, 3].map(n => row({ id: `destination:${n}`, sourceID: 'at-station-destination',
+    kind: 'outgoingDestinationOnly', platform: `Platform ${n}`, time: null, timeEvidence: null }));
+  const availabilityProofs = [{ stationID: scoped.stationID, lineID: scoped.lineID, sourceScope: 'lineStatus',
+    closed: false, scheduledClockOnly: true, observedAt: now, expiresAt: now + 120000,
+    closureWindows: [{ validFrom: now + 160000, validUntil: now + 190000 }] }];
+  const controlled = buildStationBoardState(scoped, { ...cacheOf(...arrivals, ...facts), availabilityProofs }, now);
+  assert.deepEqual(controlled.arrivals.map(item => item.id), [facts[0].id, facts[1].id, arrivals[0].id]);
+  assert.equal(controlled.arrivals[2].expiresAt, (arrivals[0].expiresAt - 978307200000) / 1000);
+  assert.equal(controlled.plannedAvailability.proofs.length, 1);
+
+  const oversized = row({ id: 'published-' + 'x'.repeat(4000), sourceID: 'timetable', time: now + 30000 });
+  let projection;
+  const fallback = buildStationBoardState(scoped,
+    { ...cacheOf(oversized, ...arrivals, ...facts), availabilityProofs }, now,
+    { observeDepartures: value => { projection = value; } });
+  assert.deepEqual(fallback.arrivals.map(item => item.id), [facts[0].id, facts[1].id, arrivals[0].id]);
+  assert.deepEqual(projection, { source: 'station-arrivals', observedAt: now, offered: true });
+  assert.ok(Buffer.byteLength(JSON.stringify(buildApnsPayload(fallback, new Date(now)))) <= 4096);
+});
+
+test('a repeated fresh offered-board contradiction opens once and recovers without extra reads', async t => {
+  const scoped = { ...record, supportsRegularTimetable: true };
+  const store = await temporaryStore(t, scoped);
+  const retained = [0, 1, 2].map(i => row({ sourceID: 'regular-timetable', id: `regular:${String(i).repeat(64)}`,
+    time: now + 360000 + i * 60000, via: 'Charing Cross', receivedAt: now, expiresAt: now + 600000 }));
+  await store.retainStationBoard(scoped.activityID, scoped.environment, cacheOf(...retained), new Date(now));
+
+  let at = now, receivedAt = now, mode = 'oversize';
+  const pushes = [], transitions = [], reads = [];
+  const response = (body, observedAt = at) => new Response(JSON.stringify(body), { headers: headers(observedAt) });
+  const station = id => ({ naptanId: id, commonName: STATION_BOARD_STATIONS.get(id).stationName });
+  const route = ['940GZZLUEGW', '940GZZLUMDN'].map((id, ordinal) => ({ ordinal, stopPoint: station(id) }));
+  const fetchImpl = async input => {
+    const url = new URL(input);
+    reads.push(url.pathname);
+    if (url.pathname === `/Line/${scoped.lineID}/Status`) {
+      const validityPeriods = Array.from({ length: 32 }, (_, i) => ({
+        fromDate: new Date(at + 150000 + i * 14000).toISOString(),
+        toDate: new Date(at + 151000 + i * 14000).toISOString(),
+      }));
+      const status = mode === 'healthy' || mode === 'rate-limited'
+        ? { statusSeverity: 10, statusSeverityDescription: 'Good Service', validityPeriods: [] }
+        : { statusSeverity: 20, statusSeverityDescription: 'Service Closed', validityPeriods,
+          disruption: { affectedRoutes: [{ direction: 'outbound', isEntireRouteSection: true,
+            routeSectionNaptanEntrySequence: route }] } };
+      return response([{ id: scoped.lineID, modeName: 'tube', lineStatuses: [status] }]);
+    }
+    if (url.pathname.endsWith('/Disruption')) {
+      if (mode === 'rate-limited') return new Response(null, { status: 429, headers: { 'Retry-After': '300' } });
+      if (mode === 'closed') return response([{ stationAtcoCode: scoped.stationID, type: 'stationclosure',
+        fromDate: new Date(at - 30000).toISOString(), toDate: new Date(at + 120000).toISOString() }]);
+    }
+    if (url.pathname.startsWith('/Journey/')) {
+      const body = journey();
+      body.searchCriteria.dateTime = `${londonLocal(at).slice(0, 16)}:00`;
+      const leg = body.journeys[0].legs[0];
+      body.journeys = [0, 1, 2].map(i => ({ legs: [{ ...leg, id: `service-${i}`,
+        scheduledDepartureTime: `${londonLocal(at + 60000 + i * 15000).slice(0, 19)}`,
+        routeOptions: [{ ...leg.routeOptions[0], directions: ['Morden via Bank'] }] }] }));
+      return response(body, receivedAt);
+    }
+    return response([]);
+  };
+  const signals = text => {
+    if (text.startsWith('{')) transitions.push(JSON.parse(text));
+  };
+  const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}),
+    now: new Date(at), clock: () => at, fetchImpl,
+    logger: { info: signals, warn: signals }, pushImpl: async (_, payload) => { pushes.push(payload); },
+    ...options });
+  const tick = async (seconds, nextMode, fresh = true, options) => {
+    at = now + seconds * 1000;
+    if (fresh) receivedAt = at;
+    mode = nextMode;
+    await cycle(options);
+  };
+  await tick(0, 'oversize');
+  assert.equal(pushes[0].aps['content-state'].arrivals.length, 0, 'required timed alternatives and restrictions exceed the budget');
+  const afterFirstReads = reads.length;
+  at = now + 30000;
+  await cycle({ cacheOnly: true });
+  assert.equal(reads.length, afterFirstReads);
+  assert.deepEqual(transitions, []);
+  await tick(90, 'oversize', false);
+  assert.deepEqual(transitions, [], 'repeated provider clock does not confirm');
+  await tick(180, 'oversize');
+  assert.deepEqual(transitions.map(event => event.event), ['station-board-departures-missing']);
+  await tick(270, 'oversize');
+  assert.equal(transitions.length, 1);
+  await tick(360, 'rate-limited');
+  assert.ok(pushes.at(-1).aps['content-state'].arrivals.some(item => item.timeEvidence === 'scheduledDeparture'));
+  assert.equal(transitions.length, 1, 'valid timed rows during Retry-After do not confirm recovery');
+  await tick(720, 'closed');
+  assert.equal(transitions.length, 1, 'a fresh closure does not recover an open incident');
+  let failedDelivery = false;
+  await tick(810, 'healthy', true, { pushImpl: async (_, payload) => {
+    failedDelivery = true;
+    assert.ok(payload.aps['content-state'].arrivals.some(item => item.timeEvidence === 'scheduledDeparture'));
+    throw Object.assign(new Error('Synthetic APNs failure'), { backoffMs: 1000 });
+  } });
+  assert.ok(failedDelivery);
+  assert.equal(transitions.length, 1, 'an APNs failure cannot recover the incident');
+
+  let accepted = false, superseded = false;
+  const listActive = store.listActive.bind(store);
+  store.listActive = async (...args) => {
+    const staleReadback = await listActive(...args);
+    // Replace the registration after reading the previous selection but
+    // before the worker can use that asynchronous readback.
+    if (accepted && !superseded) {
+      superseded = true;
+      await store.upsertToken({ ...scoped, pushTokenHex: 'cafebabe'.repeat(8),
+        tokenUpdatedAt: new Date(at).toISOString() }, new Date(at));
+    }
+    return staleReadback;
+  };
+  await tick(900, 'healthy', true, { pushImpl: async () => { accepted = true; } });
+  store.listActive = listActive;
+  assert.ok(accepted && superseded);
+  assert.equal(transitions.length, 1, 'a superseded registration cannot recover the incident');
+
+  await tick(990, 'healthy');
+  assert.deepEqual(transitions.map(event => event.event), ['station-board-departures-missing', 'station-board-departures-recovered']);
+  assert.ok(pushes.at(-1).aps['content-state'].arrivals.some(item => item.timeEvidence === 'scheduledDeparture'));
+  assert.ok(transitions.every(event => event.stationID === scoped.stationID && event.lineID === scoped.lineID
+    && !JSON.stringify(event).includes(scoped.activityID) && !JSON.stringify(event).includes(scoped.installID)));
+  assert.ok(reads.every(path => [`/StopPoint/${scoped.stationID}/Arrivals`, `/StopPoint/${scoped.stationID}/Disruption`,
+    `/Line/${scoped.lineID}/Status`, `/Line/${scoped.lineID}/Arrivals`, `/Line/${scoped.lineID}/Timetable/${scoped.stationID}`].includes(path)
+    || path.startsWith(`/Journey/JourneyResults/${scoped.stationID}/to/`)));
+});
+
 test('selection precedes publication/planner preference and physical platforms never guess schedules', () => {
   const tt = ['Bank', 'Charing Cross', 'Morden'].map((destination, i) => row({ id: `tt-${i}`, sourceID: 'timetable', destination, providerDirection: null }));
   const planner = row({ id: 'planner' }), cache = cacheOf(...tt, planner);
@@ -852,15 +1038,99 @@ test('an outage retires each delivered ETA on cache-only boundaries without rene
   assert.equal(requests, afterFailure);
 });
 
+test('Woodford original expiry between successful station reads keeps only delivered future ETAs', async t => {
+  const stationID = '940GZZLUWOF';
+  const etaOffsets = [50000, 80000, 290000];
+
+  // The two fractional clocks round-trip through the Apple epoch just below
+  // and just above their original integer millisecond, respectively.
+  for (const [replacement, millis] of [['elapsed', 2], ['fresh empty', 11], ['fresh changed ETA', 0]]) {
+    await t.test(replacement, async t => {
+      const generation = Date.parse('2026-11-26T11:31:57Z') + millis;
+      const rows = (observed, offsets) => offsets.map((offset, index) => ({
+        id: `woodford-generation-${index}`, lineId: 'central', naptanId: stationID,
+        destinationName: 'Epping', destinationNaptanId: '940GZZLUEPG',
+        platformName: 'Eastbound - Platform 3',
+        expectedArrival: new Date(generation + offset).toISOString(),
+        timestamp: new Date(observed).toISOString(),
+      }));
+      const store = await temporaryStore(t, { ...record, stationID, lineID: 'central',
+        tokenUpdatedAt: new Date(generation).toISOString() }, generation);
+      const pushes = [], boundaries = [];
+      let at = generation + 48000, stationReads = 0;
+      const fetchImpl = async url => {
+        if (new URL(url).pathname !== `/StopPoint/${stationID}/Arrivals`) {
+          return new Response('[]', { headers: headers(at) });
+        }
+        stationReads++;
+        const bumped = at === generation + 148000;
+        const trains = !bumped ? rows(generation, etaOffsets)
+          : replacement === 'fresh empty' ? [] : rows(generation + 101000, [320000]);
+        const sourceHeaders = bumped ? headers(at, 0, 30)
+          : headers(generation + 47000, at === generation + 48000 ? 1 : 58, 30);
+        return new Response(JSON.stringify(trains), { headers: sourceHeaders });
+      };
+      const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+        fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps); }, logger,
+        scheduleRolloverPush: (_, state) => boundaries.push(state.nextBoardBoundaryAt), ...options });
+
+      await cycle();
+      const initial = pushes[0]['content-state'];
+      assert.equal(initial.arrivals.length, 3);
+      for (const elapsed of etaOffsets.slice(0, 2)) {
+        at = generation + elapsed + 1;
+        await cycle({ cacheOnly: true });
+      }
+      const delivered = pushes.at(-1);
+      assert.equal(delivered['content-state'].arrivals.length, 1);
+      if (replacement !== 'elapsed') {
+        at = generation + 105000;
+        await cycle({ sourceOnly: true });
+        assert.equal(stationReads, 2);
+      }
+      assert.equal(store.state.records[0].stationBoardCache.stationArrivalAttempt.failed, false);
+      const readsBeforeExpiry = stationReads, pushesBeforeExpiry = pushes.length;
+
+      at = generation + 119999;
+      await cycle({ cacheOnly: true });
+      assert.equal(store.state.records[0].stationBoardCache.sources['station-arrivals'].observedAt, generation);
+      assert.equal(pushes.length, pushesBeforeExpiry);
+      at = generation + 120000;
+      await cycle({ cacheOnly: true });
+      assert.equal(stationReads, readsBeforeExpiry);
+      assert.equal(store.state.records[0].stationBoardCache.sources['station-arrivals'], undefined);
+      assert.equal(pushes.length, pushesBeforeExpiry, 'source expiry alone must not push an empty board');
+      assert.equal(boundaries.at(-1), generation + etaOffsets.at(-1) + 1);
+      assert.equal(delivered['content-state'].updatedAt, initial.updatedAt);
+
+      if (replacement === 'elapsed') {
+        at = generation + etaOffsets.at(-1);
+        await cycle({ cacheOnly: true });
+        assert.equal(pushes.length, pushesBeforeExpiry, 'the row remains at the exact original ETA');
+        at = generation + etaOffsets.at(-1) + 1;
+        await cycle({ cacheOnly: true });
+      } else {
+        at = generation + 148000;
+        await cycle({ sourceOnly: true });
+        assert.equal(stationReads, readsBeforeExpiry + 1);
+      }
+      assert.equal(pushes.length, pushesBeforeExpiry + 1);
+      assert.deepEqual(pushes.at(-1)['content-state'].arrivals.map(row => row.expectedArrival),
+        replacement === 'fresh changed ETA' ? [(generation + 320000) / 1000 - 978307200] : []);
+    });
+  }
+});
+
 test('a sleeping Activity gets one cache-only warning at five minutes while unavailable ETAs remain future', async t => {
-  let store = await temporaryStore(t);
-  let at = now, requests = 0;
+  const observed = Date.parse('2026-11-26T11:31:57.011Z');
+  let store = await temporaryStore(t, { ...record, tokenUpdatedAt: new Date(observed).toISOString() }, observed);
+  let at = observed + 1000, requests = 0;
   const pushes = [], boundaries = [];
   const fetchImpl = async url => {
     requests++;
-    if (at > now) return new Response(null, { status: 503 });
+    if (at > observed + 1000) return new Response(null, { status: 503 });
     const rows = new URL(url).pathname === `/StopPoint/${record.stationID}/Arrivals`
-      ? [arrival({ expectedArrival: new Date(now + 420000).toISOString() })] : [];
+      ? [arrival({ timestamp: new Date(observed).toISOString(), expectedArrival: new Date(observed + 420000).toISOString() })] : [];
     return new Response(JSON.stringify(rows), { headers: headers(at) });
   };
   const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
@@ -868,37 +1138,38 @@ test('a sleeping Activity gets one cache-only warning at five minutes while unav
     scheduleRolloverPush: (_, state) => boundaries.push(state.nextBoardBoundaryAt), ...options });
 
   await cycle();
-  at = now + 60000;
+  at = observed + 61000;
   await cycle({ sourceOnly: true });
   const afterFailure = requests;
 
-  at = now + 120000;
+  at = observed + 120000;
   await cycle({ cacheOnly: true });
   assert.equal(pushes.length, 1);
-  assert.equal(boundaries.at(-1), now + 300000);
+  assert.equal(boundaries.at(-1), observed + 300000);
 
-  at = now + 299999;
+  at = observed + 299999;
   await cycle({ cacheOnly: true });
   assert.equal(pushes.length, 1);
   store = new LiveActivityStore(store.filePath);
   await store.load();
-  at = now + 300000;
+  at = observed + 300000;
   await cycle({ cacheOnly: true });
   assert.equal(pushes.length, 2);
-  assert.equal(pushes[1].timestamp, now / 1000 + 300);
+  assert.equal(pushes[1].timestamp, Math.floor(observed / 1000) + 300);
   assert.equal(pushes[1].priority, '10');
   assert.equal(pushes[1]['stale-date'], pushes[0]['stale-date']);
   assert.equal(pushes[1]['content-state'].updatedAt, pushes[0]['content-state'].updatedAt);
+  assert.equal(pushes[1]['content-state'].staleAt, pushes[0]['content-state'].staleAt);
   assert.deepEqual(pushes[1]['content-state'].arrivals, pushes[0]['content-state'].arrivals);
   assert.equal(store.state.records[0].lastBoardDelivery.delayedWarningSent, true);
-  assert.equal(boundaries.at(-1), now + 420001);
+  assert.equal(boundaries.at(-1), observed + 420001);
 
   store = new LiveActivityStore(store.filePath);
   await store.load();
-  at = now + 360000;
+  at = observed + 360000;
   await cycle({ cacheOnly: true });
   assert.equal(pushes.length, 2);
-  at = now + 420001;
+  at = observed + 420001;
   await cycle({ cacheOnly: true });
   assert.equal(pushes.length, 3);
   assert.deepEqual(pushes[2]['content-state'].arrivals, []);
@@ -1007,6 +1278,51 @@ test('a qualified station closure supersedes a future ETA during a source outage
   assert.equal(pushes.length, 2);
   assert.deepEqual(pushes[1].payload.aps['content-state'].arrivals, []);
   assert.equal(pushes[1].priority, '10');
+});
+
+test('a complete source withdrawal stays removed on a mixed station and rail Activity', async t => {
+  const stationID = '910GSHENFLD';
+  const stationRows = [arrival({
+    lineId: 'elizabeth', naptanId: stationID, stationName: 'Shenfield',
+    destinationName: 'Liverpool Street', destinationNaptanId: '910GLIVSTLL',
+    platformName: '3', expectedArrival: new Date(now + 300000).toISOString(),
+  })];
+  const railRows = [{
+    naptanId: stationID, destinationName: 'Paddington', destinationNaptanId: '910GPADTLL',
+    departureStatus: 'OnTime', estimatedTimeOfDeparture: new Date(now + 240000).toISOString(), platformName: '2',
+  }];
+  for (const withdrawn of ['station', 'rail']) {
+    const store = await temporaryStore(t, { ...record, stationID, lineID: 'elizabeth' });
+    const pushes = [];
+    let at = now;
+    const fetchImpl = async url => {
+      const endpoint = new URL(url).pathname;
+      const source = endpoint === `/StopPoint/${stationID}/Arrivals` ? 'station'
+        : endpoint === `/StopPoint/${stationID}/ArrivalDepartures` ? 'rail' : null;
+      if (source && at > now + 90000) return new Response(null, { status: 503 });
+      if (at > now && source === 'rail' && withdrawn === 'station') return new Response(null, { status: 503 });
+      const sourceRows = at > now && source === withdrawn ? [] : source === 'station' ? stationRows
+        : source === 'rail' ? railRows : [];
+      return new Response(JSON.stringify(sourceRows), { headers: headers(at) });
+    };
+    const cycle = options => runLiveActivityWorkerCycle({ store, config: loadConfig({}), now: new Date(at), clock: () => at,
+      fetchImpl, pushImpl: async (_, payload) => { pushes.push(payload.aps['content-state'].arrivals); }, logger, ...options });
+
+    await cycle();
+    assert.deepEqual(pushes[0].map(row => row.timeEvidence).sort(), ['estimatedDeparture', 'throughArrivalPrediction']);
+    at = now + 90000;
+    await cycle();
+    const remaining = withdrawn === 'station' ? 'estimatedDeparture' : 'throughArrivalPrediction';
+    assert.deepEqual(pushes[1].map(row => row.timeEvidence), [remaining], withdrawn);
+    at = now + 120000;
+    await cycle({ cacheOnly: true });
+    at = now + 150000;
+    await cycle({ sourceOnly: true });
+    assert.ok(pushes.slice(1).every(rows => rows.every(row => row.timeEvidence === remaining)), withdrawn);
+    at = now + (withdrawn === 'station' ? 240001 : 300001);
+    await cycle({ cacheOnly: true });
+    assert.deepEqual(pushes.at(-1), [], withdrawn);
+  }
 });
 
 test('a failed rail departure read keeps the delivered ETA hold across a service restart', async (t) => {
@@ -1333,7 +1649,7 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
         }
       }
     });
-    const until = now + (advancing ? 370000 : 160000);
+    const until = now + (advancing ? 370000 : 340000);
     try {
       worker.start();
       while (true) {
@@ -1372,8 +1688,15 @@ test('UF276 actual worker timers renew before expiry with transport latency and 
       assert.ok(delivered.some(d => d.at > now + 240000), 'actual timer path crosses two original120s windows');
     } else {
       const expiry = initialTimestamp + 120000;
-      assert.ok(delivered.some(d => d.at > expiry && d.payload.aps['content-state'].arrivals.length === 0));
-      assert.ok(delivered.filter(d => d.at > expiry).every(d => d.payload.aps['content-state'].arrivals.every(r => r.expiresAt * 1000 + 978307200000 <= d.at)), 'old unchanged provider timestamp is never renewed');
+      const first = delivered[0].payload.aps['content-state'];
+      const originalETA = (first.arrivals[0].expectedArrival + 978307200) * 1000;
+      const empty = delivered.filter(d => !d.payload.aps['content-state'].arrivals.length);
+      assert.ok(empty.length > 0 && empty.every(d => d.at > originalETA), 'an expired source must not clear a future delivered ETA');
+      assert.ok(delivered.filter(d => d.at > expiry).every(d => {
+        const state = d.payload.aps['content-state'];
+        return state.updatedAt === first.updatedAt && state.arrivals.every(row =>
+          row.expiresAt === first.arrivals[0].expiresAt && row.expectedArrival === first.arrivals[0].expectedArrival);
+      }), 'an unchanged provider generation must never renew the original source or ETA');
     }
   }
 });
