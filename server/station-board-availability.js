@@ -102,6 +102,51 @@ export function qualifyAvailability(values, record, scope, observation, now, clo
 }
 export const wireAvailability = (proofs, toSwift) => proofs.map((p) => ({ stationID: p.stationID, lineID: p.lineID, sourceScope: p.sourceScope, closed: p.closed, observedAt: toSwift(p.observedAt), expiresAt: toSwift(p.expiresAt), ...(p.validFrom != null ? { validFrom: toSwift(p.validFrom), validUntil: toSwift(p.validUntil) } : {}), ...(p.closureWindows ? { closureWindows: p.closureWindows.map((w) => ({ validFrom: toSwift(w.validFrom), validUntil: toSwift(w.validUntil) })) } : {}), ...(p.plannedUnavailable === true ? { plannedUnavailable: true } : {}), ...(p.scheduledClockOnly !== undefined ? { scheduledClockOnly: p.scheduledClockOnly } : {}) }));
 
+// A replacement service frequency supersedes only the recurring timetable.
+export function replacementFrequencyWithdrawal(values, record, observation, now, clock, authority) {
+  if (!observation || observation.observedAt > now || now >= observation.expiresAt
+    || !Array.isArray(values) || values.length !== 1) return null;
+  const [line] = values;
+  if (line?.id !== record.lineID || line.modeName !== authority.mode
+    || !Array.isArray(line.disruptions) || line.disruptions.length
+    || !Array.isArray(line.routeSections) || !line.routeSections.length || line.routeSections.length > 64
+    || !Array.isArray(line.lineStatuses)) return null;
+  const sections = line.routeSections;
+  if (!sections.every(s => s?.serviceType === 'Regular' && clock(s.validFrom) <= now && now < clock(s.validTo))) return null;
+  const hasRestrictions = item => ['affectedStops', 'affectedStopPoints', 'concernedLines', 'direction', 'stationId',
+    'stopPointId', 'naptanId', 'affectedJourneys', 'affectedServices', 'affectedTrips', 'cancelledServices', 'cancelledJourneys',
+    'isCancelled', 'isCanceled', 'cancellation', 'cancellationReason', 'cancelledReason', 'amendment', 'closure', 'isClosed', 'plannedWorks']
+    .some(key => item[key] != null && !(Array.isArray(item[key]) && item[key].length === 0));
+  for (const status of line.lineStatuses) {
+    const detail = status?.disruption;
+    const reason = typeof status?.reason === 'string' ? status.reason.trim() : null;
+    if (!detail || status.lineId !== record.lineID || !knownNonClosure(status) || status.statusSeverity === 10
+      || hasRestrictions(status) || hasRestrictions(detail) || detail.category !== 'RealTime'
+      || !reason || typeof detail.description !== 'string' || detail.description.trim() !== reason
+      || !/\b(?:services?|trains) (?:are |is |will be )?(?:operating|running) (?:approximately |about )?every [0-9]+ minutes?\b/i.test(reason)
+      || !Array.isArray(detail.affectedRoutes) || detail.affectedRoutes.length !== sections.length
+      || !Array.isArray(status.validityPeriods)) continue;
+    const period = status.validityPeriods.find(p => clock(p?.fromDate) <= now && now < clock(p?.toDate));
+    if (!period) continue;
+    const remaining = [...sections];
+    const covered = new Set();
+    for (const route of detail.affectedRoutes) {
+      const calls = route?.routeSectionNaptanEntrySequence;
+      if (route?.isEntireRouteSection !== true || !Array.isArray(calls) || calls.length < 2
+        || !calls.every((c, index) => c?.ordinal === index && c.stopPoint?.id === c.stopPoint?.naptanId && authority.stationName(c.stopPoint?.naptanId))) break;
+      const index = remaining.findIndex(s => s.name === route.name && s.direction === route.direction
+        && s.originator === calls[0].stopPoint.naptanId && s.destination === calls.at(-1).stopPoint.naptanId);
+      if (index < 0) break;
+      remaining.splice(index, 1);
+      for (const call of calls) covered.add(call.stopPoint.naptanId);
+    }
+    if (!remaining.length && covered.has(record.stationID)) return {
+      ...observation, regularWithdrawalUntil: Math.min(observation.expiresAt, clock(period.toDate))
+    };
+  }
+  return null;
+}
+
 export const containsServiceClosed = (values, lineID) => Array.isArray(values) && values.some(v =>
   v?.id === lineID && Array.isArray(v.lineStatuses) && v.lineStatuses.some(d =>
     d?.statusSeverity === 20 && (d.lineId === undefined || d.lineId === lineID)));
